@@ -249,7 +249,8 @@ async function setInput(index, hexValue) {
  *
  * 顺序执行（并发读写 DDC 容易互相干扰），并统计成功/失败。
  */
-async function setInputAll(target) {
+async function setInputAll(target, opts) {
+  const o = opts || {};
   const l = await listDisplays();
   const list = (l.displays || []).slice();
   if (!list.length) {
@@ -267,7 +268,7 @@ async function setInputAll(target) {
     return { ok: false, total: list.length, success: 0, via: l.via, error: '没有可用的接口配置' };
   }
 
-  // Windows：一次性切完（单个 PowerShell 进程，省掉重复 Add-Type 开销）
+  // Windows：一次性切完（单个 PowerShell 进程里只枚举一次，index 不会中途错位）
   if (IS_WIN) {
     const all = await winSetPlan(plan);
     if (all.total > 0) return all;
@@ -275,10 +276,27 @@ async function setInputAll(target) {
 
   const results = [];
   for (const p of plan) {
-    const r = await setInput(p.index, p.value);
-    results.push({ index: p.index, name: p.name, ...r });
+    let idx = p.index;
+    // macOS 的 index 是一次性的：切走一台后系统会把它从列表里摘掉，
+    // 后面的序号整体前移，所以每切一台都按名字重新定位。
+    if (IS_MAC && o.names && o.names[p.index]) {
+      try {
+        const fresh = await listDisplays();
+        const hit = (fresh.displays || []).find((d) => sameName(d.name, o.names[p.index]));
+        if (hit) idx = hit.index;
+      } catch { /* ignore */ }
+    }
+    const r = await setInput(idx, p.value);
+    results.push({ index: idx, name: p.name, ...r });
   }
   return summarize(results, l.via, '');
+}
+
+function sameName(a, b) {
+  const x = String(a || '').toLowerCase().replace(/[\s\-_()（）]/g, '');
+  const y = String(b || '').toLowerCase().replace(/[\s\-_()（）]/g, '');
+  if (!x || !y) return false;
+  return x === y || x.includes(y) || y.includes(x);
 }
 
 module.exports = { listDisplays, setInput, setInputAll, labelOf, INPUT_LABELS, IS_WIN, IS_MAC };

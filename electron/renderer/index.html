@@ -149,8 +149,10 @@
               <div class="card-label">
                 <span>传输记录</span>
                 <span class="card-note" id="txSummary"></span>
+                <button class="btn btn-ghost" id="txClear">清空已结束</button>
               </div>
               <div class="tx-list" id="txList"></div>
+              <div class="hint">点记录可查看文本或定位文件 · 右侧 × 删除单条</div>
             </div>
           </div>
         </div>
@@ -206,6 +208,22 @@
       <button class="link" id="helpBtn">使用说明 <span class="arrow">↗</span></button>
       <span class="foot-ver" id="footVer"></span>
     </footer>
+  </div>
+
+  <!-- 文本查看弹窗：传输记录里的文字点开看全文 / 拷贝 -->
+  <div class="modal" id="textModal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <b id="tmTitle">文本</b>
+        <button class="modal-x" id="tmClose" type="button" title="关闭">×</button>
+      </div>
+      <pre class="modal-body" id="tmBody"></pre>
+      <div class="modal-foot">
+        <span class="modal-meta" id="tmMeta"></span>
+        <button class="btn" id="tmCopy" type="button">拷贝到剪贴板</button>
+        <button class="btn btn-primary" id="tmDone" type="button">关闭</button>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>

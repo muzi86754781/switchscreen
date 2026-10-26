@@ -44,9 +44,38 @@ function createFileTransfer({ send, recvDir, onUpdate, shouldAccept }) {
   const outgoing = new Map();
   const incoming = new Map();
   const records = new Map();
+  // 用户手动删掉的记录：后续进度回调不要再把它加回来
+  const dropped = new Set();
 
   function list() {
-    return [...records.values()].sort((a, b) => b.at - a.at).slice(0, 20);
+    return [...records.values()].sort((a, b) => b.at - a.at).slice(0, 40);
+  }
+
+  /** 删掉一条记录（正在传的先取消，避免后台还在写盘） */
+  function remove(id) {
+    const job = outgoing.get(id);
+    if (job) job.canceled = true;
+    const inJob = incoming.get(id);
+    if (inJob) {
+      try { if (inJob.fd) inJob.fd.close(); } catch { /* ignore */ }
+      incoming.delete(id);
+    }
+    const had = records.delete(id);
+    dropped.add(id);
+    if (had) emit();
+    return had;
+  }
+
+  function clearDone() {
+    let n = 0;
+    for (const [id, r] of [...records.entries()]) {
+      if (r.status === 'done' || r.status === 'failed' || r.status === 'canceled' || r.status === 'rejected') {
+        records.delete(id);
+        n += 1;
+      }
+    }
+    if (n) emit();
+    return n;
   }
 
   function emit() {
@@ -54,6 +83,7 @@ function createFileTransfer({ send, recvDir, onUpdate, shouldAccept }) {
   }
 
   function record(id, patch) {
+    if (dropped.has(id)) return null;
     const r = records.get(id) || { id, at: Date.now() };
     Object.assign(r, patch, { at: Date.now() });
     records.set(id, r);
@@ -106,7 +136,10 @@ function createFileTransfer({ send, recvDir, onUpdate, shouldAccept }) {
       done: 0,
       status: 'waiting',
       peer: target || '',
-      count: files.length
+      count: files.length,
+      // 发出的文件在本地什么位置：传输记录里点一下就能在文件夹里选中
+      path: files[0].path,
+      saved: files.map((f) => f.path)
     });
     send({ type: 'file-offer', id, files: files.map((f) => ({ name: f.name, size: f.size })), total }, target);
     return { ok: true, id };
@@ -354,7 +387,7 @@ function createFileTransfer({ send, recvDir, onUpdate, shouldAccept }) {
     });
   }
 
-  return { offerFiles, cancel, handle, sendText, onText, list, records };
+  return { offerFiles, cancel, handle, sendText, onText, list, remove, clearDone, records };
 }
 
 module.exports = { createFileTransfer };

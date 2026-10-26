@@ -15,9 +15,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
-const { app, systemPreferences, shell } = require('electron');
+const { app, systemPreferences, shell, screen } = require('electron');
 const { loadConfig, saveConfig } = require('../src/config');
 const { describeModMap } = require('../src/keymap');
+const { setScreenRect } = require('../src/input');
 const ddc = require('./ddc');
 
 const IS_MAC = process.platform === 'darwin';
@@ -99,6 +100,7 @@ function ensureDefaults() {
   if (!ui.portMap || typeof ui.portMap !== 'object') ui.portMap = {};
   // 记下每台设备最近一次上报的显示名，离线时也能显示正确的名字
   if (!ui.peerLabels || typeof ui.peerLabels !== 'object') ui.peerLabels = {};
+  if (!ui.knownPeers || typeof ui.knownPeers !== 'object') ui.knownPeers = {};
 
   // 旧版 perMonitor（只有 local / remote 两栏）迁移到 portMap
   if (ui.perMonitor && typeof ui.perMonitor === 'object') {
@@ -116,6 +118,13 @@ function ensureDefaults() {
   // 早期版本存过连接配对密码，已不再使用
   delete ui.usePassword;
   delete ui.password;
+
+  // shareInput / isHost 必须跟键鼠模式一致：旧配置里这两个值可能是 true，
+  // 会让「各用各的」也偷偷捕获键鼠、鼠标推到边上就换电脑
+  const mode = ui.inputMode || 'separate';
+  cfg.shareInput = mode !== 'separate';
+  cfg.isHost = mode !== 'remote';
+
   saveConfig(cfg);
 }
 
@@ -123,7 +132,12 @@ function persist() {
   saveConfig(cfg);
 }
 
-function applyInputMode(mode) {
+/**
+ * 切换键鼠模式。
+ * 这个状态两端必须一致，所以改完要把模式广播出去，
+ * 让对端切到镜像角色（我当主机 → 对端只接收；我共用对端 → 对端开始捕获）。
+ */
+function applyInputMode(mode, opts) {
   cfg.ui.inputMode = mode;
   if (mode === 'separate') {
     cfg.shareInput = false;
@@ -137,6 +151,7 @@ function applyInputMode(mode) {
   }
   persist();
   if (peer && peer.refreshInputMode) peer.refreshInputMode();
+  if (!(opts && opts.silent) && peer && peer.announceInputMode) peer.announceInputMode(mode);
 }
 
 /* ---------------- 设备 ---------------- */
@@ -156,9 +171,13 @@ function localKind() {
   return IS_MAC ? 'mac' : IS_WIN ? 'win' : 'pc';
 }
 
-/** 参与工作的所有设备身份：本机 + 在线对端 */
+/** 参与工作的所有设备身份：本机 + 在线对端 + 曾经见过但现在离线的对端 */
 function deviceIds() {
-  return [cfg.peerName, ...peersNow.map((p) => p.name)];
+  const ids = [cfg.peerName];
+  for (const p of peersNow) if (!ids.includes(p.name)) ids.push(p.name);
+  const known = (cfg.ui && cfg.ui.knownPeers) || {};
+  for (const n of Object.keys(known)) if (!ids.includes(n)) ids.push(n);
+  return ids;
 }
 
 function deviceInfo(id) {
@@ -166,11 +185,12 @@ function deviceInfo(id) {
     return { id, name: localLabel(), kind: localKind(), local: true, online: true };
   }
   const p = peersNow.find((x) => x.name === id);
-  const cached = (cfg.ui.peerLabels && cfg.ui.peerLabels[id]) || '';
+  const known = (cfg.ui.knownPeers && cfg.ui.knownPeers[id]) || {};
+  const cached = (cfg.ui.peerLabels && cfg.ui.peerLabels[id]) || known.label || '';
   return {
     id,
     name: (p && (p.label || p.name)) || cached || id,
-    kind: kindOf(p && p.platform),
+    kind: kindOf((p && p.platform) || known.platform),
     local: false,
     online: !!p
   };
@@ -284,12 +304,118 @@ function monitorRows() {
       ownerId,
       ownerLabel: ownerId ? deviceInfo(ownerId).name : '',
       ports,
+      pos: m.pos || null,
       deviceCount: Object.values(ports).filter((p) => p.value).length
     };
   });
 }
 
+/* ---------------- 桌面布局（真实显示器排列） ---------------- */
+
+let screenRects = [];
+
+/**
+ * 读系统里各显示器的真实位置（左/右/上/下）。
+ * Windows 上 Electron 的 bounds 是 DIP，iohook/robotjs 用物理像素，
+ * 所以换算成物理坐标；macOS 两者都是点，直接可用。
+ */
+function readScreenRects() {
+  if (!screen || typeof screen.getAllDisplays !== 'function') return [];
+  let list = [];
+  try { list = screen.getAllDisplays() || []; } catch { return []; }
+  let primaryId = '';
+  try { primaryId = String(screen.getPrimaryDisplay().id); } catch { /* ignore */ }
+
+  const out = [];
+  for (const d of list) {
+    let b = d.bounds || {};
+    if (IS_WIN && typeof screen.dipToScreenRect === 'function') {
+      try { b = screen.dipToScreenRect(null, b) || b; } catch { /* ignore */ }
+    }
+    if (!b.width || !b.height) continue;
+    out.push({
+      x: Math.round(b.x),
+      y: Math.round(b.y),
+      width: Math.round(b.width),
+      height: Math.round(b.height),
+      label: d.label || '',
+      id: String(d.id),
+      primary: String(d.id) === primaryId
+    });
+  }
+  return out;
+}
+
+const normName = (s) => String(s || '').toLowerCase().replace(/[\s\-_()（）]/g, '');
+
+/**
+ * 把 DDC 枚举出来的显示器按系统的真实左右/上下顺序排好。
+ *
+ * DDC 的 index 顺序是「枚举顺序」，跟系统设置里看到的排列常常不一致；
+ * 用户要的是「显示器 A 就是我左边那块」。这里用 Electron 的显示器位置
+ * 给每块屏定位，再按 (x, y) 排序；DDC index 仍然跟着各自的对象走，切换不受影响。
+ */
+function sortMonitorsByLayout() {
+  if (!monitorsCache.length) return;
+  const rects = screenRects;
+  if (!rects.length) {
+    monitorsCache.forEach((m) => { if (!m.pos) m.pos = null; });
+    return;
+  }
+
+  const used = new Set();
+  const pairs = [];
+  const unpaired = [];
+
+  // 1) 先按型号名配对（Electron 的 label 与系统友好名同源，命中率最高）
+  for (const m of monitorsCache) {
+    const key = normName(m.name);
+    let hit = null;
+    if (key) {
+      hit = rects.find((r) => !used.has(r) && normName(r.label) && (
+        normName(r.label).includes(key) || key.includes(normName(r.label))));
+    }
+    if (hit) { used.add(hit); pairs.push({ m, r: hit }); }
+    else unpaired.push(m);
+  }
+
+  // 2) 剩下的按顺序补齐（数量一致时就是一一对应）
+  const free = rects.filter((r) => !used.has(r));
+  unpaired.forEach((m, i) => pairs.push({ m, r: free[i] || null }));
+
+  const orderOf = new Map();
+  monitorsCache.forEach((m, i) => orderOf.set(m, i));
+
+  pairs.sort((a, b) => {
+    if (!a.r && !b.r) return orderOf.get(a.m) - orderOf.get(b.m);
+    if (!a.r) return 1;
+    if (!b.r) return -1;
+    if (a.r.x !== b.r.x) return a.r.x - b.r.x;
+    return a.r.y - b.r.y;
+  });
+
+  monitorsCache = pairs.map((p) => {
+    p.m.pos = p.r ? { x: p.r.x, y: p.r.y, width: p.r.width, height: p.r.height } : null;
+    return p.m;
+  });
+}
+
+/** 刷新显示器布局：既更新捕获端的桌面范围，也重排显示器顺序 */
+function refreshScreenLayout() {
+  screenRects = readScreenRects();
+  try { setScreenRect(screenRects); } catch { /* 测试桩里没有这个函数 */ }
+  sortMonitorsByLayout();
+  return screenRects;
+}
+
 /* ---------------- 切换计划 ---------------- */
+
+/** 所有参与切换的屏用的是同一个接口时，压成单个值：执行端就能「所有屏一起切」 */
+function unifyInput(map, involved) {
+  const vals = Object.values(map);
+  if (involved > 1 && vals.length === involved && new Set(vals).size === 1) return vals[0];
+  return map;
+}
 
 /**
  * 切到某台设备：算出每块屏该去哪个口，以及各自该由谁执行 DDC。
@@ -299,13 +425,16 @@ function buildSwitchPlan(targetId) {
   if (!targetId) return { ok: false, total: 0, skipped: 0, localPlan: null, relays: [], label: '' };
   const localPlan = {};
   const groups = new Map();
-  const online = new Set(deviceIds());
+  // 只有真的在线（有 WS 链路）才能替我们执行 DDC
+  const online = new Set([cfg.peerName, ...peersNow.map((p) => p.name)]);
   let total = 0;
   let skipped = 0;
+  let involved = 0;
   let label = '';
 
   for (const m of monitorsCache) {
     if (typeof m.index !== 'number') { skipped += 1; continue; }
+    involved += 1;
     const value = portFor(m.id, targetId);
     if (!value) { skipped += 1; continue; }
     total += 1;
@@ -314,8 +443,9 @@ function buildSwitchPlan(targetId) {
     if (!owner || owner === cfg.peerName || !online.has(owner)) {
       localPlan[m.index] = value;
     } else {
-      const g = groups.get(owner) || {};
-      g[m.index] = value;
+      const g = groups.get(owner) || { plan: {}, monitors: [] };
+      g.plan[m.index] = value;
+      g.monitors.push({ name: m.name, value });
       groups.set(owner, g);
     }
   }
@@ -325,8 +455,13 @@ function buildSwitchPlan(targetId) {
     target: targetId,
     total,
     skipped,
-    localPlan: Object.keys(localPlan).length ? localPlan : null,
-    relays: [...groups.entries()].map(([to, plan]) => ({ to, plan })),
+    // 统一接口 → 传字符串；各屏不同 → 传 { index: value }（对端还会按名字再校验一次）
+    localPlan: Object.keys(localPlan).length ? unifyInput(localPlan, involved) : null,
+    relays: [...groups.entries()].map(([to, g]) => ({
+      to,
+      plan: unifyInput(g.plan, involved),
+      monitors: g.monitors
+    })),
     label: label || (targetId === cfg.peerName ? cfg.ui.localInputLabel : cfg.ui.remoteInputLabel) || ''
   };
 }
@@ -347,6 +482,7 @@ function monitorSwitchPlan(monitorId, targetId) {
     owner,
     ownerOnline: !owner || owner === cfg.peerName || peersNow.some((p) => p.name === owner),
     name: m.name,
+    monitorId,
     target: targetId
   };
 }
@@ -470,9 +606,11 @@ async function detectMonitors() {
     }];
   }
   monitorsCache = list;
+  // 按系统里的真实排列（左/右/上/下）排好，界面上的「显示器 A/B」才是眼前看到的顺序
+  refreshScreenLayout();
   if (!cfg.ui.monitorId || !list.some((m) => m.id === cfg.ui.monitorId)) {
-    cfg.ui.monitorId = list[0].id;
-    cfg.ui.monitorName = list[0].name;
+    cfg.ui.monitorId = monitorsCache[0].id;
+    cfg.ui.monitorName = monitorsCache[0].name;
     persist();
   }
   ensurePortDefaults();
@@ -513,6 +651,13 @@ function tryExec(cmd, args) {
   });
 }
 
+/** index → 显示器名（macOS 切换后 index 会错位，靠它重新定位） */
+function indexNames() {
+  const m = {};
+  for (const x of monitorsCache) if (typeof x.index === 'number') m[x.index] = x.name;
+  return m;
+}
+
 /**
  * 执行一次输入源切换。
  * value 可以是统一接口值（"0x12"），也可以是按显示器 index 的 map（{ "0":"0x11" }）。
@@ -521,7 +666,7 @@ function tryExec(cmd, args) {
  * 3) 都失败则如实返回原因，供界面提示。
  */
 async function switchMonitorInput(value, label) {
-  const native = await ddc.setInputAll(value);
+  const native = await ddc.setInputAll(value, { names: indexNames() });
   if (native.ok) {
     ddcError = native.partial ? (native.error || '部分显示器不支持 DDC') : '';
     return {
@@ -632,6 +777,7 @@ function getState() {
     ownerLabel: m.ownerLabel,
     ports: m.ports,
     deviceCount: m.deviceCount,
+    pos: m.pos || null,
     letter: String.fromCharCode(65 + (i % 26))
   }));
 
@@ -699,7 +845,19 @@ function onPeers(list) {
   peersNow = list;
   // 记住显示名（改名会通过 meta 同步过来）
   if (!cfg.ui.peerLabels) cfg.ui.peerLabels = {};
-  for (const p of list) cfg.ui.peerLabels[p.name] = p.label || p.name;
+  if (!cfg.ui.knownPeers) cfg.ui.knownPeers = {};
+  for (const p of list) {
+    cfg.ui.peerLabels[p.name] = p.label || p.name;
+    cfg.ui.knownPeers[p.name] = { label: p.label || p.name, platform: p.platform || 'unknown', at: Date.now() };
+  }
+  // 只留最近见过的 8 台，配置文件别无限长
+  const knownNames = Object.keys(cfg.ui.knownPeers);
+  if (knownNames.length > 8) {
+    knownNames
+      .sort((a, b) => (cfg.ui.knownPeers[b].at || 0) - (cfg.ui.knownPeers[a].at || 0))
+      .slice(8)
+      .forEach((n) => { delete cfg.ui.knownPeers[n]; });
+  }
   // 新设备补默认端口 + 排列位置
   ensurePortDefaults();
   arrangeOrder();
@@ -733,8 +891,37 @@ function onFileUpdate(list) {
   }
 }
 
+/** 两块屏同名时按顺序取没被占用过的那个 */
+function nameMatches(a, b) {
+  const x = normName(a);
+  const y = normName(b);
+  if (!x || !y) return false;
+  return x === y || x.includes(y) || y.includes(x);
+}
+
+/** 把对端发来的显示器名字换成本机的 DDC index（两端枚举顺序不一定一致） */
+function resolveByName(list) {
+  const map = {};
+  const used = new Set();
+  for (const it of (Array.isArray(list) ? list : [])) {
+    if (!it || !it.value) continue;
+    const m = monitorsCache.find((x) => typeof x.index === 'number' && !used.has(x.index) && nameMatches(x.name, it.name));
+    if (m) { used.add(m.index); map[m.index] = it.value; }
+  }
+  return map;
+}
+
 /** peer 发起一次显示器输入源切换时调用：真正执行并如实回报结果 */
-async function onSwitchRequest({ input, label, from, index }) {
+async function onSwitchRequest({ input, label, from, index, name: reqName, monitors }) {
+  // 对端指定了显示器名字：优先按名字定位，避免 index 对不上切错屏
+  if (Array.isArray(monitors) && monitors.length) {
+    const byName = resolveByName(monitors);
+    if (Object.keys(byName).length) { input = byName; index = undefined; }
+  } else if (typeof index === 'number' && reqName) {
+    const local = monitorsCache.find((x) => typeof x.index === 'number' && nameMatches(x.name, reqName));
+    if (local) index = local.index;
+  }
+
   // 指定了 index = 只切这一台显示器
   if (typeof index === 'number') {
     const name = label || (typeof input === 'string' ? labelForInput(input) : '目标接口');
@@ -829,6 +1016,7 @@ module.exports = {
   buildSwitchPlan,
   monitorSwitchPlan,
   monitorCyclePlan,
+  refreshScreenLayout,
   nextDevice,
   labelForInput,
   targetPeerNames,
@@ -837,6 +1025,7 @@ module.exports = {
   switchMonitorInput,
   accessibilityGranted,
   openAccessibilitySettings,
+  captureError,
   getState,
   onPeers,
   onActive,

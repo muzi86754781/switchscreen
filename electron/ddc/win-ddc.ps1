@@ -13,6 +13,7 @@ Add-Type -TypeDefinition @"
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Text;
 
 public class SsDdc
 {
@@ -89,6 +90,58 @@ public class SsDdc
             return (int)cur;
         return -1;
     }
+
+    // Enumerate ONCE, then apply every value on those cached handles.
+    // Re-enumerating between writes breaks multi-monitor switching: as soon as
+    // the first monitor leaves this PC's input, Windows drops it from
+    // EnumDisplayMonitors and the remaining indexes shift, so the second
+    // monitor either gets skipped or gets the wrong value.
+    public static string SetPlan(string plan)
+    {
+        Dictionary<int, uint> map = new Dictionary<int, uint>();
+        foreach (string pair in plan.Split(';'))
+        {
+            if (pair == null || pair.Length == 0) continue;
+            string[] kv = pair.Split('=');
+            if (kv.Length != 2) continue;
+            int idx;
+            uint val;
+            if (!int.TryParse(kv[0], out idx)) continue;
+            if (!uint.TryParse(kv[1], out val)) continue;
+            map[idx] = val;
+        }
+
+        List<PHYSICAL_MONITOR> l = Enum();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < l.Count; i++)
+        {
+            uint v;
+            if (!map.TryGetValue(i, out v))
+            {
+                sb.Append("MON=" + i + "|SKIP|0\n");
+                continue;
+            }
+            bool ok = SetVCPFeature(l[i].hPhysicalMonitor, 0x60, v);
+            int code = 0;
+            if (!ok) code = Marshal.GetLastWin32Error();
+            sb.Append("MON=" + i + "|" + (ok ? "True" : "False") + "|" + code + "\n");
+        }
+        return sb.ToString();
+    }
+
+    public static string SetAll(uint val)
+    {
+        List<PHYSICAL_MONITOR> l = Enum();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < l.Count; i++)
+        {
+            bool ok = SetVCPFeature(l[i].hPhysicalMonitor, 0x60, val);
+            int code = 0;
+            if (!ok) code = Marshal.GetLastWin32Error();
+            sb.Append("MON=" + i + "|" + (ok ? "True" : "False") + "|" + code + "\n");
+        }
+        return sb.ToString();
+    }
 }
 "@ -ErrorAction Stop
 
@@ -114,37 +167,14 @@ switch ($Action) {
   "setall" {
     # Switch every physical monitor to the same input in a single process,
     # so we only pay the Add-Type compile cost once.
-    $n = [SsDdc]::Count()
-    Write-Output ("COUNT=" + $n)
-    for ($i = 0; $i -lt $n; $i++) {
-      $ok = [SsDdc]::SetVcp($i, 0x60, $Value)
-      $code = 0
-      if (-not $ok) { $code = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error() }
-      Write-Output ("MON=" + $i + "|" + $ok + "|" + $code)
-    }
+    Write-Output ("COUNT=" + [SsDdc]::Count())
+    Write-Output ([SsDdc]::SetAll($Value))
   }
   "setplan" {
     # Per-monitor values in one process. Plan format: "0=17;1=18"
     # (index=decimal VCP value). Used when each monitor sits on a different port.
-    $map = @{}
-    foreach ($pair in ($Plan -split ';')) {
-      if (-not $pair) { continue }
-      $kv = $pair -split '='
-      if ($kv.Length -ne 2) { continue }
-      $map[[int]$kv[0]] = [uint32]$kv[1]
-    }
-    $n = [SsDdc]::Count()
-    Write-Output ("COUNT=" + $n)
-    for ($i = 0; $i -lt $n; $i++) {
-      if (-not $map.ContainsKey($i)) {
-        Write-Output ("MON=" + $i + "|SKIP|0")
-        continue
-      }
-      $ok = [SsDdc]::SetVcp($i, 0x60, $map[$i])
-      $code = 0
-      if (-not $ok) { $code = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error() }
-      Write-Output ("MON=" + $i + "|" + $ok + "|" + $code)
-    }
+    Write-Output ("COUNT=" + [SsDdc]::Count())
+    Write-Output ([SsDdc]::SetPlan($Plan))
   }
   default { Write-Output "ERR=unknown-action" }
 }

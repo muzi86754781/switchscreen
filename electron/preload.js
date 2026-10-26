@@ -37,6 +37,8 @@ contextBridge.exposeInMainWorld('api', {
   pickFiles: (targets) => ipcRenderer.invoke('files:pick', targets),
   sendPaths: (paths, targets) => ipcRenderer.invoke('files:send-paths', { paths, targets }),
   cancelTransfer: (id) => ipcRenderer.invoke('files:cancel', id),
+  removeTransfer: (id) => ipcRenderer.invoke('files:remove', id),
+  clearTransfers: () => ipcRenderer.invoke('files:clear'),
   sendText: (text, targets) => ipcRenderer.invoke('files:text', { text, targets }),
   setTargets: (names) => ipcRenderer.invoke('files:targets', names),
   setAutoAccept: (on) => ipcRenderer.invoke('files:auto-accept', on),
@@ -44,6 +46,8 @@ contextBridge.exposeInMainWorld('api', {
   openRecvDir: () => ipcRenderer.invoke('files:open-dir'),
   setRecvDir: () => ipcRenderer.invoke('files:set-dir'),
   revealFile: (p) => ipcRenderer.invoke('files:reveal', p),
+  copyText: (text) => ipcRenderer.invoke('clip:write', text),
+  showText: (payload) => ipcRenderer.invoke('text:show', payload),
 
   permissionStatus: () => ipcRenderer.invoke('perm:status'),
   openAccessibility: () => ipcRenderer.invoke('perm:open'),

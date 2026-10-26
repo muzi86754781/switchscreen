@@ -585,7 +585,123 @@ body.win .brand { padding-left: 0; }
   color: #8fb6ff;
   cursor: pointer;
 }
+.tx-extra { display: flex; align-items: center; gap: 10px; }
+.tx-act + .tx-act { margin-left: 0; }
+.tx-act:hover { color: #b9d2ff; text-decoration: underline; }
+.tx.is-clickable { cursor: pointer; }
+.tx.is-clickable:hover { border-color: rgba(122, 162, 255, 0.34); background: rgba(22, 30, 48, 0.7); }
+.tx.is-text b { color: #cfe0ff; }
+.tx-del {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 15px;
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.tx:hover .tx-del { opacity: 1; }
+.tx-del:hover { background: rgba(215, 106, 106, 0.22); color: #ffb3b3; }
 .empty { font-size: 12px; color: var(--text-3); padding: 6px 2px; }
+
+/* ============ 文本查看弹窗 / 轻提示 ============ */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 34px 26px;
+  background: rgba(6, 9, 16, 0.62);
+  backdrop-filter: blur(4px);
+}
+.modal[hidden] { display: none; }
+.modal-card {
+  width: min(620px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(180deg, #1c2233, #151a26);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px 10px;
+  font-size: 13.5px;
+  color: #eaf0ff;
+}
+.modal-head b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-x {
+  margin-left: auto;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-2);
+  font-size: 15px;
+  cursor: pointer;
+}
+.modal-x:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.modal-body {
+  margin: 0;
+  padding: 4px 16px 14px;
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 90px;
+  max-height: 52vh;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.62;
+  color: #dbe4f8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+.modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(9, 13, 21, 0.4);
+}
+.modal-meta { margin-right: auto; font-size: 11px; color: var(--text-3); }
+.modal-foot .btn:focus { outline: none; }
+.modal-foot .btn:focus-visible { box-shadow: 0 0 0 2px rgba(122, 162, 255, 0.55); }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 46px;
+  transform: translate(-50%, 12px);
+  z-index: 95;
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: #eaf2ff;
+  background: rgba(38, 52, 82, 0.96);
+  border: 1px solid rgba(122, 162, 255, 0.3);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s, transform 0.18s;
+}
+.toast.is-on { opacity: 1; transform: translate(-50%, 0); }
 
 /* ============ 设备与显示器（一行一台，左信息 / 右排列） ============ */
 .wb-list { display: flex; flex-direction: column; gap: 10px; }

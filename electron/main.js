@@ -243,7 +243,7 @@ async function doSwitchMonitor(monitorId, explicitTarget) {
     return { ok: false, error: plan.error };
   }
   if (plan.owner && plan.owner !== services.cfg.peerName && plan.ownerOnline && peer) {
-    peer.relayDdc(plan.owner, { input: plan.value, label: plan.label, index: plan.index });
+    peer.relayDdc(plan.owner, { input: plan.value, label: plan.label, index: plan.index, name: plan.name });
     services.pushStatus(`已请求 ${services.deviceInfo(plan.owner).name} 把「${plan.name}」切到 ${plan.label}`, 'ok');
   } else {
     await services.onSwitchRequest({ input: plan.value, label: plan.label, index: plan.index });
@@ -309,7 +309,7 @@ function askIncoming(payload) {
 /** 收到文本：直接弹窗展示全文 + 一键拷贝 */
 function showIncomingText(payload) {
   const text = String(payload.text || '');
-  const from = services.deviceInfo(payload.from).name || payload.from || '另一台电脑';
+  const from = payload.from ? (services.deviceInfo(payload.from).name || payload.from) : '';
   const long = text.length > 400;
   const opts = {
     type: 'info',
@@ -317,7 +317,7 @@ function showIncomingText(payload) {
     defaultId: 0,
     cancelId: 1,
     noLink: true,
-    title: `来自 ${from} 的文本`,
+    title: payload.title || (from ? `来自 ${from} 的文本` : '传输记录'),
     message: long ? `${text.slice(0, 400)}…` : text,
     detail: long ? `共 ${text.length} 字，点「拷贝到剪贴板」复制全文` : '点「拷贝到剪贴板」直接粘贴到当前应用'
   };
@@ -436,6 +436,13 @@ function registerIpc() {
     services.applyInputMode(mode);
     const map = { separate: '各用各的键鼠', local: '共用本机键鼠', remote: '共用对端键鼠' };
     services.pushStatus(`键鼠模式：${map[mode] || mode}`, 'ok');
+    if (mode !== 'separate' && !services.peers.length) {
+      services.pushStatus('还没有其它设备在线，鼠标暂时没有可以流动的目标', 'warn');
+    } else if (mode === 'local') {
+      const err = services.captureError();
+      if (err) services.pushStatus(`键鼠捕获未启动：${err}`, 'warn');
+      else services.pushStatus('鼠标推到屏幕左右边缘就会流到相邻设备', 'info');
+    }
     return services.getState();
   });
 
@@ -555,6 +562,31 @@ function registerIpc() {
     return services.getState();
   });
 
+  // 删除一条传输记录（正在传的会先取消）
+  ipcMain.handle('files:remove', (_e, id) => {
+    if (peer) peer.removeTransfer(id);
+    return services.getState();
+  });
+
+  // 清空已结束的记录
+  ipcMain.handle('files:clear', () => {
+    if (peer) peer.clearTransfers();
+    return services.getState();
+  });
+
+  // 传输记录里的文本：拷贝 / 另存查看
+  ipcMain.handle('clip:write', (_e, text) => {
+    try { clipboard.writeText(String(text || '')); } catch { /* ignore */ }
+    services.pushStatus('已拷贝到剪贴板', 'ok');
+    return services.getState();
+  });
+
+  // 查看一段记录里的完整文本（系统弹窗，可选中复制）
+  ipcMain.handle('text:show', (_e, { text, from, title } = {}) => {
+    showIncomingText({ text: text || '', from: from || '', title });
+    return true;
+  });
+
   ipcMain.handle('files:text', (_e, { text, targets } = {}) => {
     if (!peer || !text) return services.getState();
     const list = resolveTargets(targets);
@@ -650,6 +682,17 @@ app.whenReady().then(() => {
       onAskIncoming: (payload) => askIncoming(payload),
       // 收到文本：直接弹窗展示并发拷贝按钮
       onText: (payload) => { showIncomingText(payload); broadcastStateThrottled(); },
+      // 对端改了键鼠模式，本机跟着切到镜像角色
+      onInputMode: (mode) => {
+        services.persist();
+        const map = { separate: '各用各的键鼠', local: '共用本机键鼠', remote: '共用对端键鼠' };
+        services.pushStatus(`已跟随对端切换键鼠模式：${map[mode] || mode}`, 'ok');
+        if (mode === 'local') {
+          const err = services.captureError();
+          if (err) services.pushStatus(`键鼠捕获未启动：${err}`, 'warn');
+        }
+        broadcastState();
+      },
       // 鼠标穿越边界自动切换
       onEdgeSwitch: ({ to }) => {
         services.pushStatus(`鼠标越过屏幕边界，已切到 ${services.deviceInfo(to).name}`, 'ok');
@@ -670,6 +713,22 @@ app.whenReady().then(() => {
   services.detectMonitors()
     .then(() => { registerHotkeys(); broadcastState(); })
     .catch(() => { registerHotkeys(); broadcastState(); });
+
+  // 显示器插拔 / 改分辨率 / 换排列：重新算桌面范围与显示器顺序
+  const onDisplayChange = () => {
+    try {
+      services.refreshScreenLayout();
+    } catch (e) {
+      console.error('[electron] 刷新显示器布局失败:', e.message);
+    }
+    broadcastState();
+  };
+  try {
+    screen.on('display-added', onDisplayChange);
+    screen.on('display-removed', onDisplayChange);
+    screen.on('display-metrics-changed', onDisplayChange);
+  } catch { /* ignore */ }
+
   broadcastState();
 });
 

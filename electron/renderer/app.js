@@ -305,7 +305,10 @@ function buildWorkbench(s) {
 
   const n = monitors.length;
   const devs = devices.length;
-  $('#wbNote').textContent = n ? `${devs} 台设备 · ${n} 块显示器` : '未检测到显示器';
+  const onlineOthers = devices.filter((d) => !d.local && d.online).length;
+  $('#wbNote').textContent = n
+    ? `${devs} 台设备 · ${n} 块显示器${onlineOthers ? '' : ' · 没有其它设备在线'}`
+    : '未检测到显示器';
 }
 
 /* 本机改名（就地编辑） */
@@ -534,35 +537,55 @@ function renderTransfers(s) {
     if (!node) {
       node = el('div', 'tx');
       node.dataset.id = t.id;
-      node.innerHTML = '<div class="tx-head"><span class="tx-dir"></span><b></b><span class="tx-size"></span></div><div class="tx-bar"><i></i></div><div class="tx-foot"><span class="tx-state"></span><span class="tx-extra"></span></div>';
+      node.innerHTML = '<div class="tx-head"><span class="tx-dir"></span><b></b><span class="tx-size"></span>'
+        + '<button class="tx-del" type="button" title="删除这条记录">×</button></div>'
+        + '<div class="tx-bar"><i></i></div>'
+        + '<div class="tx-foot"><span class="tx-state"></span><span class="tx-extra"></span></div>';
+      node.querySelector('.tx-del').addEventListener('click', (e) => {
+        e.stopPropagation();
+        push(window.api.removeTransfer(t.id));
+      });
+      // 点整行：文本 → 弹出全文；文件 → 在文件夹里选中
+      node.addEventListener('click', () => openRecord(node.dataset.id));
       list.prepend(node);
     }
     const pct = t.size ? Math.min(100, Math.round((t.done / t.size) * 100)) : (t.status === 'done' ? 100 : 0);
     node.classList.toggle('done', t.status === 'done');
     node.classList.toggle('failed', t.status === 'failed' || t.status === 'rejected');
+    node.classList.toggle('is-text', !!t.text);
+    node.classList.toggle('is-clickable', !!(t.text || t.path || (t.saved && t.saved.length)));
     node.querySelector('.tx-dir').textContent = t.dir === 'in' ? '接收' : '发送';
     node.querySelector('b').textContent = t.name || '未命名';
     node.querySelector('.tx-size').textContent = fmtSize(t.size);
     node.querySelector('.tx-bar i').style.width = `${pct}%`;
     node.querySelector('.tx-state').textContent = `${STATUS_TEXT[t.status] || t.status}${t.size ? ` · ${pct}%` : ''}`;
+    node.title = t.text
+      ? '点一下查看全文，可拷贝'
+      : (t.path ? '点一下在文件夹中显示这个文件' : '');
 
     const extra = node.querySelector('.tx-extra');
-    if (t.status === 'sending' || t.status === 'receiving' || t.status === 'waiting') {
-      if (!extra.querySelector('button')) {
+    const sig = `${t.status}|${t.dir}|${t.text ? 1 : 0}|${t.path ? 1 : 0}`;
+    if (extra.dataset.sig !== sig) {
+      extra.dataset.sig = sig;
+      extra.innerHTML = '';
+      if (t.status === 'sending' || t.status === 'receiving' || t.status === 'waiting') {
         const b = el('button', 'tx-act', '取消');
-        b.addEventListener('click', () => push(window.api.cancelTransfer(t.id)));
-        extra.innerHTML = '';
+        b.addEventListener('click', (e) => { e.stopPropagation(); push(window.api.cancelTransfer(t.id)); });
         extra.appendChild(b);
-      }
-    } else if (t.status === 'done' && t.dir === 'in' && t.path) {
-      if (!extra.querySelector('button')) {
+      } else if (t.text) {
+        const view = el('button', 'tx-act', '查看');
+        view.addEventListener('click', (e) => { e.stopPropagation(); openTextRecord(t.id); });
+        extra.appendChild(view);
+        const cp = el('button', 'tx-act', '拷贝');
+        cp.addEventListener('click', (e) => { e.stopPropagation(); copyRecord(t.id); });
+        extra.appendChild(cp);
+      } else if (t.path) {
         const b = el('button', 'tx-act', '在文件夹中显示');
-        b.addEventListener('click', () => window.api.revealFile(t.path));
-        extra.innerHTML = '';
+        b.addEventListener('click', (e) => { e.stopPropagation(); window.api.revealFile(t.path); });
         extra.appendChild(b);
+      } else {
+        extra.textContent = t.error || '';
       }
-    } else {
-      extra.textContent = t.error || '';
     }
   }
 
@@ -570,6 +593,68 @@ function renderTransfers(s) {
     const id = c.dataset && c.dataset.id;
     if (id && !seen.has(id)) c.remove();
   });
+}
+
+/** 从最新状态里取记录（列表是增量更新的，闭包里那份可能已经过期） */
+function recordById(id) {
+  const list = (S && S.files && S.files.transfers) || [];
+  return list.find((x) => x.id === id) || null;
+}
+
+function openRecord(id) {
+  const r = recordById(id);
+  if (!r) return;
+  if (r.text) { openTextRecord(id); return; }
+  const p = r.path || (r.saved && r.saved[0]);
+  if (p) window.api.revealFile(p);
+}
+
+function copyRecord(id) {
+  const r = recordById(id);
+  if (!r || !r.text) return;
+  push(window.api.copyText(r.text));
+  toast('已拷贝到剪贴板');
+}
+
+function openTextRecord(id) {
+  const r = recordById(id);
+  if (!r) return;
+  const from = r.peer ? deviceName(r.peer) : '';
+  const title = `${r.dir === 'in' ? '收到' : '发出'}的文本${from ? ` · ${from}` : ''}`;
+  openTextModal(r.text || '', title);
+}
+
+/* ---------------- 文本查看弹窗 ---------------- */
+
+let tmText = '';
+
+function openTextModal(text, title) {
+  tmText = text || '';
+  $('#tmTitle').textContent = title || '文本';
+  $('#tmBody').textContent = tmText || '（空）';
+  $('#tmMeta').textContent = `${tmText.length} 字`;
+  $('#textModal').hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closeTextModal() {
+  $('#textModal').hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+/** 轻提示（3 秒后自动消失） */
+let toastTimer = null;
+function toast(text) {
+  let box = $('#toast');
+  if (!box) {
+    box = el('div', 'toast');
+    box.id = 'toast';
+    document.body.appendChild(box);
+  }
+  box.textContent = text;
+  box.classList.add('is-on');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => box.classList.remove('is-on'), 2600);
 }
 
 /* ---------------- 共用键鼠：设备排列 ---------------- */
@@ -755,6 +840,22 @@ function bindSharePanel() {
   $('#clipEnabled').addEventListener('change', (e) => push(window.api.setClipboardSync(e.target.checked)));
   $('#askLarge').addEventListener('change', (e) => push(window.api.setAskLarge(e.target.checked)));
   $('#autoAccept').addEventListener('change', (e) => push(window.api.setAutoAccept(e.target.checked)));
+
+  $('#txClear').addEventListener('click', () => push(window.api.clearTransfers()));
+
+  /* 文本查看弹窗 */
+  $('#tmClose').addEventListener('click', closeTextModal);
+  $('#tmDone').addEventListener('click', closeTextModal);
+  $('#tmCopy').addEventListener('click', () => {
+    push(window.api.copyText(tmText));
+    toast('已拷贝到剪贴板');
+  });
+  $('#textModal').addEventListener('click', (e) => {
+    if (e.target.id === 'textModal') closeTextModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('#textModal').hidden) closeTextModal();
+  });
 
   $('#fileRecvChoose').addEventListener('click', () => push(window.api.setRecvDir()));
   $('#fileRecvOpen').addEventListener('click', () => push(window.api.openRecvDir()));

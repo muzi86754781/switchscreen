@@ -100,6 +100,12 @@ function createPeer(userConfig, hooks) {
     return id === myName || peers.has(id);
   }
 
+  /** 链路真的通着才能转发：只剩半个 TCP 连接时转发会把本机鼠标「冻」在屏幕中间 */
+  function isPeerReady(id) {
+    const ws = peers.get(id);
+    return !!ws && ws.readyState === 1;
+  }
+
   /** 从 id 出发，往 dir（left/right）找第一台在线设备 */
   function neighborOf(id, dir) {
     const list = arrangeOrder();
@@ -152,9 +158,10 @@ function createPeer(userConfig, hooks) {
         }
       }
       // 有些屏当前显示的是别的机器 —— DDC 必须由那台机器发，转给它执行
+      // （带上显示器名字，对端按名字换成本机的 index，避免两端枚举顺序不同切错屏）
       const relays = plan.relays || [];
       for (const r of relays) {
-        if (sendTo(r.to, { type: 'ddc', input: r.plan, label })) {
+        if (sendTo(r.to, { type: 'ddc', input: r.plan, label, monitors: r.monitors })) {
           if (result === 'skipped') result = 'relayed';
         }
       }
@@ -190,8 +197,9 @@ function createPeer(userConfig, hooks) {
       }
     }
 
-    // DDC 明确失败时，画面其实没换，键鼠焦点也不该留在对端
-    if (result === 'failed' && prev !== target) activePeer = prev;
+    // DDC 明确失败、或者对端根本没配接口时，画面其实没换，键鼠焦点也不该留在对端
+    // （否则本机指针被「拉回中心」，看着就像鼠标卡住动不了）
+    if ((result === 'failed' || result === 'no-input') && prev !== target) activePeer = prev;
 
     resetInputState();
 
@@ -255,7 +263,7 @@ function createPeer(userConfig, hooks) {
   /* ---------------- 键鼠：捕获与转发 ---------------- */
 
   function inputOptions() {
-    if (!peers.has(activePeer) || activePeer === myName) {
+    if (activePeer === myName || !isPeerReady(activePeer)) {
       return {
         forwarding: false,
         selfPlatform: platform,
@@ -352,7 +360,11 @@ function createPeer(userConfig, hooks) {
       const meta = peersMeta.get(name) || { name };
       const before = meta.label;
       meta.platform = msg.platform || meta.platform || 'unknown';
-      if (msg.screen && msg.screen.width) meta.screen = msg.screen;
+      if (msg.screen && msg.screen.width) {
+        meta.screen = msg.screen;
+        // 注入端按对端的桌面范围算虚拟指针，多显示器时不会顶死在主屏边界
+        if (typeof injector.setScreen === 'function') injector.setScreen(msg.screen);
+      }
       if (msg.displayName) meta.label = msg.displayName;
       peersMeta.set(name, meta);
       if (meta.label !== before) notifyPeers();
@@ -365,6 +377,7 @@ function createPeer(userConfig, hooks) {
       else if (ev.kind === 'button') injector.button(ev.button, !!ev.down);
     }
     else if (msg.type === 'input-reset') injector.releaseAll();
+    else if (msg.type === 'input-mode') applyRemoteInputMode(msg.mode, name);
     else if (msg.type === 'cursor-enter') {
       if (msg.edge === 'center') injector.place('center', 0.5, 0.5);
       else injector.place(msg.edge, msg.nx, msg.ny);
@@ -373,7 +386,14 @@ function createPeer(userConfig, hooks) {
       // 对端请求本机执行 DDC 切换（本机才是当前画面输出方）
       // index 有值表示只切某台显示器；input 是对象表示按显示器下发计划
       if (typeof h.onSwitchRequest === 'function') {
-        h.onSwitchRequest({ input: msg.input, label: msg.label, index: msg.index, from: name });
+        h.onSwitchRequest({
+          input: msg.input,
+          label: msg.label,
+          index: msg.index,
+          monitors: msg.monitors,
+          name: msg.name,
+          from: name
+        });
       } else {
         switchSource({ platform, command: cfg.monitor.command[platform], input: msg.input });
       }
@@ -401,6 +421,8 @@ function createPeer(userConfig, hooks) {
 
     // 交换屏幕尺寸与显示名：跨分辨率移动要靠它换算幻影指针
     try { ws.send(JSON.stringify(metaPayload())); } catch { /* ignore */ }
+    // 顺手同步一次键鼠模式，新连上的设备立刻进入正确角色
+    try { ws.send(JSON.stringify({ type: 'input-mode', mode: currentMode() })); } catch { /* ignore */ }
 
     ws.on('message', (data) => {
       let msg = null;
@@ -435,6 +457,54 @@ function createPeer(userConfig, hooks) {
       return true;
     }
   });
+
+  /* ---------------- 键鼠模式同步 ----------------
+   * 「共用谁的键鼠」是个两端必须一致的状态：
+   *   本机 local（用我的键鼠）  ⇄  对端 remote（只接收操作）
+   *   本机 remote（用对端键鼠） ⇄  对端 local（对端捕获并转发）
+   * 以前只改本机配置，对端仍按自己的模式跑，于是「选了共用 A 的键鼠，
+   * 但没有一台在转发」，鼠标自然出不去。 */
+
+  function currentMode() {
+    return (cfg.ui && cfg.ui.inputMode) || 'separate';
+  }
+
+  // 本机当前模式是「用户在界面上选的」还是「跟着对端变的」
+  let modeFromPeer = false;
+
+  function setMode(next) {
+    if (!cfg.ui) cfg.ui = {};
+    if (cfg.ui.inputMode === next) {
+      refreshInputMode();
+      return;
+    }
+    cfg.ui.inputMode = next;
+    cfg.shareInput = next !== 'separate';
+    cfg.isHost = next !== 'remote';
+    if (typeof h.onInputMode === 'function') h.onInputMode(next);
+    refreshInputMode();
+  }
+
+  /** 把本机的键鼠模式广播出去，让对端切到镜像角色 */
+  function announceInputMode(mode) {
+    const m = mode || currentMode();
+    modeFromPeer = false; // 这是用户自己选的
+    broadcast({ type: 'input-mode', mode: m });
+  }
+
+  /** 收到对端的模式：对端的角色是镜像；两边都想当主机时按名字决定谁让步 */
+  function applyRemoteInputMode(mode, from) {
+    if (mode !== 'separate' && mode !== 'local' && mode !== 'remote') return;
+    const desired = mode === 'local' ? 'remote' : mode === 'remote' ? 'local' : 'separate';
+    const cur = currentMode();
+    if (cur === desired) { modeFromPeer = true; return; }
+    // 两边都想当同一个角色才是真冲突；只有本机是用户亲自选的才坚持，否则跟随对端
+    const conflict = cur === mode;
+    if (conflict && !modeFromPeer && myName < from) return;
+    setMode(desired);
+    modeFromPeer = true;
+    console.log(`[peer] 跟随 ${from} 的键鼠模式 → ${desired}`);
+  }
 
   /* ---------------- 捕获启停 ---------------- */
 
@@ -478,7 +548,7 @@ function createPeer(userConfig, hooks) {
         if (peers.has(name)) return;
         // 字典序小的主动连，避免双向重复
         if (myName < name) {
-          const ws = connectPeer(address, port, name);
+          const ws = connectPeer(address, port, name, { selfName: myName, selfPlatform: platform });
           ws.on('open', () => track(ws, name, remotePlatform, label));
         }
       }
@@ -492,9 +562,12 @@ function createPeer(userConfig, hooks) {
     triggerSwitch,
     switchTo: applySwitch,
     refreshInputMode,
+    announceInputMode,
     listPeers,
     offerFiles: (paths, target) => fileTransfer.offerFiles(paths, target),
     cancelTransfer: (id) => fileTransfer.cancel(id),
+    removeTransfer: (id) => fileTransfer.remove(id),
+    clearTransfers: () => fileTransfer.clearDone(),
     sendText: (text, target) => fileTransfer.sendText(text, target),
     listTransfers: () => fileTransfer.list(),
     getActive: () => activePeer,

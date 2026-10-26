@@ -22,6 +22,38 @@ function ensureRobot() {
 
 /* ================= 捕获端（接物理键鼠的那台） ================= */
 
+/* ---- 桌面实际范围（多显示器必须知道，否则边缘判断全错） ----
+ * robotjs 的 getScreenSize() 只给主屏尺寸，而 iohook 报的是整个虚拟桌面的坐标。
+ * 主机接了两块屏时，鼠标在副屏上「x 超过主屏宽度」就会被误判成顶到右边缘，
+ * 于是不停往对端跳。这里由主进程用 Electron 的 screen 模块算好真实范围塞进来。 */
+const SCREEN = { rects: [], bounds: null };
+
+function setScreenRect(list) {
+  const rects = (Array.isArray(list) ? list : [])
+    .filter((r) => r && r.width > 0 && r.height > 0)
+    .map((r) => ({
+      x: Math.round(r.x) || 0,
+      y: Math.round(r.y) || 0,
+      width: Math.round(r.width),
+      height: Math.round(r.height)
+    }));
+  SCREEN.rects = rects;
+  if (!rects.length) { SCREEN.bounds = null; return; }
+  const left = Math.min(...rects.map((r) => r.x));
+  const top = Math.min(...rects.map((r) => r.y));
+  const right = Math.max(...rects.map((r) => r.x + r.width));
+  const bottom = Math.max(...rects.map((r) => r.y + r.height));
+  SCREEN.bounds = { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/** 指针当前所在的屏幕（拿不到就退化成整块桌面） */
+function rectAt(x, y) {
+  for (const r of SCREEN.rects) {
+    if (x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) return r;
+  }
+  return SCREEN.bounds;
+}
+
 /* ---- 捕获器在进程内只绑定一次 ----
  * iohook 是全局单例，反复 start/stop 很容易把监听器叠成多份（一次按键发 N 次）。
  * 所以这里绑定一次，启停只改 active 标志。 */
@@ -35,8 +67,11 @@ const CAP = {
 };
 
 function capScreen(o) {
-  const s = o.getOptions && o.getOptions().screen;
-  return s && s.width && s.height ? s : { width: 1920, height: 1080 };
+  // 优先用主进程给的真实桌面范围（x/y 可能为负，副屏在主屏左侧时就是这样）
+  if (SCREEN.bounds) return SCREEN.bounds;
+  const s = o && o.getOptions && o.getOptions().screen;
+  if (s && s.width && s.height) return { x: 0, y: 0, width: s.width, height: s.height };
+  return { x: 0, y: 0, width: 1920, height: 1080 };
 }
 
 function capWarp(x, y) {
@@ -91,8 +126,11 @@ function bindCaptureOnce() {
 
     if (cfg.forwarding) {
       if ((dx || dy) && typeof o.onMove === 'function') o.onMove(dx, dy);
-      // 拉回中心，保证继续有位移可用（顶到边缘就再也喂不出 dx 了）
-      if (!CAP.anchor) CAP.anchor = { x: scr.width / 2, y: scr.height / 2 };
+      // 拉回「指针所在那块屏」的中心，保证继续有位移可用（顶到边缘就再也喂不出 dx 了）
+      if (!CAP.anchor) {
+        const r = rectAt(x, y) || scr;
+        CAP.anchor = { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      }
       if (Math.abs(x - CAP.anchor.x) > 20 || Math.abs(y - CAP.anchor.y) > 20) {
         capWarp(CAP.anchor.x, CAP.anchor.y);
       }
@@ -105,17 +143,19 @@ function bindCaptureOnce() {
     if (Date.now() < CAP.edgeLockAt) return;
 
     // 设备按「从左到右」排列，所以只需要看左右两个边缘
+    const leftEdge = scr.x;
+    const rightEdge = scr.x + scr.width;
     let side = '';
-    if (x >= scr.width - 2 && dx > 0) side = 'right';
-    else if (x <= 1 && dx < 0) side = 'left';
+    if (x >= rightEdge - 2 && dx > 0) side = 'right';
+    else if (x <= leftEdge + 1 && dx < 0) side = 'left';
     if (!side) return;
 
     CAP.edgeLockAt = Date.now() + 1200;
     if (typeof o.onEdge === 'function') {
       o.onEdge({
         side,
-        nx: Math.max(0, Math.min(1, x / Math.max(1, scr.width))),
-        ny: Math.max(0, Math.min(1, y / Math.max(1, scr.height)))
+        nx: Math.max(0, Math.min(1, (x - scr.x) / Math.max(1, scr.width))),
+        ny: Math.max(0, Math.min(1, (y - scr.y) / Math.max(1, scr.height)))
       });
     }
   });
@@ -180,9 +220,11 @@ function createInjector() {
   let cursor = null;
   let dim = null;
   let dimAt = 0;
+  let forced = null;             // 对端上报的桌面尺寸（多显示器时比主屏大）
   const pressed = new Set();
 
   function size() {
+    if (forced) return forced;
     const now = Date.now();
     if (dim && now - dimAt < 5000) return dim;
     try {
@@ -194,6 +236,15 @@ function createInjector() {
       }
     } catch { /* ignore */ }
     return { width: 1920, height: 1080 };
+  }
+
+  /** 对端连上时告诉我们的桌面尺寸，注入时按它算范围 */
+  function setScreen(s) {
+    if (!s || !s.width || !s.height) return;
+    const next = { width: Math.round(s.width), height: Math.round(s.height) };
+    if (forced && forced.width === next.width && forced.height === next.height) return;
+    forced = next;
+    if (cursor) clamp();
   }
 
   function ensure() {
@@ -263,7 +314,7 @@ function createInjector() {
     pressed.clear();
   }
 
-  return { place, move, wheel, key, button, releaseAll, getCursor: () => cursor };
+  return { place, move, wheel, key, button, releaseAll, setScreen, getCursor: () => cursor };
 }
 
 /** 把本机指针挪到指定位置（切回本机时落在边缘用） */
@@ -277,6 +328,12 @@ let screenCacheAt = 0;
 function localScreenSize() {
   const now = Date.now();
   if (screenCache && now - screenCacheAt < 5000) return screenCache;
+  // 多显示器时用整块桌面的尺寸，对端的虚拟指针才够长
+  if (SCREEN.bounds) {
+    screenCache = { width: SCREEN.bounds.width, height: SCREEN.bounds.height };
+    screenCacheAt = now;
+    return screenCache;
+  }
   try {
     const s = ensureRobot().getScreenSize();
     if (s && s.width) {
@@ -293,6 +350,7 @@ module.exports = {
   createInjector,
   moveLocalCursor,
   localScreenSize,
+  setScreenRect,
   ensureIoHook,
   ensureRobot
 };
