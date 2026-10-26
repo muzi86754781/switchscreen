@@ -30,6 +30,9 @@ jobs:
       - run: node node_modules/electron/install.js
       - run: npx electron-rebuild --force
       - run: npm run dist:win
+        env:
+          # 无签名证书时关闭自动签名，避免 electron-builder 索取 GH_TOKEN
+          CSC_IDENTITY_AUTO_DISCOVERY: false
       - uses: actions/upload-artifact@v4
         with:
           name: switchscreen-win

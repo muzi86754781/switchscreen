@@ -2,11 +2,11 @@
 const zlib = require('zlib');
 const fs = require('fs');
 
-const W = 256, H = 256;
-// RGBA 像素：蓝紫渐变底色 + 白色屏形图案（简单起见用纯色块 + 简单高亮）
+const W = 512, H = 512;
+// RGBA 像素：蓝紫渐变底色 + 白色屏形图案（按 256 基准放大 2 倍，满足 macOS ICNS ≥512 要求）
 function px(x, y) {
-  // 圆角外框裁剪
-  const r = 48;
+  // 圆角外框裁剪（r=96 对应 256 基准的 48）
+  const r = 96;
   const inX = Math.min(x, W - 1 - x), inY = Math.min(y, H - 1 - y);
   if ((x < r && y < r && (r - inX) ** 2 + (r - inY) ** 2 > r * r) ||
       (x < r && y >= H - r && (r - inX) ** 2 + (r - (H - 1 - y)) ** 2 > r * r) ||
@@ -19,8 +19,8 @@ function px(x, y) {
   const R = Math.round(60 + t * 20);
   const G = Math.round(130 - t * 40);
   const B = Math.round(230 - t * 30);
-  // 中心白色“屏幕”矩形
-  const cx0 = 70, cy0 = 56, cx1 = 186, cy1 = 172;
+  // 中心白色“屏幕”矩形（256 基准 70/56/186/172 放大 2 倍）
+  const cx0 = 140, cy0 = 112, cx1 = 372, cy1 = 344;
   if (x >= cx0 && x <= cx1 && y >= cy0 && y <= cy1) return [245, 248, 255, 255];
   return [R, G, B, 255];
 }
