@@ -200,8 +200,9 @@ function createPeer(userConfig, hooks) {
 
     // 「切换电脑 / 显示器」是主功能，优先级高于无缝键鼠：
     // 手动切换后先压住自动穿越一小会儿，免得鼠标还停在屏幕边上、一动就又弹回去。
-    // 由鼠标推边缘触发的切换不加锁，否则无缝移动会「走到头就卡住」。
+    // 鼠标推边缘触发也加 400ms 短暂冷却，杜绝左右边界反向跳动的乒乓振荡。
     if (!o.edge) autoLockUntil = Date.now() + 1500;
+    else autoLockUntil = Date.now() + 400;
 
     // 鼠标跨设备流动只切「键鼠控制权」，不动显示器 ——
     // 屏幕怎么分是用户在「设备与显示器」里手动切的，边缘穿越不能去改它。
@@ -268,9 +269,12 @@ function createPeer(userConfig, hooks) {
       }
     }
 
-    // DDC 明确失败、或者对端根本没配接口时，画面其实没换，键鼠焦点也不该留在对端
-    // （否则本机指针被「拉回中心」，看着就像鼠标卡住动不了）
-    if ((result === 'failed' || result === 'no-input') && prev !== target) activePeer = prev;
+    // 仅在「未开启键鼠共用」且明确切屏失败/没配接口时才回退焦点；
+    // 若开启了共用键鼠，键鼠控制权允许跨机切换，不被 DDC 硬件失败或单屏无接口卡死
+    const sharingInput = !!cfg.shareInput;
+    if ((result === 'failed' || result === 'no-input') && prev !== target && !sharingInput && !o.edge) {
+      activePeer = prev;
+    }
 
     resetInputState();
 
@@ -294,7 +298,7 @@ function createPeer(userConfig, hooks) {
       phantom = null;
       const lscr = localScreenSize();
       const ny = typeof o.edge.ny === 'number' ? o.edge.ny : 0.5;
-      if (o.edge.side === 'right') moveLocalCursor(6, ny * lscr.height);
+      if (o.edge.side === 'right') moveLocalCursor(12, ny * lscr.height);
       else if (o.edge.side === 'left') moveLocalCursor(lscr.width - 16, ny * lscr.height);
     } else {
       phantom = null;
@@ -358,10 +362,10 @@ function createPeer(userConfig, hooks) {
   }
 
   function enterPoint(scr, side, nx, ny) {
-    if (side === 'right') return { x: 1, y: Math.round(ny * scr.height) };
-    if (side === 'left') return { x: scr.width - 2, y: Math.round(ny * scr.height) };
-    if (side === 'bottom') return { x: Math.round(nx * scr.width), y: 1 };
-    if (side === 'top') return { x: Math.round(nx * scr.width), y: scr.height - 2 };
+    if (side === 'right') return { x: 12, y: Math.round(ny * scr.height) };
+    if (side === 'left') return { x: Math.max(12, scr.width - 14), y: Math.round(ny * scr.height) };
+    if (side === 'bottom') return { x: Math.round(nx * scr.width), y: 12 };
+    if (side === 'top') return { x: Math.round(nx * scr.width), y: Math.max(12, scr.height - 14) };
     return { x: Math.round(scr.width / 2), y: Math.round(scr.height / 2) };
   }
 
@@ -649,6 +653,7 @@ function createPeer(userConfig, hooks) {
     ws.on('close', () => {
       peers.delete(name);
       if (activePeer === name) { activePeer = myName; phantom = null; notifyActive(); }
+      injector.releaseAll();
       notifyPeers();
     });
     ws.on('error', () => {});
@@ -754,6 +759,16 @@ function createPeer(userConfig, hooks) {
     }
   }
 
+  function retryCapture() {
+    captureError = '';
+    if (capture) {
+      try { capture.stop(); } catch { /* ignore */ }
+      capture = null;
+    }
+    refreshInputMode();
+    return { ok: !captureError, error: captureError };
+  }
+
   /* ---------------- 启动 ---------------- */
 
   const wss = startServer(cfg.port, (ws, name, peerPlatform) => {
@@ -764,7 +779,7 @@ function createPeer(userConfig, hooks) {
     startDiscovery({
       port: cfg.port,
       peerName: myName,
-      displayName: myLabel(),
+      displayName: () => myLabel(),
       onPeer: ({ name, label, address, port, platform: remotePlatform }) => {
         if (peers.has(name)) return;
         // 字典序小的主动连，避免双向重复
@@ -802,6 +817,7 @@ function createPeer(userConfig, hooks) {
     listTransfers: () => fileTransfer.list(),
     getActive: () => activePeer,
     getCaptureError: () => captureError,
+    retryCapture,
     /** 让指定对端执行一次 DDC（单台显示器切换时用） */
     relayDdc: (target, payload) => sendTo(target, { type: 'ddc', ...payload }),
     /** 手动切换后暂停自动穿越：避免鼠标一动就把画面又弹回去（切换优先） */

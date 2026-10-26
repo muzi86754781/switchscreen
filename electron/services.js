@@ -1507,6 +1507,25 @@ function openAccessibilitySettings() {
   return true;
 }
 
+function openInputMonitoringSettings() {
+  if (!IS_MAC) return false;
+  shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent');
+  return true;
+}
+
+function retryCapture() {
+  if (peer && typeof peer.retryCapture === 'function') {
+    const res = peer.retryCapture();
+    if (res.ok) {
+      pushStatus('键鼠捕获已成功启动', 'ok');
+    } else {
+      pushStatus(`键鼠捕获未启动：${res.error}`, 'warn');
+    }
+    return res;
+  }
+  return { ok: false, error: '未初始化' };
+}
+
 /* ---------------- 状态聚合 ---------------- */
 
 /** 当前选中的传输对象（多选）；不在线的自动剔除 */
@@ -1823,11 +1842,16 @@ function rename(text) {
 function setHotkey(kind, id, key) {
   if (!cfg.ui.hotkeys) cfg.ui.hotkeys = { global: 'F12', monitor: {} };
   if (!cfg.ui.hotkeys.monitor) cfg.ui.hotkeys.monitor = {};
+  const cleanKey = typeof key === 'string' ? key.trim() : '';
   if (kind === 'global') {
-    cfg.ui.hotkeys.global = key || '';
+    cfg.ui.hotkeys.global = cleanKey;
     cfg.ui.hotkeyKey = cfg.ui.hotkeys.global;
   } else if (kind === 'monitor' && id) {
-    cfg.ui.hotkeys.monitor[id] = key || '';
+    if (cleanKey) {
+      cfg.ui.hotkeys.monitor[id] = cleanKey;
+    } else {
+      delete cfg.ui.hotkeys.monitor[id];
+    }
   }
   persist();
 }
@@ -1877,6 +1901,8 @@ module.exports = {
   switchMonitorInput,
   accessibilityGranted,
   openAccessibilitySettings,
+  openInputMonitoringSettings,
+  retryCapture,
   captureError,
   getState,
   onPeers,

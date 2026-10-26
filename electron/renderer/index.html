@@ -66,9 +66,15 @@
           </label>
           <div class="hk-row">
             <span class="hk-name">全部显示器切换</span>
-            <select class="select select-sm" id="hotkeyGlobal"></select>
+            <div class="hk-recorder-group">
+              <button type="button" class="hk-record-btn" id="hotkeyGlobalBtn" title="点击后直接按下键盘快捷键进行自定义">
+                <span class="hk-key-text">F12</span>
+              </button>
+              <button type="button" class="hk-clear-btn" id="hotkeyGlobalClear" title="清除快捷键">✕</button>
+            </div>
           </div>
           <div class="hk-list" id="hotkeyList"></div>
+          <div class="hk-tip">点击按键框即可直接按下键盘自定义（支持任意单键或 Ctrl / Alt / Shift / ⌘ 组合键，按 Esc 取消，点 ✕ 或按 Delete 清除）</div>
 
           <label class="check-row check-row-sm">
             <input type="checkbox" id="launchAtLogin" />
@@ -248,6 +254,52 @@
         <span class="modal-meta" id="tmMeta"></span>
         <button class="btn" id="tmCopy" type="button">拷贝到剪贴板</button>
         <button class="btn btn-primary" id="tmDone" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- macOS 权限与启动排查弹窗 -->
+  <div class="modal" id="permModal" hidden>
+    <div class="modal-card perm-card">
+      <div class="modal-head">
+        <b>macOS 键鼠权限与捕获排查</b>
+        <button class="modal-x" id="pmClose" type="button" title="关闭">×</button>
+      </div>
+      <div class="modal-body perm-body">
+        <div class="perm-status-box" id="pmStatusBox">
+          <div class="perm-status-title">当前状态：<span id="pmStatusText">键鼠捕获未启动</span></div>
+          <div class="perm-status-desc" id="pmStatusDesc">macOS 需要同时开启「辅助功能」与「输入监控」两项系统权限。</div>
+        </div>
+        <div class="perm-steps">
+          <div class="perm-step-item">
+            <div class="psi-num">1</div>
+            <div class="psi-info">
+              <b>辅助功能权限（Accessibility）</b>
+              <p>允许 SwitchScreen 跨机模拟与注入键盘按键、鼠标点击。</p>
+            </div>
+            <button class="btn btn-sm btn-ghost" id="pmBtnAx" type="button">打开设置</button>
+          </div>
+          <div class="perm-step-item">
+            <div class="psi-num">2</div>
+            <div class="psi-info">
+              <b>输入监控权限（Input Monitoring）</b>
+              <p>允许 SwitchScreen 捕获物理键盘与鼠标事件（若缺失会导致「捕获未启动」）。</p>
+            </div>
+            <button class="btn btn-sm btn-ghost" id="pmBtnInput" type="button">打开设置</button>
+          </div>
+        </div>
+        <div class="perm-trouble-tip">
+          <b>💡 常见排查：系统设置中已勾选，为什么还是提示未启动？</b>
+          <ol>
+            <li><b>双重权限：</b>请确认系统设置中<b>「辅助功能」</b>与<b>「输入监控」</b>两项均已勾选 SwitchScreen。</li>
+            <li><b>缓存失效：</b>若更新过软件，系统会保留旧签名导致授权失效。请在系统设置中<b>先取消勾选再重新勾选</b>（或点击下方的 <b>-</b> 号移除后点 <b>+</b> 重新添加）。</li>
+            <li><b>即时重试：</b>授权后无需重启，直接点击下方「立即重试」即可检测并启动捕获。</li>
+          </ol>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-primary" id="pmRetry" type="button">立即重试</button>
+        <button class="btn btn-ghost" id="pmDone" type="button">完成</button>
       </div>
     </div>
   </div>

@@ -12,12 +12,166 @@ function isMacPlatform() {
 }
 
 function hotkeyLabel(v) {
-  if (!v) return '关闭';
-  if (v === 'NONE') return '关闭';
-  return v
-    .replace('CommandOrControl', isMacPlatform() ? '⌘' : 'Ctrl')
-    .replace(/\bAlt\b/, isMacPlatform() ? '⌥' : 'Alt')
+  if (!v || v === 'NONE') return '';
+  const isM = isMacPlatform();
+  return String(v)
+    .replace(/\bCommandOrControl\b/g, isM ? '⌘' : 'Ctrl')
+    .replace(/\bControl\b/g, isM ? '⌃' : 'Ctrl')
+    .replace(/\bAlt\b/g, isM ? '⌥' : 'Alt')
+    .replace(/\bShift\b/g, isM ? '⇧' : 'Shift')
+    .replace(/\bMeta\b/g, isM ? '⌘' : 'Win')
     .replace(/\+/g, ' + ');
+}
+
+let activeRecorderCleanup = null;
+
+function normalizeKeyName(e) {
+  const code = e.code || '';
+  const key = e.key || '';
+
+  // F1 - F24
+  if (/^F\d{1,2}$/i.test(key)) return key.toUpperCase();
+  // 字母 A-Z
+  if (code.startsWith('Key') && code.length === 4) return code.slice(3).toUpperCase();
+  // 数字 0-9
+  if (code.startsWith('Digit') && code.length === 6) return code.slice(5);
+  // 小键盘数字 Numpad0-9
+  if (code.startsWith('Numpad') && /^\d$/.test(code.slice(6))) return `num${code.slice(6)}`;
+
+  const map = {
+    Space: 'Space',
+    Tab: 'Tab',
+    Enter: 'Enter',
+    Escape: 'Escape',
+    Backspace: 'Backspace',
+    Delete: 'Delete',
+    Insert: 'Insert',
+    Home: 'Home',
+    End: 'End',
+    PageUp: 'PageUp',
+    PageDown: 'PageDown',
+    ArrowUp: 'Up',
+    ArrowDown: 'Down',
+    ArrowLeft: 'Left',
+    ArrowRight: 'Right',
+    Minus: '-',
+    Equal: '=',
+    BracketLeft: '[',
+    BracketRight: ']',
+    Backquote: '`',
+    Backslash: '\\',
+    Semicolon: ';',
+    Quote: "'",
+    Comma: ',',
+    Period: '.',
+    Slash: '/'
+  };
+  if (map[code]) return map[code];
+  if (key && key.length === 1 && key >= '!' && key <= '~') return key.toUpperCase();
+  return '';
+}
+
+function bindHotkeyRecorder(btnEl, clearBtnEl, getCurrentValue, onSave) {
+  if (!btnEl) return;
+  const updateDisplay = () => {
+    const val = getCurrentValue() || '';
+    const label = hotkeyLabel(val);
+    const textEl = btnEl.querySelector('.hk-key-text');
+    if (textEl) textEl.textContent = label || '点击录制';
+    btnEl.classList.toggle('has-value', !!label);
+    if (clearBtnEl) clearBtnEl.style.visibility = label ? 'visible' : 'hidden';
+  };
+  updateDisplay();
+
+  btnEl.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    if (btnEl.classList.contains('is-recording')) {
+      if (activeRecorderCleanup) activeRecorderCleanup();
+      return;
+    }
+
+    if (activeRecorderCleanup) activeRecorderCleanup();
+
+    btnEl.classList.add('is-recording');
+    const textEl = btnEl.querySelector('.hk-key-text');
+    if (textEl) textEl.textContent = '请按下按键组合…';
+
+    const onKeyDown = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Esc 取消录制
+      if (e.key === 'Escape') {
+        cleanup();
+        updateDisplay();
+        return;
+      }
+      // Backspace 或 Delete 清除快捷键
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        cleanup();
+        onSave('');
+        return;
+      }
+
+      const ctrl = e.ctrlKey;
+      const alt = e.altKey;
+      const shift = e.shiftKey;
+      const meta = e.metaKey;
+
+      // 仅修饰键按下时提示
+      if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
+        const mods = [];
+        if (ctrl || meta) mods.push(isMacPlatform() ? '⌘' : 'Ctrl');
+        if (alt) mods.push(isMacPlatform() ? '⌥' : 'Alt');
+        if (shift) mods.push(isMacPlatform() ? '⇧' : 'Shift');
+        if (textEl) textEl.textContent = mods.length ? mods.join(' + ') + ' + …' : '请按下按键组合…';
+        return;
+      }
+
+      const primary = normalizeKeyName(e);
+      if (!primary) return;
+
+      // 构建 Electron 快捷键字符串
+      const parts = [];
+      if (ctrl || meta) parts.push('CommandOrControl');
+      if (alt) parts.push('Alt');
+      if (shift) parts.push('Shift');
+      parts.push(primary);
+
+      const accel = parts.join('+');
+      cleanup();
+      onSave(accel);
+    };
+
+    const onClickOutside = (e) => {
+      if (!btnEl.contains(e.target)) {
+        cleanup();
+        updateDisplay();
+      }
+    };
+
+    const cleanup = () => {
+      btnEl.classList.remove('is-recording');
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('pointerdown', onClickOutside, true);
+      activeRecorderCleanup = null;
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('pointerdown', onClickOutside, true);
+    activeRecorderCleanup = cleanup;
+  });
+
+  if (clearBtnEl) {
+    clearBtnEl.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (activeRecorderCleanup) activeRecorderCleanup();
+      onSave('');
+    });
+  }
 }
 
 function setOptions(select, items, value) {
@@ -116,16 +270,52 @@ function renderModeLine(s) {
   value.classList.toggle('is-separate', modes === 'separate');
 }
 
-/* 权限提醒：只在真的缺权限时出现，其余状态不再占位 */
+/* 权限提醒：只在真的缺权限或捕获报错时出现 */
 function renderPerm(s) {
   const btn = $('#connPerm');
   const granted = !!(s.permission && s.permission.accessibility);
   const st = s.input || {};
-  const need = s.isMac && !granted;
+  const need = s.isMac && (!granted || !!st.error);
   btn.hidden = !need;
-  if (!need) return;
-  $('#connPermText').textContent = st.error ? '键鼠捕获未启动' : 'Mac 辅助功能未授权';
-  btn.title = st.error ? st.error : '点这里打开系统设置，勾选本应用后键鼠即可控制另一台';
+  if (!need) {
+    if (!$('#permModal').hidden) closePermModal();
+    return;
+  }
+  $('#connPermText').textContent = st.error ? '键鼠捕获未启动' : 'Mac 键鼠权限待授权';
+  btn.title = st.error ? st.error : '点这里打开 macOS 权限设置与诊断排查';
+  if (!$('#permModal').hidden) updatePermModal(s);
+}
+
+function openPermModal() {
+  updatePermModal(S || {});
+  $('#permModal').hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closePermModal() {
+  $('#permModal').hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+function updatePermModal(s) {
+  const granted = !!(s.permission && s.permission.accessibility);
+  const err = (s.input && s.input.error) || '';
+  const textEl = $('#pmStatusText');
+  const descEl = $('#pmStatusDesc');
+
+  if (granted && !err) {
+    textEl.textContent = '已正常启动';
+    textEl.style.color = '#34d399';
+    descEl.textContent = '辅助功能与输入监控权限均已就绪，键鼠可以正常跨设备共用。';
+  } else if (err) {
+    textEl.textContent = '键鼠捕获未启动';
+    textEl.style.color = '#f87171';
+    descEl.textContent = err.includes('权限') ? err : `捕获错误：${err}。通常是因为缺少输入监控权限或系统旧签名缓存。`;
+  } else {
+    textEl.textContent = '系统权限未就绪';
+    textEl.style.color = '#fbbf24';
+    descEl.textContent = 'macOS 需要开启「辅助功能」与「输入监控」权限才能捕获与转发物理键鼠。';
+  }
 }
 
 /* 键鼠模式按钮（共用键鼠页） */
@@ -564,17 +754,24 @@ function chipItems(values) {
 /* ---------------- 快捷键 ---------------- */
 
 function buildHotkeys(s) {
-  const hk = s.hotkeys || { enabled: true, global: 'F12', monitor: {}, choices: [] };
-  // 内建屏不参与切换不给键；被切到别的电脑上的屏本机也够不到，同样不给
+  const hk = s.hotkeys || { enabled: true, global: 'F12', monitor: {} };
   const monitors = (s.monitors || []).filter((m) => !m.internal && m.present !== false);
   const letters = monitorLetters(s);
 
-  const choices = [{ value: 'NONE', label: '关闭' }]
-    .concat((hk.choices || []).map((k) => ({ value: k, label: hotkeyLabel(k) })));
-
   $('#hotkeyEnabled').checked = !!hk.enabled;
-  setOptions($('#hotkeyGlobal'), choices, hk.global || 'NONE');
-  $('#hotkeyGlobal').disabled = !hk.enabled;
+
+  const globalBtn = $('#hotkeyGlobalBtn');
+  const globalClear = $('#hotkeyGlobalClear');
+  if (globalBtn) {
+    globalBtn.disabled = !hk.enabled;
+    if (globalClear) globalClear.disabled = !hk.enabled;
+    const gText = globalBtn.querySelector('.hk-key-text');
+    const label = hotkeyLabel(hk.global);
+    if (textNotEqual(gText, label || '点击录制')) {
+      if (gText) gText.textContent = label || '点击录制';
+    }
+    if (globalClear) globalClear.style.visibility = label ? 'visible' : 'hidden';
+  }
 
   const list = $('#hotkeyList');
   const sig = monitors.map((m) => `${m.id}:${(hk.monitor || {})[m.id]}`).join(',');
@@ -582,22 +779,45 @@ function buildHotkeys(s) {
     list.dataset.sig = sig;
     list.innerHTML = '';
     for (const m of monitors) {
+      const monKey = (hk.monitor || {})[m.id] || '';
       const row = el('div', 'hk-row');
       row.appendChild(el('span', 'hk-name',
         `${m.name || '显示器'}${monitors.filter((x) => x.name === m.name).length > 1 ? `（${letters[m.id]}）` : ''} 切换`));
-      const sel = document.createElement('select');
-      sel.className = 'select select-sm';
-      sel.dataset.mon = m.id;
-      row.appendChild(sel);
+
+      const group = el('div', 'hk-recorder-group');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'hk-record-btn';
+      btn.title = '点击后直接按下键盘快捷键进行自定义';
+      const label = hotkeyLabel(monKey);
+      btn.innerHTML = `<span class="hk-key-text">${label || '点击录制'}</span>`;
+      btn.disabled = !hk.enabled;
+
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.className = 'hk-clear-btn';
+      clearBtn.title = '清除快捷键';
+      clearBtn.textContent = '✕';
+      clearBtn.style.visibility = label ? 'visible' : 'hidden';
+      clearBtn.disabled = !hk.enabled;
+
+      group.appendChild(btn);
+      group.appendChild(clearBtn);
+      row.appendChild(group);
       list.appendChild(row);
-      setOptions(sel, choices, (hk.monitor || {})[m.id] || 'NONE');
-      sel.disabled = !hk.enabled;
-      sel.addEventListener('change', (e) => {
-        push(window.api.setHotkey(true, 'monitor', m.id, e.target.value === 'NONE' ? '' : e.target.value));
+
+      bindHotkeyRecorder(btn, clearBtn, () => ((S && S.hotkeys && S.hotkeys.monitor) || {})[m.id] || '', (val) => {
+        push(window.api.setHotkey(true, 'monitor', m.id, val));
       });
     }
   }
-  $$('#hotkeyList select').forEach((sel) => { sel.disabled = !hk.enabled; });
+
+  $$('#hotkeyList .hk-record-btn').forEach((b) => { b.disabled = !hk.enabled; });
+  $$('#hotkeyList .hk-clear-btn').forEach((b) => { b.disabled = !hk.enabled; });
+}
+
+function textNotEqual(el, text) {
+  return el && el.textContent !== text;
 }
 
 /* ---------------- 传输与剪贴板 ---------------- */
@@ -938,12 +1158,16 @@ function bindSwitchPanel() {
   $('#redetectBtn').addEventListener('click', () => push(window.api.detectMonitor()));
 
   $('#hotkeyEnabled').addEventListener('change', (e) => {
-    push(window.api.setHotkey(e.target.checked, 'global', '', $('#hotkeyGlobal').value));
+    const cur = (S && S.hotkeys && S.hotkeys.global) || 'F12';
+    push(window.api.setHotkey(e.target.checked, 'global', '', cur));
   });
-  $('#hotkeyGlobal').addEventListener('change', (e) => {
-    const v = e.target.value === 'NONE' ? '' : e.target.value;
-    push(window.api.setHotkey(true, 'global', '', v));
-  });
+
+  bindHotkeyRecorder(
+    $('#hotkeyGlobalBtn'),
+    $('#hotkeyGlobalClear'),
+    () => (S && S.hotkeys && S.hotkeys.global) || '',
+    (val) => push(window.api.setHotkey(true, 'global', '', val))
+  );
 
   $('#launchAtLogin').addEventListener('change', (e) => push(window.api.setLaunchAtLogin(e.target.checked)));
 }
@@ -966,7 +1190,10 @@ function bindSharePanel() {
     if (e.target.id === 'textModal') closeTextModal();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !$('#textModal').hidden) closeTextModal();
+    if (e.key === 'Escape') {
+      if (!$('#textModal').hidden) closeTextModal();
+      if (!$('#permModal').hidden) closePermModal();
+    }
   });
 
   $('#fileRecvChoose').addEventListener('click', () => push(window.api.setRecvDir()));
@@ -1033,7 +1260,27 @@ function bindFooter() {
 
 /* 顶部提示区：权限提醒按钮 + 点键鼠模式跳去共用键鼠页 */
 function bindConnBar() {
-  $('#connPerm').addEventListener('click', () => push(window.api.openAccessibility()));
+  $('#connPerm').addEventListener('click', openPermModal);
+  $('#pmClose').addEventListener('click', closePermModal);
+  $('#pmDone').addEventListener('click', closePermModal);
+  $('#pmBtnAx').addEventListener('click', () => window.api.openAccessibility());
+  $('#pmBtnInput').addEventListener('click', () => window.api.openInputMonitoring());
+  $('#pmRetry').addEventListener('click', async () => {
+    const retryBtn = $('#pmRetry');
+    retryBtn.disabled = true;
+    retryBtn.textContent = '检测中…';
+    try {
+      const state = await window.api.retryCapture();
+      if (state) apply(state);
+    } finally {
+      retryBtn.disabled = false;
+      retryBtn.textContent = '立即重试';
+    }
+  });
+  $('#permModal').addEventListener('click', (e) => {
+    if (e.target.id === 'permModal') closePermModal();
+  });
+
   const mode = $('#connMode');
   mode.classList.add('is-clickable');
   mode.title = '点这里去「共用键鼠」页切换模式';

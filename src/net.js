@@ -40,8 +40,9 @@ function startDiscovery({ port, peerName, displayName, onPeer }) {
   socket.bind(port, () => {
     socket.setBroadcast(true);
     const beacon = () => {
+      const dn = typeof displayName === 'function' ? displayName() : (displayName || '');
       const payload = Buffer.from(JSON.stringify({
-        magic: MAGIC, name: peerName, displayName: displayName || '', port, platform: os.platform()
+        magic: MAGIC, name: peerName, displayName: dn, port, platform: os.platform()
       }));
       socket.send(payload, 0, payload.length, port, '255.255.255.255', () => {});
     };

@@ -70,6 +70,12 @@ function createWindow() {
   });
 
   win.on('closed', () => { win = null; });
+  win.on('focus', () => {
+    if (IS_MAC && services.captureError()) {
+      const res = services.retryCapture();
+      if (res && res.ok) broadcastState();
+    }
+  });
 }
 
 function showWindow() {
@@ -150,31 +156,37 @@ function registerHotkeys() {
   if (cfg.ui.hotkeyEnabled === false) return;
   if (!cfg.ui.hotkeys) cfg.ui.hotkeys = { global: 'F12', monitor: {} };
 
-  const want = cfg.ui.hotkeys.global || '';
+  const want = (cfg.ui.hotkeys.global || '').trim();
   if (!want) {
-    services.pushStatus('全局切换键已关闭，只能用界面上的按钮切换', 'info');
+    // 全局切换键未设置或已关闭
   } else if (tryRegister(want, () => doSwitchAll())) {
     registeredHotkey = want;
   } else {
-    let picked = '';
-    for (const alt of HOTKEY_FALLBACKS) {
-      if (alt === want) continue;
-      if (tryRegister(alt, () => doSwitchAll())) { picked = alt; break; }
-    }
-    if (picked) {
-      cfg.ui.hotkeys.global = picked;
-      cfg.ui.hotkeyKey = picked;
-      registeredHotkey = picked;
-      services.persist();
-      services.pushStatus(`${want} 被系统占用，全局切换已改用 ${picked}`, 'warn');
+    // 注册失败：如果是默认的 F12，尝试备用键；如果是用户自定义的快捷键，不随意乱改用户配置，明确提示冲突
+    const isDefault = want === 'F12';
+    if (isDefault) {
+      let picked = '';
+      for (const alt of HOTKEY_FALLBACKS) {
+        if (alt === want) continue;
+        if (tryRegister(alt, () => doSwitchAll())) { picked = alt; break; }
+      }
+      if (picked) {
+        cfg.ui.hotkeys.global = picked;
+        cfg.ui.hotkeyKey = picked;
+        registeredHotkey = picked;
+        services.persist();
+        services.pushStatus(`${want} 被系统占用，全局切换已改用 ${picked}`, 'warn');
+      } else {
+        services.pushStatus(`全局切换键 ${want} 注册失败（可能被其它程序占用）`, 'warn');
+      }
     } else {
-      services.pushStatus(`全局切换键 ${want} 注册失败（可能被其它程序占用）`, 'warn');
+      services.pushStatus(`快捷键 ${want} 注册失败（可能已被系统或其它程序占用）`, 'warn');
     }
   }
 
   const monitors = services.monitorRows();
   monitors.forEach((m, i) => {
-    const key = (cfg.ui.hotkeys.monitor || {})[m.id];
+    const key = ((cfg.ui.hotkeys.monitor || {})[m.id] || '').trim();
     if (!key) return;
     const letter = String.fromCharCode(65 + i);
     if (key === registeredHotkey) {
@@ -560,6 +572,16 @@ function registerIpc() {
 
   ipcMain.handle('perm:open', () => {
     services.openAccessibilitySettings();
+    return services.getState();
+  });
+
+  ipcMain.handle('perm:open-input-monitoring', () => {
+    services.openInputMonitoringSettings();
+    return services.getState();
+  });
+
+  ipcMain.handle('perm:retry', () => {
+    services.retryCapture();
     return services.getState();
   });
 

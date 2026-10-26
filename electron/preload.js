@@ -56,6 +56,8 @@ contextBridge.exposeInMainWorld('api', {
 
   permissionStatus: () => ipcRenderer.invoke('perm:status'),
   openAccessibility: () => ipcRenderer.invoke('perm:open'),
+  openInputMonitoring: () => ipcRenderer.invoke('perm:open-input-monitoring'),
+  retryCapture: () => ipcRenderer.invoke('perm:retry'),
 
   help: () => ipcRenderer.invoke('app:help'),
   minimize: () => ipcRenderer.invoke('window:minimize'),

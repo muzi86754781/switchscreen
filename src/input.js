@@ -79,7 +79,9 @@ const CAP = {
   running: false,   // hook 是否真的在跑
   last: null,       // 上一次的绝对坐标
   anchor: null,     // 屏幕中心（转发时把指针拉回来）
-  edgeLockAt: 0     // 边缘触发的冷却时间
+  edgeLockAt: 0,    // 边缘触发的冷却时间
+  warping: false,   // 是否正在回拉指针
+  warpTarget: null  // 回拉的目标坐标 {x, y, at}
 };
 
 function capScreen(o) {
@@ -93,6 +95,8 @@ function capScreen(o) {
 function capWarp(x, y) {
   const px = Math.round(x);
   const py = Math.round(y);
+  CAP.warping = true;
+  CAP.warpTarget = { x: px, y: py, at: Date.now() };
   try {
     ensureRobot().moveMouse(px, py);
     CAP.last = { x: px, y: py };
@@ -134,6 +138,24 @@ function bindCaptureOnce() {
     const scr = capScreen(o);
     const x = e.x;
     const y = e.y;
+
+    // 过滤 capWarp 回拉时 OS 触发的合成 mousemove 事件，避免反向跳变导致远端指针剧烈抖动 / 漂移
+    if (CAP.warping && CAP.warpTarget) {
+      const wt = CAP.warpTarget;
+      const isTarget = Math.abs(x - wt.x) <= 3 && Math.abs(y - wt.y) <= 3;
+      const isRecent = (Date.now() - wt.at) < 70;
+      if (isTarget || isRecent) {
+        CAP.last = { x, y };
+        if (isTarget) {
+          CAP.warping = false;
+          CAP.warpTarget = null;
+        }
+        return;
+      }
+      CAP.warping = false;
+      CAP.warpTarget = null;
+    }
+
     let dx = 0;
     let dy = 0;
     if (CAP.last) { dx = x - CAP.last.x; dy = y - CAP.last.y; }
@@ -214,8 +236,8 @@ function startHook() {
   } catch (e) {
     CAP.running = false;
     const msg = String((e && e.message) || e || '');
-    if (/AXAPI|Accessibility|辅助功能/i.test(msg)) {
-      throw new Error('需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能 + 输入监控，勾选 SwitchScreen 后重启应用');
+    if (/AXAPI|Accessibility|辅助功能|CREATE_EVENT_PORT|event port|event tap/i.test(msg)) {
+      throw new Error('需要系统权限：请在「系统设置 → 隐私与安全性」中同时开启「辅助功能」与「输入监控」；若已勾选仍提示未启动，请先取消勾选再重新勾选（或点 - 号移除后重新添加），然后点击重试或重启应用');
     }
     throw new Error(`键鼠捕获未启动：${msg}`);
   }
@@ -259,25 +281,28 @@ function createInjector() {
   const pressed = new Set();
 
   function size() {
+    if (SCREEN.bounds && SCREEN.bounds.width > 0 && SCREEN.bounds.height > 0) {
+      return SCREEN.bounds;
+    }
     if (forced) return forced;
     const now = Date.now();
     if (dim && now - dimAt < 5000) return dim;
     try {
       const s = ensureRobot().getScreenSize();
       if (s && s.width) {
-        dim = { width: s.width, height: s.height };
+        dim = { x: 0, y: 0, width: s.width, height: s.height };
         dimAt = now;
         return dim;
       }
     } catch { /* ignore */ }
-    return { width: 1920, height: 1080 };
+    return { x: 0, y: 0, width: 1920, height: 1080 };
   }
 
   /** 对端连上时告诉我们的桌面尺寸，注入时按它算范围 */
   function setScreen(s) {
     if (!s || !s.width || !s.height) return;
-    const next = { width: Math.round(s.width), height: Math.round(s.height) };
-    if (forced && forced.width === next.width && forced.height === next.height) return;
+    const next = { x: Math.round(s.x || 0), y: Math.round(s.y || 0), width: Math.round(s.width), height: Math.round(s.height) };
+    if (forced && forced.x === next.x && forced.y === next.y && forced.width === next.width && forced.height === next.height) return;
     forced = next;
     if (cursor) clamp();
   }
@@ -285,31 +310,39 @@ function createInjector() {
   function ensure() {
     if (!cursor) {
       const s = size();
-      cursor = { x: Math.round(s.width / 2), y: Math.round(s.height / 2) };
+      const minX = s.x || 0;
+      const minY = s.y || 0;
+      cursor = { x: Math.round(minX + s.width / 2), y: Math.round(minY + s.height / 2) };
     }
     return cursor;
   }
 
   function clamp() {
     const s = size();
-    cursor.x = Math.max(0, Math.min(s.width - 1, cursor.x));
-    cursor.y = Math.max(0, Math.min(s.height - 1, cursor.y));
+    const minX = s.x || 0;
+    const minY = s.y || 0;
+    const maxX = minX + s.width - 1;
+    const maxY = minY + s.height - 1;
+    cursor.x = Math.max(minX, Math.min(maxX, cursor.x));
+    cursor.y = Math.max(minY, Math.min(maxY, cursor.y));
   }
 
   function place(edge, nx, ny) {
     const s = size();
     const c = ensure();
-    // 从本机右侧穿出去 → 落在对端的左侧，反之亦然
-    if (edge === 'right') c.x = 1;
-    else if (edge === 'left') c.x = s.width - 2;
-    else if (edge === 'bottom') c.y = 1;
-    else if (edge === 'top') c.y = s.height - 2;
+    const minX = s.x || 0;
+    const minY = s.y || 0;
+    // 从本机右侧穿出去 → 落在对端的左侧，留安全边距避免刚穿入即被边缘触发反弹
+    if (edge === 'right') c.x = minX + 12;
+    else if (edge === 'left') c.x = Math.max(minX + 12, minX + s.width - 14);
+    else if (edge === 'bottom') c.y = minY + 12;
+    else if (edge === 'top') c.y = Math.max(minY + 12, minY + s.height - 14);
 
     if ((edge === 'right' || edge === 'left') && typeof ny === 'number') {
-      c.y = Math.round(ny * s.height);
+      c.y = Math.round(minY + ny * s.height);
     }
     if ((edge === 'top' || edge === 'bottom') && typeof nx === 'number') {
-      c.x = Math.round(nx * s.width);
+      c.x = Math.round(minX + nx * s.width);
     }
     clamp();
     try { ensureRobot().moveMouse(c.x, c.y); } catch { /* ignore */ }
@@ -347,6 +380,10 @@ function createInjector() {
       try { ensureRobot().keyToggle(toRobot(m), 'up'); } catch { /* ignore */ }
     }
     pressed.clear();
+    // 强制再释放所有基础修饰键，防止任何漏网粘滞
+    for (const mod of ['control', 'alt', 'shift', 'command']) {
+      try { ensureRobot().keyToggle(mod, 'up'); } catch { /* ignore */ }
+    }
   }
 
   return { place, move, wheel, key, button, releaseAll, setScreen, getCursor: () => cursor };

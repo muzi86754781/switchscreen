@@ -100,15 +100,27 @@ const VC = {
   0x0e52: 'insert', 0x0e53: 'delete', 0x0e37: 'printscreen',
   0x0e5d: 'menu',
 
+  // uiohook-napi 扩展键别名（部分平台 / 驱动下高位为 0xE000 格式）
+  0xe01d: 'control', 0xe038: 'alt', 0xe05b: 'meta', 0xe05c: 'meta',
+  0xe047: 'home', 0xe04f: 'end', 0xe049: 'pageup', 0xe051: 'pagedown',
+  0xe048: 'up', 0xe04b: 'left', 0xe04d: 'right', 0xe050: 'down',
+  0xe052: 'insert', 0xe053: 'delete', 0xe037: 'printscreen',
+  0xe05d: 'menu', 0xe01c: 'enter',
+
   // 小键盘：必须显式列出，否则会落进下面的 ASCII 兜底
   // （0x004C 是 76 → 被当成字母 L，按小键盘 5 就打出一个 l）
   0x0045: 'numpad_lock', 0x0046: 'scrolllock',
   0x0037: 'numpad_*', 0x004a: 'numpad_-', 0x004e: 'numpad_+',
-  0x0053: 'numpad_.', 0x0e35: 'numpad_/',
+  0x0053: 'numpad_.', 0x0e35: 'numpad_/', 0xe035: 'numpad_/',
   0x004f: 'numpad_1', 0x0050: 'numpad_2', 0x0051: 'numpad_3',
   0x004b: 'numpad_4', 0x004c: 'numpad_5', 0x004d: 'numpad_6',
   0x0047: 'numpad_7', 0x0048: 'numpad_8', 0x0049: 'numpad_9',
-  0x0052: 'numpad_0', 0x0e1c: 'enter'
+  0x0052: 'numpad_0', 0x0e1c: 'enter',
+  // uiohook 扩展小键盘光标键
+  0xee4f: 'numpad_1', 0xee50: 'numpad_2', 0xee51: 'numpad_3',
+  0xee4b: 'numpad_4', 0xee4d: 'numpad_6',
+  0xee47: 'numpad_7', 0xee48: 'numpad_8', 0xee49: 'numpad_9',
+  0xee52: 'numpad_0', 0xee53: 'numpad_.'
 };
 
 /**
