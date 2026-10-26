@@ -18,7 +18,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install
+      # iohook/robotjs 0.9.x 没有 Node20/arm64 的预编译，必须从源码编译；
+      # 故跳过会 404 的 install.js，再手动拉 Electron 二进制并 rebuild。
+      - run: npm install --ignore-scripts
+      - run: node node_modules/electron/install.js
+      - run: npx electron-rebuild --force
       - run: npm run dist:win
       - uses: actions/upload-artifact@v4
         with:
@@ -32,8 +36,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install
+      - run: npm install --ignore-scripts
+      - run: node node_modules/electron/install.js
+      - run: npx electron-rebuild --force
       - run: npm run dist:mac
+        env:
+          # 无签名证书时允许 electron-builder 产出未签名 dmg（用户需手动绕过 Gatekeeper）
+          CSC_IDENTITY_AUTO_DISCOVERY: false
       - uses: actions/upload-artifact@v4
         with:
           name: switchscreen-mac

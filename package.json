@@ -13,7 +13,7 @@
     "config": "node src/cli.js config",
     "dist:win": "electron-builder --win nsis",
     "dist:mac": "electron-builder --mac dmg",
-    "postinstall": "electron-rebuild -f -w iohook -w robotjs"
+    "postinstall": "node -e \"console.log('[switchscreen] CI 会从源码编译 iohook/robotjs；本地若需编译请先装好 MSVC(X64)/Xcode 与 Python，再跑: npx electron-rebuild --force')\""
   },
   "engines": {
     "node": ">=16"
