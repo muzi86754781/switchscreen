@@ -513,6 +513,35 @@ body.win .brand { padding-left: 0; }
 .share-col .dropzone { margin-bottom: 0; }
 .share-col .dropzone + .check-row,
 .share-col .peers + .hint { margin-top: 10px; }
+textarea.input {
+  display: block;
+  width: 100%;
+  min-height: 84px;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.share-col textarea.input + .row { margin-top: 10px; }
+
+/* 切换页底部：左=快捷操作，右=日志流 */
+.switch-bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 1.02fr) minmax(0, 1fr);
+  gap: 13px;
+  align-items: start;
+}
+.switch-bottom .card { margin-bottom: 0; }
+.switch-bottom .status-block {
+  margin: 0;
+  max-height: 268px;
+  overflow-y: auto;
+  padding: 13px 15px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+}
+.switch-bottom .status-block::-webkit-scrollbar { width: 6px; }
+.switch-bottom .status-block::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 6px; }
 
 .tx-list { display: flex; flex-direction: column; gap: 9px; }
 .tx {

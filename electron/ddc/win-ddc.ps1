@@ -297,8 +297,21 @@ public class SsDdc
                 Job j = pending[k];
                 if (j.done) continue;
                 int hit = TakeBest(fresh, j.desc);
-                if (hit < 0) { j.done = true; j.code = 0; }
-                else { j.handle = fresh[hit].pm.hPhysicalMonitor; fresh.RemoveAt(hit); }
+                if (hit < 0) { j.done = true; j.code = 0; continue; }
+
+                // Already on the wanted input? Do not write again: every write
+                // makes the monitor re-sync its signal (that 1-3s black screen).
+                uint cur = 0, max = 0;
+                bool readOk = GetVCPFeatureAndVCPFeatureReply(
+                    fresh[hit].pm.hPhysicalMonitor, 0x60, IntPtr.Zero, ref cur, ref max);
+                if (readOk && cur == j.value)
+                {
+                    j.done = true;
+                    j.code = 0;
+                    continue;
+                }
+
+                j.handle = fresh[hit].pm.hPhysicalMonitor; fresh.RemoveAt(hit);
             }
         }
 

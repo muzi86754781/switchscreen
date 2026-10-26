@@ -598,6 +598,15 @@ function learnPorts() {
 
     const cur = normInput(m.currentInput);
 
+    // 刚切完、显示器还没稳定时读到的口可能是切换前的旧值 ——
+    // 拿它去学接口 / 定归属，会把刚同步好的状态又拽回切换前（而且可能很久不再扫）。
+    // 这段时间里，与公认归属矛盾的读数一律不学、不判，等稳定后重扫再说。
+    if (cur && settling(mk)) {
+      const pinned = settleOwner.get(mk);
+      const byInput = ids.find((id) => sameInput(portFor(m.id, id), cur));
+      if (pinned && byInput && byInput !== pinned) continue;
+    }
+
     // Mac 的系统枚举（system_profiler）会把「正显示别的电脑」的屏也列出来 —— 线还插着，EDID 就在。
     // 所以在 Mac 上「枚举到」不是归属证据，唯一可信的是 DDC 读回的输入源：
     // 它等于某台设备已配的口 → 自证归它；对不上任何已配口 → 这根线可能根本是另一台电脑的，绝不写。
@@ -624,10 +633,15 @@ function learnPorts() {
 
     // Windows：dxva2 只枚举活动屏，切走的屏会从系统里消失。
     // 枚举得到这块屏 = 它此刻正在显示本机 → 归属一定是本机（不管读不读得到输入源）
-    if (cfg.ui.ownerMap[mk] !== me) {
+    // （刚切完的那一下系统还没把它摘掉，这时别急着认领 —— 见上面的 settle 说明）
+    const pinnedNow = settling(mk) ? settleOwner.get(mk) : '';
+    if (cfg.ui.ownerMap[mk] !== me && (!pinnedNow || pinnedNow === me)) {
       cfg.ui.ownerMap[mk] = me;
       n += 1;
     }
+    // 公认归属是别的机器（刚切走，系统还没把它摘掉）：这块屏此刻不是本机的，
+    // 别拿它的读数去改本机的接口配置
+    if (pinnedNow && pinnedNow !== me) continue;
 
     if (!cur) continue; // 读不到就别碰接口配置，免得把对的改错
     const t = cfg.ui.portMap[mk] || {};
@@ -671,17 +685,21 @@ function ownerOf(m) {
   if (m.internal) return selfAwake ? cfg.peerName : '';
 
   // 1) 本机自证：读得到当前输入源，并且它等于某台设备配过的口
-  if (m.currentInput) {
+  //    （刚切完那几秒里，与公认归属矛盾的读数不算数，见 trustedInput）
+  const cur = trustedInput(m);
+  if (cur) {
     for (const id of deviceIds()) {
-      if (sameInput(portFor(m.id, id), m.currentInput)) return id;
+      if (sameInput(portFor(m.id, id), cur)) return id;
     }
     // 读到了但对不上任何已配口 —— 这块屏正显示「某个还没配过的口」。
     // 在 Mac 上它很可能是另一台电脑的线（Mac 的系统枚举把切走的屏也列出来），不能判本机。
-  } else if (m.present !== false && IS_WIN) {
+  } else if (!m.currentInput && m.present !== false && IS_WIN) {
     // 2) 只在 Windows 上「枚举得到它 = 它就在显示本机」：
     //    dxva2 只枚举活动屏，切到别的电脑后系统里就看不到它了。
     //    Mac 的 system_profiler 会把切走的屏一起列出来，绝不能这么判。
-    return cfg.peerName;
+    //    刚切完的那一下系统还没把它摘掉 —— 这时别抢回来，按公认归属走
+    const pin = settling(portKey(m)) ? settleOwner.get(portKey(m)) : '';
+    if (!pin || pin === cfg.peerName) return cfg.peerName;
   }
 
   // 3) 本机看不到这块屏（或读到的口谁都对不上）→ 用局域网公认的归属
@@ -710,6 +728,9 @@ function applySwitched(targetId, m, value) {
   if (targetId) {
     if (!cfg.ui.ownerMap) cfg.ui.ownerMap = {};
     cfg.ui.ownerMap[portKey(m)] = targetId;
+    // 本机亲手切成功的，同样钉一会儿：这次写完之后显示器要重新同步信号，
+    // 马上回读会拿到切换前的旧值，不能让它推翻刚确认的归属
+    pinSettle([{ key: portKey(m), owner: targetId }]);
   }
 }
 
@@ -759,14 +780,108 @@ function rememberScreens() {
   return n;
 }
 
+/**
+ * 切换刚落地后显示器还没稳定的那几秒。
+ *
+ * 写进 VCP 0x60 之后，显示器要重新同步信号（就是那 1~3 秒黑屏），这期间再去读
+ * 「当前输入源」往往拿到的还是**切换前的旧值**。软件如果拿这个旧值当证据，
+ * 界面就会从「刚切好的状态」又弹回「切换前谁在显示」——而且本机之后未必再扫一次，
+ * 于是就一直停在切换前（Windows 点了切换、Mac 上还显示 Windows）。
+ *
+ * 所以：切换成功后（本机切的 / 收到对端快照的）先把公认归属「钉」一小段时间，
+ * 这段时间内与它矛盾的 DDC 读数一律不采信，等显示器稳定了再重扫一次以实测定论。
+ */
+const SETTLE_MS = 6000;
+const settleOwner = new Map(); // 屏稳定键 -> 公认归属
+let settleUntil = 0;
+
+function pinSettle(pairs) {
+  if (!pairs || !pairs.length) return;
+  let n = 0;
+  for (const p of pairs) {
+    const k = p && p.key;
+    const o = p && p.owner;
+    if (!k || !o) continue;
+    settleOwner.set(k, o);
+    n += 1;
+  }
+  if (n) settleUntil = Date.now() + SETTLE_MS;
+}
+
+/** 这块屏此刻是不是处在「刚切完、读数还不可信」的窗口里 */
+function settling(key) {
+  if (!key) return false;
+  if (Date.now() >= settleUntil) return false;
+  return settleOwner.has(key);
+}
+
+/** 距离「显示器稳定」还有多久（毫秒）——主进程拿它安排下一次重扫 */
+function settleRemain() {
+  return Math.max(0, settleUntil - Date.now());
+}
+
+/**
+ * 放弃钉住的归属（用户点了「重新检测」时用）。
+ * 下一次扫描的读数就是实测定论，不再被「刚切完、读数不可信」的窗口挡住。
+ */
+function clearSettle() {
+  settleOwner.clear();
+  staleStrike.clear();
+  settleUntil = 0;
+}
+
+/**
+ * 与公认归属矛盾的读数要「连着两次」才采信。
+ * 只认一次的话，一次误读（显示器还没更新完 / m1ddc 偶尔读错）就能把刚同步好的界面
+ * 拽回切换前；连着两次都这么说，才是真的变了（比如有人手动按了显示器上的按键）。
+ */
+const staleStrike = new Map(); // 屏稳定键 -> { scan, n }
+let scanSeq = 0;
+
+function nextScan() { scanSeq += 1; }
+
+/**
+ * 这块屏此刻可信的「当前输入源」。
+ * 刚切完的那几秒里，与公认归属矛盾的读数视为显示器还没更新，返回空（不采信）。
+ */
+function trustedInput(m) {
+  const cur = m.currentInput || '';
+  if (!cur) return '';
+  const k = portKey(m);
+  const pinned = settleOwner.get(k);
+  if (!pinned) return cur;
+  const byInput = deviceIds().find((id) => sameInput(portFor(m.id, id), cur));
+  if (!byInput || byInput === pinned) { staleStrike.delete(k); return cur; }
+
+  // 与公认归属矛盾：先看显示器稳没稳定
+  if (Date.now() < settleUntil) return '';
+
+  const rec = staleStrike.get(k) || { scan: 0, n: 0 };
+  const n = rec.scan === scanSeq ? rec.n : rec.n + 1;
+  staleStrike.set(k, { scan: scanSeq, n });
+  if (n < 2) return ''; // 头一次不采信，等下一次扫描再确认
+  settleOwner.delete(k); // 连续两次都指向别的设备 → 认了
+  staleStrike.delete(k);
+  return cur;
+}
+
 /** 本机视角的归属：只认本机能自证的证据，不看别的机器怎么说 */
 function ownViewOf(m) {
   if (!m) return '';
-  if (m.currentInput) {
+  const cur = trustedInput(m);
+  if (cur) {
     for (const id of deviceIds()) {
-      if (sameInput(portFor(m.id, id), m.currentInput)) return id;
+      if (sameInput(portFor(m.id, id), cur)) return id;
     }
     return '';
+  }
+  // 本机没有证据（读不到 / 读数刚被判为不可信）→ 用局域网公认的归属，
+  // 否则会把过期结论广播出去，把对端刚同步好的界面又带回去
+  const a = cfg.ui.authority;
+  if (a && Array.isArray(a.screens)) {
+    const k = m.key || screenKey(m);
+    const hit = a.screens.find((s) => s.key === k);
+    if (hit && hit.owner && deviceIds().includes(hit.owner)) return hit.owner;
   }
   const saved = (cfg.ui.ownerMap && cfg.ui.ownerMap[portKey(m)]) || '';
   return saved && deviceIds().includes(saved) ? saved : '';
@@ -836,8 +951,10 @@ function applyAuthority(a) {
   // 本机此刻的读数如果和公认归属矛盾，说明这份读数是切换之前留下的，已经过期。
   // 清掉它，归属就退回快照（下一步重扫会以 DDC 实测为准）。
   let stale = 0;
+  const pinned = [];
   for (const s of a.screens) {
     if (!s || !s.owner) continue;
+    pinned.push({ key: s.key, owner: s.owner });
     const m = monitorsCache.find((x) => !x.internal && screenKey(x) === s.key);
     if (!m || !m.currentInput) continue;
     const byInput = deviceIds().find((id) => sameInput(portFor(m.id, id), m.currentInput));
@@ -847,8 +964,10 @@ function applyAuthority(a) {
       stale += 1;
     }
   }
+  // 钉住公认归属：接下来几秒里显示器的读数还不稳定，别让它把界面又带回去
+  pinSettle(pinned);
   persist();
-  return { rev, stale };
+  return { rev, stale, settle: pinned.length > 0 };
 }
 
 /**
@@ -1086,6 +1205,7 @@ function buildSwitchPlan(targetId) {
   const missing = [];
   let total = 0;
   let skipped = 0;
+  let already = 0;
   let unreachable = 0;
   let label = '';
 
@@ -1095,6 +1215,10 @@ function buildSwitchPlan(targetId) {
     total += 1;
     const value = portFor(m.id, targetId);
     if (!value) { skipped += 1; missing.push({ id: m.id, name: m.name }); continue; }
+    // 这块屏已经切在目标口上了：别再写一次 —— 每写一次显示器都要重新同步信号
+    // （就是那 1~3 秒黑屏），本来就已经对的屏不该跟着再黑一遍
+    const cur = trustedInput(m);
+    if (cur && sameInput(cur, value)) { already += 1; continue; }
     if (!label) label = labelForInput(value);
     map[m.index] = value;
     monitors.push({ name: m.name, index: m.index, value, label: labelForInput(value) });
@@ -1106,10 +1230,12 @@ function buildSwitchPlan(targetId) {
     target: targetId,
     total,
     skipped,
+    already,
     unreachable,
     missing,
-    // 每块屏接口相同时压成一个值：执行端「枚举到几块就切几块」，不依赖 index
-    plan: count ? unifyInput(map, count) : null,
+    // 每块屏接口相同时压成一个值：执行端「枚举到几块就切几块」，不依赖 index。
+    // 有屏已经切好了的时候必须用 map —— 压成单值会把本来就对的屏也写一遍（白黑一次）
+    plan: count ? (already ? map : unifyInput(map, count)) : null,
     monitors,
     label: label || (targetId === cfg.peerName ? cfg.ui.localInputLabel : cfg.ui.remoteInputLabel) || ''
   };
@@ -1123,8 +1249,11 @@ function monitorSwitchPlan(monitorId, targetId) {
   if (typeof m.index !== 'number') return { ok: false, error: '这台显示器不支持 DDC，无法单独切换' };
   const value = portFor(monitorId, targetId);
   if (!value) return { ok: false, error: '这台显示器还没给这台电脑指定接口' };
+  // 已经在这个口上：不写（写一次就黑一次屏）
+  const already = !!(m.currentInput && sameInput(m.currentInput, value));
   return {
     ok: true,
+    already,
     index: m.index,
     value,
     label: labelForInput(value),
@@ -1344,6 +1473,7 @@ async function detectMonitors() {
     }];
   }
   monitorsCache = list;
+  nextScan();
   // 按系统里的真实排列（左/右/上/下）排好，界面上的「显示器 A/B」才是眼前看到的顺序
   refreshScreenLayout();
   if (!cfg.ui.monitorId || !list.some((m) => m.id === cfg.ui.monitorId)) {
@@ -1826,6 +1956,8 @@ module.exports = {
   importPorts,
   publishAuthority,
   applyAuthority,
+  settleRemain,
+  clearSettle,
   screenKey,
   primaryDevice,
   setSelfAwake,

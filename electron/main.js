@@ -260,7 +260,15 @@ async function doSwitchAll(explicitTarget) {
   }
   const target = explicitTarget || services.nextDevice();
   const name = services.deviceInfo(target).name;
-  const missing = (services.buildSwitchPlan(target).missing || []).slice();
+  const plan0 = services.buildSwitchPlan(target);
+  const missing = (plan0.missing || []).slice();
+  // 所有屏都已经在这台设备上了：一次 DDC 都不写 ——
+  // 写一次显示器就要重新同步信号（黑屏 1~3 秒），没必要让本来就对的屏再黑一遍
+  if (!plan0.ok && !missing.length && plan0.already > 0) {
+    services.pushStatus(`所有显示器都已经在显示 ${name} 了`, 'ok');
+    broadcastState();
+    return { ok: true, result: 'kept', target };
+  }
   switching = true;
   services.pushStatus(`正在切换到 ${name}…`, 'info');
   broadcastState();
@@ -307,6 +315,12 @@ async function doSwitchMonitor(monitorId, explicitTarget) {
     services.pushStatus(plan.error, 'warn');
     broadcastState();
     return { ok: false, error: plan.error };
+  }
+  // 这块屏已经在该口上了：不写（每写一次都要重新同步信号 = 黑屏一下）
+  if (plan.already) {
+    services.pushStatus(`「${plan.name || '这台显示器'}」已经在显示 ${services.deviceInfo(plan.target).name} 了`, 'ok');
+    broadcastState();
+    return { ok: true, already: true };
   }
   // 只切这一块屏：本机直接写（DDC 走视频线，跟这块屏当前画面在哪台机器上无关）。
   // 以前用「当前画面在哪台就转给那台」的做法，一旦两端 index / 名字对不上就会切错屏。
@@ -409,6 +423,8 @@ function registerIpc() {
   });
 
   ipcMain.handle('display:detect', async () => {
+    // 手动「重新检测」：本次扫描的读数就是实测定论，不再受「刚切完那几秒读数不可信」的限制
+    services.clearSettle();
     await services.detectMonitors();
     registerHotkeys();
     return services.getState();
@@ -756,9 +772,10 @@ app.whenReady().then(() => {
         const r = services.applyAuthority(msg);
         if (!r) return;
         broadcastState();
-        // 快照变了：本机这份读数可能刚被判为过期，重扫一次以 DDC 实测为准 ——
-        // 不然界面会一直停在「切换前谁在显示」，看着就像对端没同步
-        confirmSwitchHint(r.stale ? 400 : 1200);
+        // 显示器刚切完，VCP 0x60 要过几秒才更新 —— 太早重扫会读到「切换前的口」，
+        // 本机这份过期证据会把界面又拽回切换前的状态（Windows 点了切换、Mac 上还停在切换前）。
+        // 等显示器稳定后再扫一次以实测定论；这次不广播，免得两台机器来回互推。
+        confirmSwitchHint(r.stale ? 2600 : (services.settleRemain() + 900));
       },
       onSwitchRequest: (info) => {
         return Promise.resolve(services.onSwitchRequest(info)).then((r) => {
@@ -806,6 +823,13 @@ app.whenReady().then(() => {
     .catch(() => { registerHotkeys(); broadcastState(); });
 
   // 显示器插拔 / 改分辨率 / 换排列：重新算桌面范围与显示器顺序
+  // 兜底自愈：显示器上的按键被人手动按过、或对端的快照没送到时，本机状态会停在旧的。
+  // 定期轻扫一次（只读当前输入源），界面就不会长时间停在过期的归属上。
+  setInterval(() => {
+    if (switching) return;
+    services.detectMonitors().then(() => broadcastState()).catch(() => {});
+  }, 30000);
+
   const onDisplayChange = () => {
     try {
       services.refreshScreenLayout();

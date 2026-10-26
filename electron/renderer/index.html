@@ -51,33 +51,35 @@
           <div class="wb-tip">点电脑名字后面的「全部切到这台」＝ 所有屏都切过去 · 点某一块屏 ＝ 只把那一块切到这台电脑 · 排列图按系统设置里的真实位置摆放，点接口标签可以改口</div>
         </div>
 
-        <div class="card">
-          <div class="card-label">快捷操作</div>
-          <label class="check-row">
-            <input type="checkbox" id="hotkeyEnabled" />
-            <span class="box"></span>
-            <span class="check-text">启用全局快捷键<span class="sub-note">（关闭窗口后仍有效）</span></span>
-          </label>
-          <div class="hk-row">
-            <span class="hk-name">全部显示器切换</span>
-            <div class="hk-recorder-group">
-              <button type="button" class="hk-record-btn" id="hotkeyGlobalBtn" title="点击后直接按下键盘快捷键进行自定义">
-                <span class="hk-key-text">F12</span>
-              </button>
-              <button type="button" class="hk-clear-btn" id="hotkeyGlobalClear" title="清除快捷键">✕</button>
+        <div class="switch-bottom">
+          <div class="card">
+            <div class="card-label">快捷操作</div>
+            <label class="check-row">
+              <input type="checkbox" id="hotkeyEnabled" />
+              <span class="box"></span>
+              <span class="check-text">启用全局快捷键<span class="sub-note">（关闭窗口后仍有效）</span></span>
+            </label>
+            <div class="hk-row">
+              <span class="hk-name">全部显示器切换</span>
+              <div class="hk-recorder-group">
+                <button type="button" class="hk-record-btn" id="hotkeyGlobalBtn" title="点击后直接按下键盘快捷键进行自定义">
+                  <span class="hk-key-text">F12</span>
+                </button>
+                <button type="button" class="hk-clear-btn" id="hotkeyGlobalClear" title="清除快捷键">✕</button>
+              </div>
             </div>
+            <div class="hk-list" id="hotkeyList"></div>
+            <div class="hk-tip">点击按键框即可直接按下键盘自定义（支持任意单键或 Ctrl / Alt / Shift / ⌘ 组合键，按 Esc 取消，点 ✕ 或按 Delete 清除）</div>
+
+            <label class="check-row check-row-sm">
+              <input type="checkbox" id="launchAtLogin" />
+              <span class="box"></span>
+              <span class="check-text">登录时启动</span>
+            </label>
           </div>
-          <div class="hk-list" id="hotkeyList"></div>
-          <div class="hk-tip">点击按键框即可直接按下键盘自定义（支持任意单键或 Ctrl / Alt / Shift / ⌘ 组合键，按 Esc 取消，点 ✕ 或按 Delete 清除）</div>
 
-          <label class="check-row check-row-sm">
-            <input type="checkbox" id="launchAtLogin" />
-            <span class="box"></span>
-            <span class="check-text">登录时启动</span>
-          </label>
+          <div class="status-block" id="switchStatus"></div>
         </div>
-
-        <div class="status-block" id="switchStatus"></div>
       </section>
 
       <!-- ============ 传输与剪贴板 ============ -->
@@ -120,12 +122,16 @@
             <!-- 发文本 -->
             <div class="card">
               <div class="card-label"><span>发送文本</span></div>
-              <div class="row">
-                <input class="input grow" id="textInput" placeholder="粘贴一段文字直接发过去…" />
+              <textarea class="input" id="textInput" rows="4" placeholder="粘贴一段文字直接发过去…（可多行，Ctrl / ⌘ + Enter 发送）"></textarea>
+              <div class="row row-actions">
                 <button class="btn btn-primary" id="sendTextBtn">发送文字</button>
+                <span class="hint">Ctrl / ⌘ + Enter 发送</span>
               </div>
             </div>
+          </div>
 
+          <!-- 右：上=剪贴板与接收，中=接收目录，下=传输记录 -->
+          <div class="share-col">
             <!-- 剪贴板与接收 -->
             <div class="card">
               <div class="card-label"><span>剪贴板与接收</span></div>
@@ -140,10 +146,7 @@
                 <span class="check-text">免确认自动接收文件<span class="sub-note">（默认关闭：每次先问「接收 / 取消」）</span></span>
               </label>
             </div>
-          </div>
 
-          <!-- 右：上=接收目录，下=传输记录 -->
-          <div class="share-col">
             <div class="card">
               <div class="card-label"><span>接收目录</span></div>
               <div class="row">
