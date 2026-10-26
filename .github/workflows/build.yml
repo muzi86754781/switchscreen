@@ -77,6 +77,9 @@ jobs:
             chmod +x "$GITHUB_WORKSPACE/build/tools/ddcctl"
           fi
           ls -l "$GITHUB_WORKSPACE/build/tools"
+      # dmg 打包依赖 dmg-license（它声明了 os=darwin）：显式补装一次，
+      # 免得依赖树解析把它漏掉导致 “Cannot find module 'dmg-license'” 又把构建打挂
+      - run: npm install --no-save --ignore-scripts dmg-license@1.0.11
       - run: npx electron-builder --mac dmg --${{ matrix.arch }} --publish=never
         env:
           # 无签名证书时允许 electron-builder 产出未签名 dmg（用户需手动绕过 Gatekeeper）

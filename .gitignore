@@ -8,3 +8,8 @@ npm-debug.log*
 .idea/
 .workbuddy/
 .preview/
+# 不要把 package-lock.json 提交到仓库：锁文件是在 Windows 上生成的，而 dmg 打包依赖的
+# dmg-license 声明了 os=darwin —— 生成锁时会被排除，macOS 上按锁安装就少了这个包，
+# dmg 构建会直接报 “Cannot find module 'dmg-license'”。CI 用的是 npm install（非 npm ci），
+# 不提交锁文件才能让三端各自按当前平台解析依赖。
+package-lock.json
