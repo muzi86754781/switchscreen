@@ -206,9 +206,11 @@ function buildChain(d, letters, color) {
 
 function buildTile(m, d, letters, color) {
   const here = m.here === true;
+  const away = m.present === false;
   const cls = ['chain-mon'];
   if (here) cls.push('is-here');
   if (m.internal) cls.push('is-internal');
+  else if (away) cls.push('is-away');
   else if (!m.hasPort) cls.push('is-noport');
   if (!m.pos) cls.push('is-flat');
   const node = el('div', cls.join(' '));
@@ -218,10 +220,23 @@ function buildTile(m, d, letters, color) {
   node.tabIndex = 0;
   if (here) node.style.setProperty('--dev', color.c);
 
-  node.appendChild(el('span', 'cm-letter', letters[m.id] || '?'));
+  // 屏幕上写真实型号（DELL U2414H），字母只留作快捷键对应的小角标
+  const head = el('div', 'cm-head');
+  head.appendChild(el('span', 'cm-key', letters[m.id] || '?'));
+  head.appendChild(el('span', 'cm-name', m.name || '显示器'));
+  node.appendChild(head);
+
   if (m.internal) {
-    node.appendChild(el('span', 'cm-tag', '内建'));
+    head.appendChild(el('span', 'cm-tag', '内建'));
     node.title = `${m.name}（笔记本自带屏，始终显示本机，不参与切换）`;
+    return node;
+  }
+  // 这块屏此刻被切到别的电脑上了，本机已经够不到它 —— 画出来，别让它凭空消失
+  if (away) {
+    head.appendChild(el('span', 'cm-tag', '不在本机'));
+    node.title = here
+      ? `${m.name} 正在显示 ${d.name}（本机此刻够不到它）`
+      : `${m.name} 此刻不是 ${d.name} 的画面`;
     return node;
   }
 
@@ -342,6 +357,12 @@ function buildWorkbench(s) {
       nameNode.addEventListener('click', () => startRename(d, nameNode));
     }
     nameLine.appendChild(nameNode);
+    // 第一个打开本软件的那台是主控，它的状态是初始权威
+    if (d.primary) {
+      const tag = el('span', 'wb-chip is-primary', '主控');
+      tag.title = '最早打开本软件的这台：后开的机器都按它的状态对齐';
+      nameLine.appendChild(tag);
+    }
     nameLine.appendChild(el('span', `wb-chip${d.online ? '' : ' off'}`, d.note));
     idBox.appendChild(nameLine);
 
@@ -504,8 +525,8 @@ function chipItems(values) {
 
 function buildHotkeys(s) {
   const hk = s.hotkeys || { enabled: true, global: 'F12', monitor: {}, choices: [] };
-  // 内建屏不参与切换，也就不给它配快捷键
-  const monitors = (s.monitors || []).filter((m) => !m.internal);
+  // 内建屏不参与切换不给键；被切到别的电脑上的屏本机也够不到，同样不给
+  const monitors = (s.monitors || []).filter((m) => !m.internal && m.present !== false);
   const letters = monitorLetters(s);
 
   const choices = [{ value: 'NONE', label: '关闭' }]
@@ -522,7 +543,8 @@ function buildHotkeys(s) {
     list.innerHTML = '';
     for (const m of monitors) {
       const row = el('div', 'hk-row');
-      row.appendChild(el('span', 'hk-name', `显示器 ${letters[m.id] || '?'} 切换`));
+      row.appendChild(el('span', 'hk-name',
+        `${m.name || '显示器'}${monitors.filter((x) => x.name === m.name).length > 1 ? `（${letters[m.id]}）` : ''} 切换`));
       const sel = document.createElement('select');
       sel.className = 'select select-sm';
       sel.dataset.mon = m.id;

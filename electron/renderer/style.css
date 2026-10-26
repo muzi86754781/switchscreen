@@ -776,6 +776,11 @@ body.win .brand { padding-left: 0; }
   padding: 1px 6px;
 }
 .wb-chip.off { color: var(--warn); border-color: rgba(240, 180, 91, 0.28); }
+.wb-chip.is-primary {
+  color: #9fe4c8;
+  background: rgba(72, 201, 161, 0.14);
+  border-color: rgba(72, 201, 161, 0.34);
+}
 
 .wb-actions { display: flex; align-items: center; gap: 8px; padding-left: 36px; }
 .wb-flag {
@@ -874,20 +879,53 @@ body.win .brand { padding-left: 0; }
   border-color: rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.02);
 }
+/* 内建屏始终在显示本机，所以它也该按本机的颜色亮着 —— 只用虚线区分「这块切不了」。
+   以前这条规则被上面的 .is-here 覆盖（写在了后面），内建屏永远是灰的。 */
+.chain-mon.is-internal.is-here {
+  border-color: var(--dev-line);
+  background: var(--dev-soft);
+  box-shadow: 0 0 12px -5px var(--dev-line);
+}
+/* 被切到别的电脑上的屏：本机够不到它，淡显出来但可看出归属 */
+.chain-mon.is-away {
+  cursor: default;
+  opacity: 0.5;
+  border-style: dashed;
+}
+.chain-mon.is-away.is-here { opacity: 1; }
 .chain-mon.is-busy { opacity: 0.5; pointer-events: none; }
 .chain-mon.is-flat { position: static; width: 124px !important; height: 58px !important; }
 
-.cm-letter {
-  font-size: 10px;
+.cm-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+.cm-key {
+  flex: none;
+  font-size: 8px;
   font-weight: 700;
-  line-height: 1.4;
+  line-height: 1.5;
   letter-spacing: 0.02em;
   color: #dbe5f8;
   background: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
-  padding: 0 5px;
+  border-radius: 3px;
+  padding: 0 3px;
 }
-.chain-mon.is-here .cm-letter { background: var(--dev); color: #0a1020; }
+.chain-mon.is-here .cm-key { background: var(--dev); color: #0a1020; }
+.cm-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 8.5px;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  color: #c3d2ea;
+}
+.chain-mon.is-here .cm-name { color: #eef4ff; font-weight: 600; }
 .cm-tag {
   font-size: 8.5px;
   letter-spacing: 0.04em;

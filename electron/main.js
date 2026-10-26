@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, shell, globalShortcut, screen, clipboard } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, shell, globalShortcut, screen, clipboard, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -213,6 +213,19 @@ function matchAccel(accel, input) {
  * 界面上的高亮才会跟着变成新的「谁在显示」。
  */
 let rescanTimer = null;
+/**
+ * 切换（无论哪台发起、哪台执行）落地之后：
+ * 1. 刷新界面；
+ * 2. 把「每块屏现在归谁」广播出去 —— 任意一台点了切换，所有机器界面都跟着同步；
+ * 3. 过一会儿重扫一次，以 DDC 实测为准。
+ */
+function onSwitchDone() {
+  broadcastState();
+  if (peer && typeof peer.sendAuthority === 'function') {
+    peer.sendAuthority(services.publishAuthority());
+  }
+}
+
 function confirmSwitchHint(delay) {
   if (rescanTimer) clearTimeout(rescanTimer);
   rescanTimer = setTimeout(() => {
@@ -242,7 +255,7 @@ async function doSwitchAll(explicitTarget) {
   } finally {
     switching = false;
   }
-  if (result === 'sent' || result === 'relayed') confirmSwitchHint();
+  if (result === 'sent' || result === 'relayed') { onSwitchDone(); confirmSwitchHint(); }
   broadcastState();
   return { ok: result !== 'failed' && result !== 'no-input', target, result };
 }
@@ -265,6 +278,7 @@ async function doSwitchMonitor(monitorId, explicitTarget) {
     label: plan.label,
     index: plan.index
   });
+  if (r && r.ok) onSwitchDone();
   confirmSwitchHint();
   broadcastState();
   return { ok: !!(r && r.ok), error: (r && r.error) || '' };
@@ -706,6 +720,18 @@ app.whenReady().then(() => {
 
   createWindow();
 
+  // 笔记本合盖/锁屏时内建屏不再显示画面 —— 内建屏的「在用」状态跟着变
+  try {
+    const asleep = () => { if (services.setSelfAwake(false)) broadcastState(); };
+    const awake = () => { if (services.setSelfAwake(true)) broadcastState(); };
+    powerMonitor.on('suspend', asleep);
+    powerMonitor.on('lock-screen', asleep);
+    powerMonitor.on('resume', awake);
+    powerMonitor.on('unlock-screen', awake);
+  } catch (e) {
+    console.warn('[electron] 电源事件监听失败:', e.message);
+  }
+
   // 网络/输入层单独 try，避免原生模块不可用时整个界面打不开
   try {
     peer = createPeer(services.cfg, {
@@ -719,14 +745,28 @@ app.whenReady().then(() => {
       onPorts: (list) => {
         if (services.importPorts(list)) broadcastState();
       },
+      // 「每块屏现在归谁」：新开的机器对齐到局域网已有状态，切换后全局界面一致
+      getAuthority: () => services.publishAuthority(),
+      onAuthority: (msg) => {
+        if (services.applyAuthority(msg)) broadcastState();
+      },
       onSwitchRequest: (info) => {
-        return Promise.resolve(services.onSwitchRequest(info)).then((r) => { broadcastState(); return r; }).catch(() => ({ ok: false }));
+        return Promise.resolve(services.onSwitchRequest(info)).then((r) => {
+          onSwitchDone();
+          return r;
+        }).catch(() => ({ ok: false }));
       },
       onFileUpdate: (list) => { services.onFileUpdate(list); broadcastStateThrottled(); },
       // 收到文件前询问：接收 / 取消
       onAskIncoming: (payload) => askIncoming(payload),
       // 收到文本：直接弹窗展示并发拷贝按钮
       onText: (payload) => { showIncomingText(payload); broadcastStateThrottled(); },
+      // 剪贴板同步用 Electron 原生读写（不依赖 clipboardy，打包后也一定能用）
+      clipboard: {
+        read: () => clipboard.readText(),
+        write: (text) => clipboard.writeText(text)
+      },
+      onNotice: (msg) => { services.pushStatus(msg, 'warn'); broadcastState(); },
       // 对端改了键鼠模式，本机跟着切到镜像角色
       onInputMode: (mode) => {
         services.persist();

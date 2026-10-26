@@ -61,6 +61,16 @@ let peer = null;
 let peersNow = [];
 let activeTarget = cfg.peerName;
 let monitorsCache = [];
+// 本机是否醒着（休眠/锁屏时笔记本内建屏不在显示）
+let selfAwake = true;
+
+/** 主进程监听 powerMonitor 的锁屏/休眠事件后调用 */
+function setSelfAwake(v) {
+  const next = !!v;
+  if (next === selfAwake) return false;
+  selfAwake = next;
+  return true;
+}
 let ddcError = '';
 let fileTransfers = [];
 const fileStatusSeen = new Map();
@@ -185,6 +195,27 @@ function deviceIds() {
   const known = (cfg.ui && cfg.ui.knownPeers) || {};
   for (const n of Object.keys(known)) if (!ids.includes(n)) ids.push(n);
   return ids;
+}
+
+/** 本机的启动时刻（由进程 uptime 推出来，跨机器可比） */
+function selfBootAt() {
+  const up = (typeof process !== 'undefined' && process.uptime) ? process.uptime() : 0;
+  return Date.now() - Math.round(up * 1000);
+}
+
+/**
+ * 第一个打开本软件的那台 = 主控。
+ * 它的状态是初始权威：后开的机器一进局域网就按它的状态对齐。
+ * 之后任意一台点了切换，都以「最后一次切换」为准（见 authority 的 rev）。
+ */
+function primaryDevice() {
+  let best = cfg.peerName;
+  let bestAt = selfBootAt();
+  for (const p of peersNow) {
+    const at = Number(p.bootAt) || 0;
+    if (at && at < bestAt) { best = p.name; bestAt = at; }
+  }
+  return best;
 }
 
 function deviceInfo(id) {
@@ -432,17 +463,31 @@ function learnPorts() {
  */
 function ownerOf(m) {
   if (!m) return '';
+  // 内建屏只能显示笔记本自己（合盖休眠时不算）
+  if (m.internal) return selfAwake ? cfg.peerName : '';
+
+  // 1) 本机自证：读得到当前输入源，并且它等于某台设备配过的口
   if (m.currentInput) {
     for (const id of deviceIds()) {
       if (sameInput(portFor(m.id, id), m.currentInput)) return id;
     }
-    return ''; // 读到了，但对不上任何一台已配的口 —— 说明还没配过，别瞎猜
+  } else if (m.present !== false) {
+    // 2) 本机枚举得到它、只是读不到输入源 —— 它就在显示本机
+    return cfg.peerName;
   }
+
+  // 3) 本机看不到这块屏（或读到的口谁都对不上）→ 用局域网公认的归属
+  const a = cfg.ui.authority;
+  if (a && Array.isArray(a.screens)) {
+    const k = m.key || screenKey(m);
+    const hit = a.screens.find((s) => s.key === k);
+    if (hit && hit.owner && deviceIds().includes(hit.owner)) return hit.owner;
+  }
+
+  // 4) 本机上一次确认过的归属
   const saved = (cfg.ui.ownerMap && cfg.ui.ownerMap[m.id]) || '';
   if (saved && deviceIds().includes(saved)) return saved;
-  // 最后兜底：读不到当前输入源、也没有历史归属时，按「你正看着这台机器」处理。
-  // 比整块屏一片灰要好 —— 而且一旦真的切过一次，这里就会被 ownerMap 覆盖成事实。
-  return cfg.peerName;
+  return '';
 }
 
 /**
@@ -474,6 +519,119 @@ function markOwners(targetId, inputValue) {
   return n;
 }
 
+/* ---------------- 跨机器的全局归属（authority） ---------------- */
+
+/**
+ * 一块屏跨机器的稳定标识。
+ * 优先用 EDID 序列号 —— 同一块屏两台机器读到的序列号完全一样，
+ * 型号名却可能这台叫「DELL U2414H」那台叫「DELL U2414H(DP)」。
+ */
+function screenKey(m) {
+  const sn = String((m && m.serial) || '').trim();
+  if (sn.length > 2) return 'sn:' + sn.toLowerCase();
+  return 'nm:' + normName(m && m.name);
+}
+
+/** 记住见过的每块屏（含排列位置）：被切到别的电脑后，界面上还得画得出来 */
+function rememberScreens() {
+  if (!cfg.ui.screenMemo || typeof cfg.ui.screenMemo !== 'object') cfg.ui.screenMemo = {};
+  let n = 0;
+  for (const m of monitorsCache) {
+    if (m.internal) continue;
+    const k = screenKey(m);
+    const old = cfg.ui.screenMemo[k] || {};
+    const pos = m.pos || old.pos || null;
+    if (old.name === m.name && old.serial === (m.serial || '') &&
+        JSON.stringify(old.pos) === JSON.stringify(pos)) continue;
+    cfg.ui.screenMemo[k] = { name: m.name || '', serial: m.serial || '', pos, lastSeen: Date.now() };
+    n += 1;
+  }
+  if (n) persist();
+  return n;
+}
+
+/** 本机视角的归属：只认本机能自证的证据，不看别的机器怎么说 */
+function ownViewOf(m) {
+  if (!m) return '';
+  if (m.currentInput) {
+    for (const id of deviceIds()) {
+      if (sameInput(portFor(m.id, id), m.currentInput)) return id;
+    }
+    return '';
+  }
+  const saved = (cfg.ui.ownerMap && cfg.ui.ownerMap[m.id]) || '';
+  return saved && deviceIds().includes(saved) ? saved : '';
+}
+
+/** 汇总一份「每块屏归谁」的快照：本机知道的覆盖，本机看不到的保留原样 */
+function buildAuthority() {
+  const prev = (cfg.ui.authority && cfg.ui.authority.screens) || [];
+  const byKey = new Map(prev.filter((s) => s && s.key).map((s) => [s.key, { ...s }]));
+  for (const m of monitorsCache) {
+    if (m.internal) continue;
+    const k = screenKey(m);
+    const old = byKey.get(k) || {};
+    byKey.set(k, {
+      key: k,
+      name: m.name || old.name || '',
+      owner: ownViewOf(m) || old.owner || ''
+    });
+  }
+  return { rev: Date.now(), at: cfg.peerName, screens: [...byKey.values()] };
+}
+
+/** 本机状态变了（切换成功 / 检测刷新）→ 生成新一版快照，由主进程广播出去 */
+function publishAuthority() {
+  const a = buildAuthority();
+  cfg.ui.authority = a;
+  persist();
+  return a;
+}
+
+/** 收到别的机器发来的快照：只接受更新的那一版（rev 大者胜） */
+function applyAuthority(a) {
+  if (!a || !Array.isArray(a.screens) || !a.rev) return false;
+  const cur = cfg.ui.authority || { rev: 0 };
+  if (Number(a.rev) <= Number(cur.rev || 0)) return false;
+  cfg.ui.authority = { rev: Number(a.rev), at: a.at || '', screens: a.screens };
+  persist();
+  return true;
+}
+
+/**
+ * 局域网里存在、但本机此刻枚举不到的屏 —— 它正显示着别的电脑。
+ * 不补出来的话，一切走这行屏就从界面上凭空消失了，用户会以为软件丢了屏。
+ */
+function offlineRows() {
+  const a = cfg.ui.authority;
+  if (!a || !Array.isArray(a.screens)) return [];
+  const have = new Set(monitorsCache.map(screenKey));
+  const out = [];
+  for (const s of a.screens) {
+    if (!s.key || have.has(s.key)) continue;
+    const memo = (cfg.ui.screenMemo && cfg.ui.screenMemo[s.key]) || {};
+    out.push({
+      key: s.key,
+      id: 'mem:' + String(s.key).replace(/[^a-zA-Z0-9]+/g, '_'),
+      index: null,
+      displayId: null,
+      name: s.name || memo.name || '显示器',
+      serial: memo.serial || '',
+      size: '',
+      currentInput: '',
+      currentInputLabel: '',
+      internal: false,
+      present: false,
+      pos: memo.pos || null,
+      ownerId: s.owner || '',
+      ownerLabel: s.owner ? deviceInfo(s.owner).name : '',
+      ports: {},
+      deviceCount: 0
+    });
+  }
+  return out;
+}
+
 function monitorRows() {
   return monitorsCache.map((m) => {
     const ports = {};
@@ -483,14 +641,17 @@ function monitorRows() {
         ports[id] = { value: v, label: v ? labelForInput(v) : '未设置' };
       }
     }
-    // 内建屏永远显示本机自己
-    const ownerId = m.internal ? cfg.peerName : ownerOf(m);
+    // 内建屏只能显示本机自己（休眠时不算）
+    const ownerId = m.internal ? (selfAwake ? cfg.peerName : '') : ownerOf(m);
     return {
       id: m.id,
+      key: screenKey(m),
       index: typeof m.index === 'number' ? m.index : null,
       name: m.name,
+      serial: m.serial || '',
       internal: !!m.internal,
       hasDdc: typeof m.index === 'number',
+      present: true,
       currentInput: m.currentInput || '',
       currentInputLabel: m.currentInputLabel || '',
       ownerId,
@@ -852,6 +1013,7 @@ async function detectMonitors() {
   }
   ensurePortDefaults();
   learnPorts();
+  rememberScreens();
   ensureMonitorHotkeys();
 
   pushStatus(
@@ -988,8 +1150,12 @@ function setTargetPeers(names) {
 
 function getState() {
   const connected = peersNow.length > 0;
-  const rows = monitorRows();
+  // 本机此刻看不见、但局域网里公认存在的屏也要列出来 —— 被切到别的电脑上的屏
+  // 如果凭空消失，用户只会以为软件丢了屏，看不出「它正在显示另一台电脑」
+  const rows = monitorRows().concat(offlineRows());
   const arrange = arrangeOrder();
+  // 最早打开本软件的那台是主控：它的状态是初始权威，后开的都照它同步
+  const primary = primaryDevice();
 
   // 字母只按「外接屏从左到右」排，内建屏排在最后 —— 快捷键里说的「显示器 A/B」
   // 必须和界面上看到的字母一致，不能被内建屏把 A 抢走（内建屏不参与切换、也不占键）
@@ -1004,6 +1170,7 @@ function getState() {
       id: m.id,
       name: m.name,
       internal: m.internal,
+      present: m.present !== false, // 本机此刻能不能碰得到它（被切走就是 false）
       pos: m.pos || null,
       letter: letterMap.get(m.id) || '?',
       port: m.ports[id] ? m.ports[id].label : '未设置',
@@ -1019,6 +1186,8 @@ function getState() {
       local: info.local,
       online: info.online,
       active: id === activeTarget,
+      // 第一个打开本软件的是主控，界面上标出来，省得用户猜谁说了算
+      primary: id === primary,
       colorIndex: di % 6,
       // 这台电脑此刻是否在「点亮」某块屏 —— 界面靠它决定要不要着色
       inUse: hereCount > 0,
@@ -1030,10 +1199,13 @@ function getState() {
 
   const monitors = rows.map((m) => ({
     id: m.id,
+    key: m.key || '',
     index: m.index,
     name: m.name,
+    serial: m.serial || '',
     internal: m.internal,
-    hasDdc: m.hasDdc,
+    hasDdc: !!m.hasDdc,
+    present: m.present !== false,
     // DDC 读回来的「此刻在用哪个口」—— 界面用它显示「当前画面」，也用来顶一个一键配置
     currentInput: m.currentInput || '',
     currentInputLabel: m.currentInputLabel || '',
@@ -1293,6 +1465,11 @@ module.exports = {
   monitorRows,
   exportPorts,
   importPorts,
+  publishAuthority,
+  applyAuthority,
+  screenKey,
+  primaryDevice,
+  setSelfAwake,
   buildSwitchPlan,
   monitorSwitchPlan,
   monitorCyclePlan,

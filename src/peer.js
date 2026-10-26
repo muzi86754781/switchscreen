@@ -40,7 +40,9 @@ function createPeer(userConfig, hooks) {
   let phantom = null;            // 对端指针位置（host 侧跟踪）
   let busy = false;              // 正在执行一次切换，避免边界反复触发
   let autoLockUntil = 0;         // 手动切换后短暂关闭自动穿越（切换优先）
+  let authorityRev = 0;          // 已收到的「每块屏归谁」快照版本，旧的丢弃
 
+  const BOOT_AT = Date.now() - Math.round((typeof process !== 'undefined' && process.uptime ? process.uptime() : 0) * 1000);
   const injector = createInjector();
 
   function ui(k, dflt) {
@@ -53,7 +55,7 @@ function createPeer(userConfig, hooks) {
   }
 
   function metaPayload() {
-    return { type: 'meta', platform, screen: localScreenSize(), name: myName, displayName: myLabel() };
+    return { type: 'meta', platform, screen: localScreenSize(), name: myName, displayName: myLabel(), bootAt: BOOT_AT };
   }
 
   function notifyPeers() {
@@ -66,7 +68,8 @@ function createPeer(userConfig, hooks) {
         name: n,
         label: m.label || n,
         platform: m.platform || 'unknown',
-        screen: m.screen || null
+        screen: m.screen || null,
+        bootAt: Number(m.bootAt) || 0
       };
     });
   }
@@ -398,6 +401,13 @@ function createPeer(userConfig, hooks) {
       // 对端的接口配置：按显示器名字合并，只补本机还没设的
       if (typeof h.onPorts === 'function') h.onPorts(msg.list);
     }
+    else if (msg.type === 'authority') {
+      // 对端发来的「每块屏现在归谁」：新开的软件靠它对齐到局域网里已有的状态，
+      // 任意一台切换之后也靠它让所有界面保持一致 —— 旧的直接丢，否则两端会来回覆盖
+      if (!msg.rev || msg.rev <= authorityRev) return;
+      authorityRev = msg.rev;
+      if (typeof h.onAuthority === 'function') h.onAuthority(msg);
+    }
     else if (msg.type === 'cursor-enter') {
       if (msg.edge === 'center') injector.place('center', 0.5, 0.5);
       else injector.place(msg.edge, msg.nx, msg.ny);
@@ -461,6 +471,11 @@ function createPeer(userConfig, hooks) {
       const ports = typeof h.getPorts === 'function' ? h.getPorts() : [];
       ws.send(JSON.stringify({ type: 'ports', list: ports }));
     } catch { /* ignore */ }
+    // 「每块屏现在归谁」同步过去：后打开的软件一进来就对齐到局域网上已有的状态
+    try {
+      const a = typeof h.getAuthority === 'function' ? h.getAuthority() : null;
+      if (a && a.screens && a.screens.length) ws.send(JSON.stringify({ type: 'authority', ...a }));
+    } catch { /* ignore */ }
 
     ws.on('message', (data) => {
       let msg = null;
@@ -479,7 +494,11 @@ function createPeer(userConfig, hooks) {
 
   const clipboard = createClipboardSync({
     send: (m) => broadcast(m),
-    isEnabled: () => cfg.clipboardSync
+    isEnabled: () => cfg.clipboardSync,
+    // Electron 原生剪贴板（进程内实现，最可靠）；没注入时才退回 clipboardy
+    read: h.clipboard && h.clipboard.read,
+    write: h.clipboard && h.clipboard.write,
+    onError: (msg) => { if (typeof h.onNotice === 'function') h.onNotice(msg); }
   });
 
   const fileTransfer = createFileTransfer({
@@ -619,6 +638,13 @@ function createPeer(userConfig, hooks) {
     },
     /** 把本机的接口配置发给对端（用户改完接口时调用） */
     sendPorts: (list) => broadcast({ type: 'ports', list: list || [] }),
+    /** 广播「每块屏现在归谁」：任意一台切换成功后，全局界面都跟着同步 */
+    sendAuthority: (a) => {
+      if (!a || !a.screens) return false;
+      authorityRev = Math.max(authorityRev, Number(a.rev) || 0);
+      broadcast({ type: 'authority', ...a });
+      return true;
+    },
     /** 改名后重新广播一次身份，其它设备立刻能看到新名字 */
     resendMeta: () => broadcast(metaPayload()),
     getPhantom: () => phantom,
