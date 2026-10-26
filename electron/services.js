@@ -868,14 +868,21 @@ function getState() {
   const rows = monitorRows();
   const arrange = arrangeOrder();
 
+  // 字母只按「外接屏从左到右」排，内建屏排在最后 —— 快捷键里说的「显示器 A/B」
+  // 必须和界面上看到的字母一致，不能被内建屏把 A 抢走（内建屏不参与切换、也不占键）
+  const letterMap = new Map();
+  let seq = 0;
+  for (const m of rows) if (!m.internal) letterMap.set(m.id, String.fromCharCode(65 + (seq++ % 26)));
+  for (const m of rows) if (m.internal) letterMap.set(m.id, String.fromCharCode(65 + (seq++ % 26)));
+
   const devices = arrange.map((id, di) => {
     const info = deviceInfo(id);
-    const monitors = rows.map((m, mi) => ({
+    const monitors = rows.map((m) => ({
       id: m.id,
       name: m.name,
       internal: m.internal,
       pos: m.pos || null,
-      letter: String.fromCharCode(65 + (mi % 26)),
+      letter: letterMap.get(m.id) || '?',
       port: m.ports[id] ? m.ports[id].label : '未设置',
       hasPort: !!(m.ports[id] && m.ports[id].value),
       here: m.ownerId === '' ? null : m.ownerId === id,
@@ -898,7 +905,7 @@ function getState() {
     };
   });
 
-  const monitors = rows.map((m, i) => ({
+  const monitors = rows.map((m) => ({
     id: m.id,
     index: m.index,
     name: m.name,
@@ -909,7 +916,7 @@ function getState() {
     ports: m.ports,
     deviceCount: m.deviceCount,
     pos: m.pos || null,
-    letter: String.fromCharCode(65 + (i % 26))
+    letter: letterMap.get(m.id) || '?'
   }));
 
   const hotkeys = (cfg.ui.hotkeys && cfg.ui.hotkeys.monitor) || {};
