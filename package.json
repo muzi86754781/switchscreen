@@ -1,0 +1,62 @@
+{
+  "name": "switchscreen",
+  "version": "0.1.0",
+  "description": "跨平台软件 KVM：单显示器共用键鼠 + 快捷键切换 + 剪贴板跨机同步",
+  "main": "electron/main.js",
+  "bin": {
+    "switchscreen": "src/cli.js"
+  },
+  "author": "switchscreen",
+  "scripts": {
+    "start": "node src/cli.js start",
+    "record-hotkey": "node src/cli.js record-hotkey",
+    "config": "node src/cli.js config",
+    "dist:win": "electron-builder --win nsis",
+    "dist:mac": "electron-builder --mac dmg",
+    "postinstall": "electron-rebuild -f -w iohook -w robotjs"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "clipboardy": "^3.0.0",
+    "iohook": "^0.9.3",
+    "robotjs": "^0.6.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "electron-rebuild": "^3.2.9"
+  },
+  "build": {
+    "appId": "com.switchscreen.app",
+    "productName": "SwitchScreen",
+    "copyright": "Copyright © 2026 switchscreen",
+    "files": [
+      "src/**/*",
+      "electron/**/*",
+      "build/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.utilities",
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "dmg": {
+      "title": "SwitchScreen"
+    }
+  },
+  "license": "MIT"
+}
