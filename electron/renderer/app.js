@@ -767,81 +767,6 @@ function toast(text) {
   toastTimer = setTimeout(() => box.classList.remove('is-on'), 2600);
 }
 
-/* ---------------- 共用键鼠：设备排列 ---------------- */
-
-function renderArrange(s) {
-  const box = $('#arrangeStrip');
-  const devices = s.devices || [];
-  const sig = s.arrange.map((id) => {
-    const d = devices.find((x) => x.id === id) || { name: id, online: false };
-    return `${id}:${d.name}:${d.online}`;
-  }).join('|') + '#' + (s.input && s.input.edgeSwitch ? '1' : '0');
-  if (box.dataset.sig === sig) return;
-  box.dataset.sig = sig;
-  box.innerHTML = '';
-
-  s.arrange.forEach((id, i) => {
-    const d = devices.find((x) => x.id === id) || { id, name: id, online: false, local: false };
-    const tile = el('div', `arr-tile${d.online ? '' : ' is-off'}${d.local ? ' is-local' : ''}`);
-    tile.draggable = true;
-    tile.dataset.id = id;
-
-    tile.appendChild(el('span', 'arr-idx', String(i + 1)));
-    const ico = el('span', 'arr-ico');
-    ico.innerHTML = d.kind === 'mac' ? ICON_MAC : ICON_PC;
-    tile.appendChild(ico);
-    const body = el('div', 'arr-body');
-    body.appendChild(el('b', '', d.name));
-    body.appendChild(el('em', '', d.local ? '本机' : (d.online ? '在线' : '离线')));
-    tile.appendChild(body);
-    tile.appendChild(el('span', 'arr-grip', '⠿'));
-
-    tile.addEventListener('dragstart', (e) => {
-      e.dataTransfer.setData('text/plain', id);
-      e.dataTransfer.effectAllowed = 'move';
-      tile.classList.add('is-drag');
-    });
-    tile.addEventListener('dragend', () => tile.classList.remove('is-drag'));
-    tile.addEventListener('dragover', (e) => { e.preventDefault(); tile.classList.add('is-over'); });
-    tile.addEventListener('dragleave', () => tile.classList.remove('is-over'));
-    tile.addEventListener('drop', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      tile.classList.remove('is-over');
-      const from = e.dataTransfer.getData('text/plain');
-      if (!from || from === id) return;
-      const list = s.arrange.slice();
-      list.splice(list.indexOf(from), 1);
-      list.splice(list.indexOf(id), 0, from);
-      push(window.api.setArrange(list));
-    });
-    box.appendChild(tile);
-
-    if (i < s.arrange.length - 1) box.appendChild(el('span', 'arr-arrow', '→'));
-  });
-
-  box.ondragover = (e) => e.preventDefault();
-  box.ondrop = (e) => {
-    e.preventDefault();
-    const from = e.dataTransfer.getData('text/plain');
-    if (!from || from === s.arrange[s.arrange.length - 1]) return;
-    const list = s.arrange.filter((x) => x !== from);
-    list.push(from);
-    push(window.api.setArrange(list));
-  };
-
-  const others = devices.filter((d) => !d.local).length;
-  const hint = $('#arrangeHint');
-  if (hint) {
-    if (!others) {
-      hint.textContent = '还没发现其它设备。让别的电脑也打开本软件（同一局域网），它们会自动出现在这里，再拖到想要的位置。';
-    } else {
-      hint.textContent = `当前从左到右：${s.arrange.map((id) => (devices.find((x) => x.id === id) || {}).name || id).join(' → ')}。`
-        + '鼠标推到某台设备的右边缘，就流到它右边那台；推回左边缘就流回来。';
-    }
-  }
-}
-
 /* ---------------- 渲染：共用键鼠 ---------------- */
 
 function renderInput(s) {
@@ -883,7 +808,6 @@ function apply(s) {
   buildWorkbench(s);
   buildHotkeys(s);
   renderShare(s);
-  renderArrange(s);
   renderInput(s);
   renderStatus(s);
 }

@@ -161,21 +161,7 @@
       <!-- ============ 共用键鼠 ============ -->
       <section class="panel" data-panel="input">
         <h1 class="panel-title">一套键鼠，无缝流动</h1>
-        <p class="panel-sub">下面按从左到右排出局域网里的设备，鼠标推到边缘就流到相邻那台。</p>
-
-        <div class="card">
-          <div class="card-label">
-            <span>设备排列</span>
-            <span class="card-note">拖动可调整顺序</span>
-          </div>
-          <div class="arrange" id="arrangeStrip"></div>
-          <label class="check-row">
-            <input type="checkbox" id="edgeSwitch" />
-            <span class="box"></span>
-            <span class="check-text">鼠标推到屏幕边缘就换电脑</span>
-          </label>
-          <div class="hint" id="arrangeHint"></div>
-        </div>
+        <p class="panel-sub">在两台电脑之间共用一套键盘鼠标，鼠标推到屏幕边缘就流到另一台。</p>
 
         <div class="card">
           <div class="card-label">键鼠模式</div>
@@ -185,6 +171,11 @@
             <button data-mode="remote">共用对端键鼠</button>
           </div>
           <div class="hint" id="inputModeHint"></div>
+          <label class="check-row check-row-sm">
+            <input type="checkbox" id="edgeSwitch" />
+            <span class="box"></span>
+            <span class="check-text">鼠标推到屏幕边缘就切到另一台电脑</span>
+          </label>
         </div>
 
         <div class="card">

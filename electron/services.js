@@ -8,7 +8,7 @@
  * 设备模型（v0.6.0）：
  *   - 任意多台设备（本机 + 局域网内所有运行本软件的其它机器），身份用 peerName 字符串表示；
  *   - 每块显示器维护一张「设备 → 输入源」表 ui.portMap，支持每块屏各接不同端口；
- *   - 设备按 ui.arrange 的顺序从左到右排列，无缝移动就是按这个顺序找左右邻居。
+ *   - 无缝移动按「设备发现顺序」找相邻设备（两台机器即互相穿越），界面不再提供手动排列。
  */
 
 const fs = require('fs');
@@ -240,18 +240,6 @@ function arrangeOrder() {
   const arr = cfg.ui.arrange.slice();
   for (const id of deviceIds()) if (!arr.includes(id)) arr.push(id);
   return arr;
-}
-
-function setArrange(list) {
-  const known = new Set([...arrangeOrder(), ...deviceIds()]);
-  const clean = [];
-  for (const id of (Array.isArray(list) ? list : [])) {
-    if (known.has(id) && !clean.includes(id)) clean.push(id);
-  }
-  for (const id of arrangeOrder()) if (!clean.includes(id)) clean.push(id);
-  cfg.ui.arrange = clean;
-  persist();
-  return clean;
 }
 
 /* ---------------- 每块屏 × 每台设备的接口 ---------------- */
@@ -1455,7 +1443,6 @@ module.exports = {
   setPeer,
   applyInputMode,
   arrangeOrder,
-  setArrange,
   deviceIds,
   deviceInfo,
   localLabel,

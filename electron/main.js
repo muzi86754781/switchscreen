@@ -383,12 +383,6 @@ function registerIpc() {
     return services.getState();
   });
 
-  ipcMain.handle('arrange:set', (_e, list) => {
-    services.setArrange(list);
-    services.pushStatus('排列已保存，鼠标会按这个顺序穿越', 'ok');
-    return services.getState();
-  });
-
   /* ---------- 显示器 / 接口 ---------- */
 
   ipcMain.handle('monitor:port', (_e, { monitorId, deviceId, value } = {}) => {

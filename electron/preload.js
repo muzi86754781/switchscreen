@@ -13,7 +13,6 @@ contextBridge.exposeInMainWorld('api', {
 
   // 设备 / 排列 / 改名
   rename: (name) => ipcRenderer.invoke('app:rename', name),
-  setArrange: (list) => ipcRenderer.invoke('arrange:set', list),
 
   // 显示器
   detectMonitor: () => ipcRenderer.invoke('display:detect'),
