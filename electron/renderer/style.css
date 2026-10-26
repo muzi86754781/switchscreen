@@ -195,7 +195,7 @@ body.win .head-right { padding-right: 128px; }
 .mon-head { display: flex; align-items: center; gap: 11px; }
 .mon-ico { flex: 0 0 auto; width: 26px; height: 26px; color: #c3d0ea; }
 .mon-ico svg { width: 100%; height: 100%; }
-.mon-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mon-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
 .mon-main b {
   font-size: 13px;
   font-weight: 600;
@@ -227,11 +227,14 @@ body.win .head-right { padding-right: 128px; }
   border-top: 1px dashed rgba(255, 255, 255, 0.06);
 }
 .mon-io-role {
-  flex: 0 0 34px;
-  font-size: 11px;
+  flex: 0 0 58px;
+  font-size: 10px;
   color: var(--text-3);
-  padding-top: 5px;
-  letter-spacing: 0.04em;
+  padding-top: 6px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .chips { display: flex; flex-wrap: wrap; gap: 5px; flex: 1 1 auto; min-width: 0; }
 .chip {
@@ -295,24 +298,52 @@ body.win .head-right { padding-right: 128px; }
 
 .sub-note { font-size: 11px; color: var(--text-3); margin-left: 2px; }
 
-/* 工作台：当前电脑用颜色标注 */
-.device { cursor: pointer; border-radius: 14px; padding: 8px 6px; transition: background 0.16s, color 0.16s; }
-.device:hover { background: rgba(255, 255, 255, 0.04); }
-.device.is-active { background: rgba(91, 140, 240, 0.13); }
-.device.is-active .dev-icon { color: #8fb6ff; }
-.device.is-active .dev-name { color: #a8c6ff; }
-.dev-badge {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: #a8c6ff;
-  background: rgba(91, 140, 240, 0.2);
-  border: 1px solid rgba(150, 185, 255, 0.36);
-  border-radius: 6px;
-  padding: 1px 6px;
-  opacity: 0;
-  transition: opacity 0.16s;
+/* 单台显示器的「切到」快捷按钮 */
+.mon-actions { margin-left: auto; display: flex; gap: 6px; flex: 0 0 auto; }
+.btn-mini {
+  padding: 5px 9px;
+  font-size: 11px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
 }
-.device.is-active .dev-badge { opacity: 1; }
+.btn-mini:disabled { opacity: 0.4; cursor: default; }
+.btn-mini:disabled:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.1); }
+
+/* 分段选择器（方向 / 按键映射） */
+.seg {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(13, 17, 27, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.seg button {
+  appearance: none;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 6px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.14s, color 0.14s;
+}
+.seg button:hover:not(:disabled) { color: #dfe7f7; background: rgba(255, 255, 255, 0.06); }
+.seg button.is-on {
+  color: #fff;
+  font-weight: 600;
+  background: linear-gradient(180deg, rgba(98, 149, 251, 0.95), rgba(61, 108, 214, 0.95));
+  border-color: rgba(150, 182, 255, 0.5);
+  box-shadow: 0 3px 10px rgba(52, 104, 214, 0.28);
+}
+.seg button:disabled { opacity: 0.4; cursor: default; }
+.seg-wide { width: 100%; }
+.seg-wide button { flex: 1 1 0; text-align: center; }
+.edge-side { margin-top: 12px; }
 
 /* 文件传输 */
 .dropzone {
@@ -393,35 +424,141 @@ body.win .head-right { padding-right: 128px; }
 .empty { font-size: 12px; color: var(--text-3); padding: 6px 2px; }
 
 /* ============ 双机工作台 ============ */
-.hero { padding-top: 18px; }
-.hero-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 14px; }
-.hero-title { font-size: 15px; font-weight: 600; color: #e6ecfb; }
-.hero-sub { font-size: 12px; color: var(--text-3); }
+.wb-list { display: flex; flex-direction: column; gap: 10px; }
 
-.devices {
-  display: grid;
-  grid-template-columns: 1fr 110px 1fr;
-  align-items: center;
-  padding: 12px 6px 4px;
+.wb-row {
+  padding: 12px 13px;
+  border-radius: 14px;
+  background: rgba(15, 20, 32, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  cursor: pointer;
+  transition: background 0.16s, border-color 0.16s, box-shadow 0.16s;
 }
-.device { display: flex; flex-direction: column; align-items: center; gap: 7px; }
-.dev-icon { width: 34px; height: 34px; color: #cdd8f0; opacity: 0.95; }
-.dev-icon svg { width: 100%; height: 100%; }
-.dev-name { font-size: 21px; font-weight: 700; color: #f2f6ff; letter-spacing: 0.01em; }
-.dev-role { font-size: 11.5px; color: var(--text-3); }
-.device.is-remote { opacity: 0.55; }
-.device.is-remote.is-on { opacity: 1; }
+.wb-row:hover { background: rgba(22, 29, 45, 0.8); border-color: rgba(255, 255, 255, 0.12); }
+.wb-row.is-active {
+  background: linear-gradient(100deg, rgba(94, 146, 240, 0.24), rgba(70, 110, 200, 0.1));
+  border-color: rgba(150, 185, 255, 0.45);
+  box-shadow: 0 10px 24px rgba(40, 80, 180, 0.18);
+}
+.wb-row.is-off { opacity: 0.62; }
 
-.link-line { display: flex; align-items: center; gap: 6px; color: var(--text-3); }
-.link-line .line { flex: 1; height: 1px; background: rgba(255, 255, 255, 0.16); }
-.link-line .swap { font-size: 13px; opacity: 0.8; }
+.wb-main { display: flex; align-items: center; gap: 11px; }
+.wb-ico { flex: 0 0 auto; width: 26px; height: 26px; color: #c3d0ea; }
+.wb-ico svg { width: 100%; height: 100%; }
+.wb-row.is-active .wb-ico { color: #9dc0ff; }
 
-.hero-tip {
-  margin-top: 10px;
-  font-size: 12.5px;
+.wb-id { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wb-name { display: flex; align-items: center; gap: 7px; }
+.wb-name b { font-size: 15px; font-weight: 650; color: #f0f4ff; letter-spacing: 0.01em; }
+.wb-row.is-active .wb-name b { color: #b9d3ff; }
+.wb-note {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+.wb-chip {
+  font-size: 10px;
+  letter-spacing: 0.04em;
   color: var(--text-2);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+.wb-right { margin-left: auto; display: flex; align-items: center; gap: 9px; flex: 0 0 auto; }
+.wb-flag {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: #a8c6ff;
+  background: rgba(91, 140, 240, 0.22);
+  border: 1px solid rgba(150, 185, 255, 0.4);
+  border-radius: 6px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+.wb-go {
+  appearance: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: #dbe4f7;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+.wb-go:hover:not(:disabled) {
+  background: linear-gradient(180deg, rgba(98, 149, 251, 0.95), rgba(61, 108, 214, 0.95));
+  border-color: rgba(150, 182, 255, 0.55);
+  color: #fff;
+}
+.wb-go:disabled { opacity: 0.45; cursor: default; }
+
+/* 显示器排列：一行一台电脑，每台后面跟着它在各块屏上的落点 */
+.wb-mons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 10px 0 0 37px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.06);
+}
+.wb-mon {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px 5px 7px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  max-width: 100%;
+}
+.wb-mon-bar {
+  flex: 0 0 auto;
+  width: 3px;
+  height: 15px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.16);
+}
+.wb-mon.is-here {
+  background: rgba(91, 140, 240, 0.16);
+  border-color: rgba(140, 180, 255, 0.42);
+}
+.wb-mon.is-here .wb-mon-bar {
+  background: #7fb0ff;
+  box-shadow: 0 0 6px rgba(127, 176, 255, 0.75);
+}
+.wb-mon.is-unknown { border-style: dashed; }
+.wb-mon-name {
+  font-size: 11.5px;
+  color: #e3eafa;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-mon.is-here .wb-mon-name { color: #cfe0ff; font-weight: 600; }
+.wb-mon-io {
+  font-size: 10px;
+  color: var(--text-3);
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.wb-empty { font-size: 11.5px; color: var(--text-3); }
+
+.wb-tip {
+  margin-top: 11px;
+  padding-top: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.05);
-  padding-top: 11px;
+  font-size: 11.5px;
+  color: var(--text-3);
 }
 
 /* ============ 表单控件 ============ */

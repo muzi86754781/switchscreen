@@ -34,27 +34,30 @@ const DEFAULTS = {
   },
   // 界面层配置（GUI 使用）
   ui: {
-    activeTab: 'switch',      // switch | clip | input
+    activeTab: 'switch',      // switch | share | input
     hotkeyEnabled: true,
     hotkeyKey: 'F12',         // 界面里展示的快捷键名，实际生效见 switchHotkey
     launchAtLogin: false,
     inputMode: 'separate',    // separate 各用各的 | local 共用本机键鼠 | remote 共用对端键鼠
-    mouseSpeed: 1,            // 0.5 ~ 2
+    mouseSpeed: 1,            // 0.5 ~ 2（相对位移的缩放系数）
     monitorId: '',
     monitorName: '',
     localInput: '0x11',
     localInputLabel: 'HDMI1',
     remoteInput: '0x12',
     remoteInputLabel: 'HDMI2',
-    usePassword: true,
-    password: '',             // 6 位数字，空则首次启动自动生成
     receiveDir: '',           // 空则用 ~/Desktop/SwitchScreen/clipboard/received
     askLarge: true,
     // 每台显示器各自的接口：{ "ddc:0": { local: "0x11", remote: "0x12" } }
     // 未配置时回退到上面的 localInput / remoteInput
     perMonitor: {},
     autoAccept: false,        // true = 不需要确认直接接收文件（默认需手动确认）
-    targetPeer: ''            // 上次选中的接收对象
+    targetPeer: '',           // 上次选中的接收对象
+    // ---- 共用键鼠 ----
+    edgeSwitch: true,         // 鼠标推到屏幕边缘就切到另一台
+    edgeSide: 'right',        // 另一台电脑在本机的哪一侧：right | left | top | bottom
+    modMap: 'cmd-ctrl',       // 修饰键映射：cmd-ctrl（推荐）| swap | off
+    keyDebug: false           // 打开后在状态栏打印原始键码，排查按键问题用
   }
 };
 

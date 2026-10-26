@@ -21,14 +21,18 @@ contextBridge.exposeInMainWorld('api', {
   switchTo: (role) => ipcRenderer.invoke('switch:to', role),
 
   setClipboardSync: (enabled) => ipcRenderer.invoke('clip:set', enabled),
-  setClipboardPassword: (usePassword, password) => ipcRenderer.invoke('clip:password', { usePassword, password }),
-  randomPassword: () => ipcRenderer.invoke('clip:random'),
   clipDir: (action) => ipcRenderer.invoke('clip:dir', action),
   clipSaveConnect: () => ipcRenderer.invoke('clip:save-connect'),
   clipCancel: () => ipcRenderer.invoke('clip:cancel'),
 
   setInputMode: (mode) => ipcRenderer.invoke('input:mode', mode),
   setMouseSpeed: (v) => ipcRenderer.invoke('input:speed', v),
+  setEdgeSwitch: (on) => ipcRenderer.invoke('input:edge', on),
+  setEdgeSide: (side) => ipcRenderer.invoke('input:edge-side', side),
+  setModMap: (mode) => ipcRenderer.invoke('input:mod-map', mode),
+  setKeyDebug: (on) => ipcRenderer.invoke('input:key-debug', on),
+
+  switchMonitor: (monitorId, role) => ipcRenderer.invoke('switch:monitor', { monitorId, role }),
 
   pickFiles: (target) => ipcRenderer.invoke('files:pick', target),
   sendPaths: (paths, target) => ipcRenderer.invoke('files:send-paths', { paths, target }),

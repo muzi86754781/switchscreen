@@ -152,7 +152,7 @@ async function doSwitch(targetRole) {
   const localName = services.cfg.peerName;
   const peers = peer.listPeers();
   if (!peers.length) {
-    services.pushStatus('未发现另一台电脑，请确认同一局域网且密码一致', 'warn');
+    services.pushStatus('未发现另一台电脑，请确认两台在同一局域网并都打开了本软件', 'warn');
     broadcastState();
     return { ok: false, reason: 'no-peer' };
   }
@@ -328,17 +328,56 @@ function registerIpc() {
     return services.getState();
   });
 
-  ipcMain.handle('clip:password', (_e, { usePassword, password }) => {
-    if (typeof usePassword === 'boolean') services.cfg.ui.usePassword = usePassword;
-    if (typeof password === 'string') services.cfg.ui.password = password.replace(/\D/g, '').slice(0, 6);
-    services.persist();
+  /* ---------- 单台显示器切换 ---------- */
+
+  ipcMain.handle('switch:monitor', async (_e, { monitorId, role } = {}) => {
+    const plan = services.monitorSwitchPlan(monitorId, role === 'local' ? 'local' : 'remote');
+    if (!plan.ok) {
+      services.pushStatus(plan.error, 'warn');
+      return services.getState();
+    }
+    const conn = services.getState().connection;
+    // DDC 必须由「这块屏当前正在显示的那台机器」发出
+    if (plan.owner === 'remote' && conn.count && peer) {
+      const remoteName = conn.peers[0].name;
+      peer.relayDdc(remoteName, { input: plan.value, label: plan.label, index: plan.index });
+      services.pushStatus(`已请求 ${remoteName} 把「${plan.name}」切到 ${plan.label}`, 'ok');
+    } else {
+      await services.onSwitchRequest({ input: plan.value, label: plan.label, index: plan.index });
+    }
     return services.getState();
   });
 
-  ipcMain.handle('clip:random', () => {
-    services.cfg.ui.password = services.randomPassword();
+  /* ---------- 共用键鼠：无缝移动 ---------- */
+
+  ipcMain.handle('input:edge', (_e, on) => {
+    services.cfg.ui.edgeSwitch = !!on;
     services.persist();
-    services.pushStatus(`已生成新密码 ${services.cfg.ui.password}`, 'ok');
+    services.pushStatus(on ? '已开启边缘切换：鼠标推到边上就换电脑' : '已关闭边缘切换', on ? 'ok' : 'info');
+    return services.getState();
+  });
+
+  ipcMain.handle('input:edge-side', (_e, side) => {
+    const ok = ['right', 'left', 'top', 'bottom'];
+    services.cfg.ui.edgeSide = ok.includes(side) ? side : 'right';
+    services.persist();
+    const map = { right: '右侧', left: '左侧', top: '上方', bottom: '下方' };
+    services.pushStatus(`另一台电脑在${map[services.cfg.ui.edgeSide]}，鼠标推向那一侧即可切换`, 'info');
+    return services.getState();
+  });
+
+  ipcMain.handle('input:mod-map', (_e, mode) => {
+    const ok = ['cmd-ctrl', 'swap', 'off'];
+    services.cfg.ui.modMap = ok.includes(mode) ? mode : 'cmd-ctrl';
+    services.persist();
+    services.pushStatus(`按键映射：${services.getState().input.modDesc}`, 'ok');
+    return services.getState();
+  });
+
+  ipcMain.handle('input:key-debug', (_e, on) => {
+    services.cfg.ui.keyDebug = !!on;
+    services.persist();
+    services.pushStatus(on ? '已开启按键诊断：按任意键会在下方显示原始键码' : '已关闭按键诊断', 'info');
     return services.getState();
   });
 
@@ -574,7 +613,17 @@ app.whenReady().then(() => {
       // 收到文件前询问：接收 / 取消
       onAskIncoming: (payload) => askIncoming(payload),
       // 收到文本：直接弹窗展示并发拷贝按钮
-      onText: (payload) => { showIncomingText(payload); broadcastStateThrottled(); }
+      onText: (payload) => { showIncomingText(payload); broadcastStateThrottled(); },
+      // 鼠标穿越边界自动切换
+      onEdgeSwitch: ({ to }) => {
+        services.pushStatus(`鼠标越过屏幕边界，已切到 ${to}`, 'ok');
+        broadcastState();
+      },
+      // 按键诊断（排查跨平台键位时用）
+      onInputDebug: (line) => {
+        services.pushStatus(line, 'info');
+        broadcastStateThrottled();
+      }
     });
     services.setPeer(peer);
   } catch (e) {
