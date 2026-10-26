@@ -57,6 +57,24 @@ jobs:
       - run: npm install --ignore-scripts
       - run: node node_modules/electron/install.js
       - run: npx electron-rebuild --force --arch ${{ matrix.arch }}
+      # 内置 DDC 工具：Apple Silicon 用 m1ddc，Intel 用 ddcctl（交叉编译 x86_64）。
+      # 失败不阻塞出包，运行时会回退到 PATH 里的同名工具并给出提示。
+      - name: Build bundled DDC helper
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/build/tools"
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            git clone --depth 1 https://github.com/waydabber/m1ddc.git /tmp/m1ddc
+            make -C /tmp/m1ddc
+            cp /tmp/m1ddc/m1ddc "$GITHUB_WORKSPACE/build/tools/m1ddc"
+            chmod +x "$GITHUB_WORKSPACE/build/tools/m1ddc"
+          else
+            git clone --depth 1 https://github.com/kfix/ddcctl.git /tmp/ddcctl
+            make -C /tmp/ddcctl CC="clang -arch x86_64"
+            cp /tmp/ddcctl/bin/release/ddcctl "$GITHUB_WORKSPACE/build/tools/ddcctl"
+            chmod +x "$GITHUB_WORKSPACE/build/tools/ddcctl"
+          fi
+          ls -l "$GITHUB_WORKSPACE/build/tools"
       - run: npx electron-builder --mac dmg --${{ matrix.arch }} --publish=never
         env:
           # 无签名证书时允许 electron-builder 产出未签名 dmg（用户需手动绕过 Gatekeeper）

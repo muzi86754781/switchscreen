@@ -1,6 +1,6 @@
 {
   "name": "switchscreen",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "跨平台软件 KVM：单显示器共用键鼠 + 快捷键切换 + 剪贴板跨机同步",
   "main": "electron/main.js",
   "bin": {
@@ -39,13 +39,31 @@
       "build/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "electron/ddc/**"
+    ],
+    "extraResources": [
+      {
+        "from": "build/tools",
+        "to": "tools",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "win": {
       "target": "nsis",
       "icon": "build/icon.png"
     },
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "category": "public.app-category.utilities",
       "icon": "build/icon.png",

@@ -189,6 +189,23 @@ electron/
   在 Mac 上 `uname -m` 看是 `x86_64` 还是 `arm64`，下载对应包即可（下载错架构会提示「应用已损坏/无法打开」）。
 - **权限**：首次使用「共用键鼠」需在「系统设置 → 隐私与安全性 → 辅助功能」里勾选 SwitchScreen，
   否则 `robotjs` 无法注入、`iohook` 无法捕获；界面「共用键鼠」页有「打开辅助功能设置」按钮直达。
-- **DDC 切换依赖**：macOS 走 DDC/CI 需要 `m1ddc` 或 `ddcctl`（`brew install m1ddc`）。没有安装时软件仍可运行，
-  界面会如实提示「已记录切换指令，未找到 DDC 工具」，不会假装切换成功。
+- **DDC 切换**：**无需你安装任何工具**。Windows 直接调用系统自带 `dxva2.dll`；macOS 安装包里已内置
+  `m1ddc`（Apple Silicon）或 `ddcctl`（Intel）。详见下一节。
 - **睡眠唤醒**：合盖/休眠后 WebSocket 会断开，唤醒后由 UDP 广播自动重新配对（数秒内）。
+
+---
+
+## 显示切换（DDC/CI）怎么工作
+
+| 平台 | 实现方式 | 依赖 |
+|------|----------|------|
+| Windows | 内置 PowerShell + 内嵌 C# P/Invoke 调用 `dxva2.dll`（`EnumDisplayMonitors` → `GetPhysicalMonitorsFromHMONITOR` → `SetVCPFeature(0x60, value)`） | 无（系统自带） |
+| macOS Apple Silicon | 随包内置 `m1ddc`（CI 从源码编译，放在 `Resources/tools/`） | 无 |
+| macOS Intel | 随包内置 `ddcctl`（CI 交叉编译 x86_64） | 无 |
+
+- 兜底顺序：内置实现 → 随包工具 → PATH 里的 `m1ddc`/`ddcctl`/`ddcutil`/`ControlMyMonitor`。
+- **重要**：DDC 指令只能由「显示器当前正在显示的那台机器」发出。所以切换回本机时，
+  软件会通过 WebSocket 把 `ddc` 请求转给对端，让对端去切 —— 这样两个方向都能切。
+- 若显示器 OSD 里关闭了 DDC/CI，写入会被拒绝（Windows 返回错误码 31），界面会明确提示
+  「显示器拒绝了 DDC 指令（请在显示器菜单里开启 DDC/CI）」。
+- 界面「连接与目标」卡片下方会显示 `当前输入：HDMI1 · DDC 可用`，可据此判断链路是否正常。

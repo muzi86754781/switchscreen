@@ -37,7 +37,11 @@ function setOptions(select, items, value) {
     }
     select.dataset.sig = sig;
   }
-  if (value !== undefined && select.value !== String(value)) select.value = String(value);
+  if (value !== undefined && items.length) {
+    const want = String(value);
+    const has = items.some((i) => String(i.value) === want);
+    select.value = has ? want : String(items[0].value);
+  }
 }
 
 /* ---------------- 渲染 ---------------- */
@@ -83,6 +87,16 @@ function renderSwitch(s) {
     : '全局快捷键未启用，仅可用界面按钮切换。';
 
   $('#launchAtLogin').checked = !!s.launchAtLogin;
+
+  // DDC 状态与当前输入源
+  const hint = $('#ddcHint');
+  const curLabel = s.monitor.currentInputLabel;
+  const ddcOk = s.ddc && s.ddc.available;
+  const parts = [];
+  if (curLabel) parts.push(`当前输入：${curLabel}`);
+  parts.push(ddcOk ? 'DDC 可用' : `DDC 不可用${s.ddc && s.ddc.error ? `（${s.ddc.error}）` : ''}`);
+  hint.textContent = parts.join(' · ');
+  hint.className = ddcOk ? 'hint' : 'hint warn-text';
 
   // 切换按钮
   const btn = $('#switchBtn');

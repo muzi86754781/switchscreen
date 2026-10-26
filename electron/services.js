@@ -12,6 +12,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { app, systemPreferences, shell } = require('electron');
 const { loadConfig, saveConfig } = require('../src/config');
+const ddc = require('./ddc');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
@@ -32,6 +33,7 @@ let peer = null;
 let peersNow = [];
 let activeTarget = cfg.peerName;
 let monitorsCache = [];
+let ddcError = '';
 let clipProgress = 0;
 let clipPercent = 0;
 let statusLines = [];
@@ -142,16 +144,52 @@ function detectWin() {
 
 async function detectMonitors() {
   let list = [];
+  let via = 'sys';
   try {
-    list = IS_MAC ? await detectMac() : IS_WIN ? await detectWin() : [];
-  } catch { list = []; }
+    // 优先走原生 DDC（可拿到 index 和当前输入源），再叠加系统友好名
+    const r = await ddc.listDisplays();
+    if (r.ok && r.displays.length) {
+      via = r.via;
+      const friendly = IS_MAC ? await detectMac() : IS_WIN ? await detectWin() : [];
+      const aligned = friendly.length === r.displays.length;
+      list = r.displays.map((d, i) => {
+        const f = aligned ? friendly[i] : null;
+        return {
+          id: `ddc:${d.index}`,
+          index: d.index,
+          name: (f && f.name) || d.name || `显示器 ${d.index + 1}`,
+          serial: (f && f.serial) || '',
+          size: (f && f.size) || '',
+          currentInput: d.currentInput || '',
+          currentInputLabel: d.currentInputLabel || ''
+        };
+      });
+    } else {
+      const sys = IS_MAC ? await detectMac() : IS_WIN ? await detectWin() : [];
+      list = sys.map((m, i) => ({
+        ...m,
+        index: null,
+        id: m.id || `sys:${i}`,
+        currentInput: '',
+        currentInputLabel: ''
+      }));
+      if (r.error) ddcError = r.error;
+    }
+  } catch (e) {
+    ddcError = e.message;
+    list = [];
+  }
+
   if (!list.length) {
     // 检测失败也让界面可用：保留已保存的名字
     list = [{
       id: cfg.ui.monitorId || 'default',
+      index: null,
       name: cfg.ui.monitorName || '默认显示器',
       serial: '',
-      size: ''
+      size: '',
+      currentInput: '',
+      currentInputLabel: ''
     }];
   }
   monitorsCache = list;
@@ -160,7 +198,16 @@ async function detectMonitors() {
     cfg.ui.monitorName = list[0].name;
     persist();
   }
-  pushStatus(`已检测到 ${list.length} 台显示器`, 'ok');
+  const cur = list.find((m) => m.id === cfg.ui.monitorId);
+  pushStatus(
+    via === 'dxva2' || via === 'm1ddc' || via === 'ddcctl'
+      ? `已检测到 ${list.length} 台显示器（DDC 可用）`
+      : `已检测到 ${list.length} 台显示器（DDC 不可用${ddcError ? '：' + ddcError : ''}）`,
+    via === 'sys' ? 'warn' : 'ok'
+  );
+  if (cur && cur.currentInputLabel) {
+    pushStatus(`当前输入源：${cur.currentInputLabel}`, 'info');
+  }
   return list;
 }
 
@@ -176,26 +223,41 @@ function tryExec(cmd, args) {
 }
 
 /**
- * 执行一次输入源切换。按可用工具依次尝试，成功即返回。
- * 都不可用时返回 simulated，界面如实提示。
+ * 执行一次输入源切换。
+ * 1) 首选原生 DDC 层（Windows=dxva2，macOS=m1ddc/ddcctl），无需外部安装；
+ * 2) 失败时按旧的命令行工具兜底（ControlMyMonitor / ddcutil）；
+ * 3) 都不行则如实返回失败原因，供界面提示。
  */
 async function switchMonitorInput(value, label) {
+  const target = monitorsCache.find((m) => m.id === cfg.ui.monitorId) || monitorsCache[0];
+  const index = target && typeof target.index === 'number' ? target.index : 0;
+
+  // 1) 原生 DDC
+  const native = await ddc.setInput(index, value);
+  if (native.ok) {
+    ddcError = '';
+    return { ok: true, via: native.via, label, index };
+  }
+  ddcError = native.error || '';
+
+  // 2) 外部工具兜底
   if (IS_WIN) {
     const tools = path.join(path.dirname(app.getPath('exe')), 'tools');
     const cmm = path.join(tools, 'ControlMyMonitor.exe');
     if (fs.existsSync(cmm)) {
-      const r = await tryExec(cmm, ['/SetValue', 'Primary', '60', value]);
-      if (r.ok) return { ok: true, via: 'ControlMyMonitor', label };
+      const r = await tryExec(cmm, ['/SetValue', `\\\\.\\DISPLAY${index + 1}`, '60', value]);
+      if (r.ok) return { ok: true, via: 'ControlMyMonitor', label, index };
     }
     const r2 = await tryExec('ddcutil', ['setvcp', '60', value]);
-    if (r2.ok) return { ok: true, via: 'ddcutil', label };
+    if (r2.ok) return { ok: true, via: 'ddcutil', label, index };
   } else if (IS_MAC) {
-    const r1 = await tryExec('m1ddc', ['display', '1', 'set', 'input', String(parseInt(value, 16))]);
-    if (r1.ok) return { ok: true, via: 'm1ddc', label };
-    const r2 = await tryExec('ddcctl', ['-d', '1', '-i', value]);
-    if (r2.ok) return { ok: true, via: 'ddcctl', label };
+    const r1 = await tryExec('m1ddc', ['display', String(index + 1), 'set', 'input', String(parseInt(value, 16))]);
+    if (r1.ok) return { ok: true, via: 'm1ddc', label, index };
+    const r2 = await tryExec('ddcctl', ['-d', String(index + 1), '-i', value]);
+    if (r2.ok) return { ok: true, via: 'ddcctl', label, index };
   }
-  return { ok: false, simulated: true, label };
+
+  return { ok: false, label, index, error: native.error || '未找到可用的 DDC 通道' };
 }
 
 /* ---------------- 权限 ---------------- */
@@ -237,9 +299,15 @@ function getState() {
       remote: { name: remoteName, kind: remote ? kindOf(remote.platform) : 'pc', label: remote ? (kindOf(remote.platform) === 'mac' ? 'Mac' : kindOf(remote.platform) === 'win' ? 'Windows' : 'PC') : '其它电脑', local: false, connected }
     },
     monitor: {
-      list: monitorsCache.length ? monitorsCache : [{ id: cfg.ui.monitorId || 'default', name: cfg.ui.monitorName || '默认显示器', size: '' }],
+      list: monitorsCache.length ? monitorsCache : [{ id: cfg.ui.monitorId || 'default', name: cfg.ui.monitorName || '默认显示器', size: '', currentInput: '', currentInputLabel: '' }],
       selectedId: cfg.ui.monitorId || '',
-      selectedName: cfg.ui.monitorName || ''
+      selectedName: cfg.ui.monitorName || '',
+      currentInput: (monitorsCache.find((m) => m.id === cfg.ui.monitorId) || {}).currentInput || '',
+      currentInputLabel: (monitorsCache.find((m) => m.id === cfg.ui.monitorId) || {}).currentInputLabel || ''
+    },
+    ddc: {
+      available: monitorsCache.some((m) => typeof m.index === 'number'),
+      error: ddcError
     },
     inputs: {
       presets: INPUT_PRESETS,
@@ -281,20 +349,29 @@ function onActive(target) {
   activeTarget = target;
 }
 
-/** peer 发起一次显示器输入源切换时调用：按可用工具尝试并如实回报结果 */
-async function onSwitchRequest({ input, label }) {
+/** peer 发起一次显示器输入源切换时调用：真正执行并如实回报结果 */
+async function onSwitchRequest({ input, label, from }) {
   const name = label || input;
   const r = await switchMonitorInput(input, name);
   if (r.ok) {
-    pushStatus(`已发送切换到 ${name} 的指令 · ${r.via}`, 'ok');
+    pushStatus(from ? `已由 ${from} 切换到 ${name}` : `已切换到 ${name}`, 'ok');
+    // 切换后刷新一次，让「当前输入」显示跟上
+    setTimeout(() => { detectMonitors().catch(() => {}); }, 1200);
   } else {
-    pushStatus(`已记录切换到 ${name} 的指令`, 'ok');
-    pushStatus('未找到 DDC 工具，无法真实切换（macOS 需 m1ddc/ddcctl，Windows 需 ddcutil 或 ControlMyMonitor）', 'warn');
+    pushStatus(`切换到 ${name} 失败`, 'warn');
+    pushStatus(r.error || '未知原因', 'warn');
   }
+  return r;
 }
 
 function onSwitch({ result }) {
-  if (result === 'no-input') pushStatus('未配置该机器的接口，请先在「连接与目标」里选择', 'warn');
+  if (result === 'no-input') {
+    pushStatus('未配置该机器的接口，请先在「连接与目标」里选择', 'warn');
+  } else if (result === 'relayed') {
+    pushStatus('已请求对端执行切换（画面在对端时由它发 DDC 指令）', 'ok');
+  } else if (result === 'peers-gone') {
+    pushStatus('对端连接已断开，无法切换', 'warn');
+  }
 }
 
 function setClipProgress(percent, bytes) {

@@ -309,6 +309,7 @@ body.win .head-right { padding-right: 128px; }
   line-height: 1.55;
   margin: 9px 0 4px;
 }
+.hint.warn-text { color: var(--warn); }
 
 /* 兼容设置折叠 */
 .compat { margin-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.05); padding-top: 10px; }

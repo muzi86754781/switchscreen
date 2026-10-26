@@ -49,19 +49,45 @@ function createPeer(userConfig, hooks) {
     const s = JSON.stringify(msg);
     for (const ws of peers.values()) if (ws.readyState === 1) ws.send(s);
   }
+  // 发给指定对端
+  function sendTo(name, msg) {
+    const ws = peers.get(name);
+    if (ws && ws.readyState === 1) { ws.send(JSON.stringify(msg)); return true; }
+    return false;
+  }
 
   // ---- 切换逻辑 ----
   function applySwitch(target) {
+    const prev = activePeer;
     activePeer = target;
     const input = target === myName ? cfg.selfInput : cfg.peers[target];
     let result = 'skipped';
+
     if (input) {
-      result = 'sent';
-      // 优先交给上层（GUI 服务层）执行，便于按可用工具尝试并回报结果
-      if (typeof h.onSwitchRequest === 'function') {
-        h.onSwitchRequest({ target, input, label: target === myName ? cfg.ui && cfg.ui.localInputLabel : cfg.ui && cfg.ui.remoteInputLabel });
-      } else {
-        switchSource({ platform, command: (cfg.monitor.command[platform]), input });
+      // DDC 指令必须由「显示器当前正在显示的那台机器」发出。
+      // 若当前画面在对端，就把指令转给它执行；否则本机执行。
+      if (prev !== myName && prev !== target) {
+        const label = target === myName
+          ? (cfg.ui && cfg.ui.localInputLabel)
+          : (cfg.ui && cfg.ui.remoteInputLabel);
+        if (sendTo(prev, { type: 'ddc', input, label })) {
+          result = 'relayed';
+          console.log(`[peer] 已请求 ${prev} 执行 DDC 切换 -> ${input}`);
+        } else {
+          result = 'peers-gone';
+        }
+      }
+      if (result === 'skipped') {
+        result = 'sent';
+        if (typeof h.onSwitchRequest === 'function') {
+          h.onSwitchRequest({
+            target,
+            input,
+            label: target === myName ? (cfg.ui && cfg.ui.localInputLabel) : (cfg.ui && cfg.ui.remoteInputLabel)
+          });
+        } else {
+          switchSource({ platform, command: (cfg.monitor.command[platform]), input });
+        }
       }
     } else if (target !== myName) {
       result = 'no-input';
@@ -104,6 +130,14 @@ function createPeer(userConfig, hooks) {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'clipboard') clipboard.onRemoteClipboard(msg.text);
     else if (msg.type === 'input') injectEvent(msg.ev);
+    else if (msg.type === 'ddc') {
+      // 对端请求本机执行 DDC 切换（本机才是当前画面输出方）
+      if (typeof h.onSwitchRequest === 'function') {
+        h.onSwitchRequest({ input: msg.input, label: msg.label, from: name });
+      } else {
+        switchSource({ platform, command: cfg.monitor.command[platform], input: msg.input });
+      }
+    }
     else if (msg.type === 'active') console.log(`[peer] 对端 ${name} 报告激活: ${msg.target}`);
   }
 
