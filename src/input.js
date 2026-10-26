@@ -101,16 +101,14 @@ function bindCaptureOnce() {
 
     // 下面只在「本机正在被操作」时判断边界穿越
     CAP.anchor = null;
-    if (!cfg.edgeSwitch || !cfg.edgeSide || cfg.edgeSide === 'off') return;
+    if (!cfg.edgeSwitch) return;
     if (Date.now() < CAP.edgeLockAt) return;
 
-    const side = cfg.edgeSide;
-    let hit = false;
-    if (side === 'right') hit = x >= scr.width - 2 && dx > 0;
-    else if (side === 'left') hit = x <= 1 && dx < 0;
-    else if (side === 'bottom') hit = y >= scr.height - 2 && dy > 0;
-    else if (side === 'top') hit = y <= 1 && dy < 0;
-    if (!hit) return;
+    // 设备按「从左到右」排列，所以只需要看左右两个边缘
+    let side = '';
+    if (x >= scr.width - 2 && dx > 0) side = 'right';
+    else if (x <= 1 && dx < 0) side = 'left';
+    if (!side) return;
 
     CAP.edgeLockAt = Date.now() + 1200;
     if (typeof o.onEdge === 'function') {

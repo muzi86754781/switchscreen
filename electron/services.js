@@ -4,6 +4,11 @@
  * 主进程服务层：把 src/ 下的能力聚合成 GUI 需要的状态与动作。
  * 所有配置修改都直接改同一个 cfg 对象（peer.js 持有同一引用），
  * 这样界面上的开关能即时生效，无需重启。
+ *
+ * 设备模型（v0.6.0）：
+ *   - 任意多台设备（本机 + 局域网内所有运行本软件的其它机器），身份用 peerName 字符串表示；
+ *   - 每块显示器维护一张「设备 → 输入源」表 ui.portMap，支持每块屏各接不同端口；
+ *   - 设备按 ui.arrange 的顺序从左到右排列，无缝移动就是按这个顺序找左右邻居。
  */
 
 const fs = require('fs');
@@ -29,6 +34,22 @@ const INPUT_PRESETS = [
   { value: '0x1a', label: 'USB-C2' }
 ];
 
+// 快捷键候选（显示器 A/B/C/D 的默认值放在前四个）
+const HOTKEY_CHOICES = [
+  'CommandOrControl+Alt+1', 'CommandOrControl+Alt+2',
+  'CommandOrControl+Alt+3', 'CommandOrControl+Alt+4',
+  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+  'CommandOrControl+Shift+F12', 'CommandOrControl+Alt+F12',
+  'CommandOrControl+Shift+Space'
+];
+
+const MONITOR_HOTKEY_DEFAULTS = [
+  'CommandOrControl+Alt+1',
+  'CommandOrControl+Alt+2',
+  'CommandOrControl+Alt+3',
+  'CommandOrControl+Alt+4'
+];
+
 let cfg = loadConfig();
 let peer = null;
 let peersNow = [];
@@ -47,7 +68,7 @@ function pushStatus(text, kind) {
 }
 
 function defaultReceiveDir() {
-  const base = IS_MAC ? path.join(os.homedir(), 'Desktop') : path.join(os.homedir(), 'Desktop');
+  const base = path.join(os.homedir(), 'Desktop');
   return path.join(base, 'SwitchScreen', 'clipboard', 'received');
 }
 
@@ -59,15 +80,39 @@ function ensureDefaults() {
   if (!ui.receiveDir) ui.receiveDir = defaultReceiveDir();
   if (typeof ui.mouseSpeed !== 'number') ui.mouseSpeed = 1;
   if (!ui.inputMode) ui.inputMode = 'separate';
-  if (!ui.hotkeyKey) ui.hotkeyKey = 'F12';
-  if (!ui.perMonitor || typeof ui.perMonitor !== 'object') ui.perMonitor = {};
+  if (!ui.displayName) ui.displayName = cfg.peerName;
+
+  // 快捷键：global + 每块显示器一个
+  if (!ui.hotkeys || typeof ui.hotkeys !== 'object') {
+    ui.hotkeys = { global: ui.hotkeyKey || 'F12', monitor: {} };
+  }
+  if (!ui.hotkeys.global) ui.hotkeys.global = ui.hotkeyKey || 'F12';
+  if (!ui.hotkeys.monitor || typeof ui.hotkeys.monitor !== 'object') ui.hotkeys.monitor = {};
+  ui.hotkeyKey = ui.hotkeys.global;
+
+  if (!Array.isArray(ui.arrange)) ui.arrange = [];
+  if (!Array.isArray(ui.targetPeers)) ui.targetPeers = ui.targetPeer ? [ui.targetPeer] : [];
   if (typeof ui.autoAccept !== 'boolean') ui.autoAccept = false;
-  if (typeof ui.targetPeer !== 'string') ui.targetPeer = '';
-  // 共用键鼠 / 无缝移动
   if (typeof ui.edgeSwitch !== 'boolean') ui.edgeSwitch = true;
-  if (!ui.edgeSide) ui.edgeSide = 'right';
   if (!ui.modMap) ui.modMap = 'cmd-ctrl';
   if (typeof ui.keyDebug !== 'boolean') ui.keyDebug = false;
+  if (!ui.portMap || typeof ui.portMap !== 'object') ui.portMap = {};
+  // 记下每台设备最近一次上报的显示名，离线时也能显示正确的名字
+  if (!ui.peerLabels || typeof ui.peerLabels !== 'object') ui.peerLabels = {};
+
+  // 旧版 perMonitor（只有 local / remote 两栏）迁移到 portMap
+  if (ui.perMonitor && typeof ui.perMonitor === 'object') {
+    if (!ui.legacyRemotePorts) ui.legacyRemotePorts = {};
+    for (const [mid, v] of Object.entries(ui.perMonitor)) {
+      const t = ui.portMap[mid] || {};
+      if (v && v.local && !Object.prototype.hasOwnProperty.call(t, cfg.peerName)) t[cfg.peerName] = v.local;
+      if (v && v.localLabel) { /* 标签按值实时算，无需保存 */ }
+      if (v && v.remote && !ui.legacyRemotePorts[mid]) ui.legacyRemotePorts[mid] = v.remote;
+      ui.portMap[mid] = t;
+    }
+    delete ui.perMonitor;
+  }
+
   // 早期版本存过连接配对密码，已不再使用
   delete ui.usePassword;
   delete ui.password;
@@ -94,85 +139,141 @@ function applyInputMode(mode) {
   if (peer && peer.refreshInputMode) peer.refreshInputMode();
 }
 
-/** 把界面上选的接口值同步到 peer 使用的配置里 */
-function syncInputMapping() {
-  cfg.selfInput = cfg.ui.localInput;
-  for (const p of peersNow) cfg.peers[p.name] = cfg.ui.remoteInput;
-  persist();
+/* ---------------- 设备 ---------------- */
+
+function kindOf(platform) {
+  if (platform === 'darwin') return 'mac';
+  if (platform === 'win32') return 'win';
+  return 'pc';
 }
 
-/**
- * 每台显示器的接口设置。key 用显示器 id（"ddc:0"）。
- * 返回 { [id]: { local, remote, localLabel, remoteLabel } }
- * 注意：显式存成空字符串表示「这台显示器在这个方向上不切」，不能被全局值覆盖。
- */
-function perMonitorMap() {
-  if (!cfg.ui.perMonitor) cfg.ui.perMonitor = {};
-  const out = {};
-  for (const m of monitorsCache) {
-    const saved = cfg.ui.perMonitor[m.id] || {};
-    const hasLocal = Object.prototype.hasOwnProperty.call(saved, 'local');
-    const hasRemote = Object.prototype.hasOwnProperty.call(saved, 'remote');
-    const local = hasLocal ? saved.local : cfg.ui.localInput;
-    const remote = hasRemote ? saved.remote : cfg.ui.remoteInput;
-    out[m.id] = {
-      local,
-      remote,
-      localLabel: local ? (saved.localLabel || labelForInput(local)) : '不切',
-      remoteLabel: remote ? (saved.remoteLabel || labelForInput(remote)) : '不切'
-    };
-  }
-  return out;
+/** 本机显示名（可自定义，改完会同步给其它设备） */
+function localLabel() {
+  return (cfg.ui && cfg.ui.displayName) || cfg.peerName;
 }
+
+function localKind() {
+  return IS_MAC ? 'mac' : IS_WIN ? 'win' : 'pc';
+}
+
+/** 参与工作的所有设备身份：本机 + 在线对端 */
+function deviceIds() {
+  return [cfg.peerName, ...peersNow.map((p) => p.name)];
+}
+
+function deviceInfo(id) {
+  if (id === cfg.peerName) {
+    return { id, name: localLabel(), kind: localKind(), local: true, online: true };
+  }
+  const p = peersNow.find((x) => x.name === id);
+  const cached = (cfg.ui.peerLabels && cfg.ui.peerLabels[id]) || '';
+  return {
+    id,
+    name: (p && (p.label || p.name)) || cached || id,
+    kind: kindOf(p && p.platform),
+    local: false,
+    online: !!p
+  };
+}
+
+/** 设备排列（含暂时离线的，位置不会丢） */
+function arrangeOrder() {
+  if (!Array.isArray(cfg.ui.arrange)) cfg.ui.arrange = [];
+  const arr = cfg.ui.arrange.slice();
+  for (const id of deviceIds()) if (!arr.includes(id)) arr.push(id);
+  return arr;
+}
+
+function setArrange(list) {
+  const known = new Set([...arrangeOrder(), ...deviceIds()]);
+  const clean = [];
+  for (const id of (Array.isArray(list) ? list : [])) {
+    if (known.has(id) && !clean.includes(id)) clean.push(id);
+  }
+  for (const id of arrangeOrder()) if (!clean.includes(id)) clean.push(id);
+  cfg.ui.arrange = clean;
+  persist();
+  return clean;
+}
+
+/* ---------------- 每块屏 × 每台设备的接口 ---------------- */
 
 function labelForInput(value) {
   const p = INPUT_PRESETS.find((x) => x.value === value);
   return p ? p.label : String(value || '');
 }
 
-/** 保存某台显示器的接口配置；value 传空字符串表示「这台不切」 */
-function setMonitorInput(monitorId, role, value) {
-  if (!cfg.ui.perMonitor) cfg.ui.perMonitor = {};
-  const cur = cfg.ui.perMonitor[monitorId] || {};
+/** 某块显示器上，某台设备接的是哪个口；空字符串 = 不接 / 不切 */
+function portFor(monitorId, deviceId) {
+  const t = (cfg.ui.portMap && cfg.ui.portMap[monitorId]) || {};
+  if (Object.prototype.hasOwnProperty.call(t, deviceId)) return t[deviceId] || '';
+  if (deviceId === cfg.peerName) return cfg.ui.localInput || cfg.selfInput || '';
+  if (peersNow[0] && peersNow[0].name === deviceId) return cfg.ui.remoteInput || '';
+  return '';
+}
+
+/** 补齐默认端口（不覆盖用户已保存的值） */
+function ensurePortDefaults() {
+  if (!cfg.ui.portMap) cfg.ui.portMap = {};
+  let changed = false;
+  for (const m of monitorsCache) {
+    const t = cfg.ui.portMap[m.id] || {};
+    if (!Object.prototype.hasOwnProperty.call(t, cfg.peerName)) {
+      t[cfg.peerName] = cfg.ui.localInput || cfg.selfInput || '';
+      changed = true;
+    }
+    for (const p of peersNow) {
+      if (!Object.prototype.hasOwnProperty.call(t, p.name)) {
+        const legacy = (cfg.ui.legacyRemotePorts && cfg.ui.legacyRemotePorts[m.id]) || '';
+        t[p.name] = legacy || cfg.ui.remoteInput || '';
+        changed = true;
+      }
+    }
+    cfg.ui.portMap[m.id] = t;
+  }
+  if (changed) persist();
+}
+
+function setPort(monitorId, deviceId, value) {
+  if (!monitorId || !deviceId) return false;
+  if (!cfg.ui.portMap) cfg.ui.portMap = {};
+  const t = cfg.ui.portMap[monitorId] || {};
   const v = value || '';
-  const label = v ? labelForInput(v) : '不切';
-  if (role === 'local') { cur.local = v; cur.localLabel = label; }
-  else { cur.remote = v; cur.remoteLabel = label; }
-  cfg.ui.perMonitor[monitorId] = cur;
-  // 同时把全局值跟上，作为兜底（「不切」不影响全局）
+  t[deviceId] = v;
+  cfg.ui.portMap[monitorId] = t;
+  // 本机 / 首个对端的值同步到全局默认，作为新显示器、新设备的兜底
   if (v) {
-    if (role === 'local') { cfg.ui.localInput = v; cfg.ui.localInputLabel = label; cfg.selfInput = v; }
-    else {
+    if (deviceId === cfg.peerName) {
+      cfg.ui.localInput = v;
+      cfg.ui.localInputLabel = labelForInput(v);
+      cfg.selfInput = v;
+    } else if (peersNow[0] && peersNow[0].name === deviceId) {
       cfg.ui.remoteInput = v;
-      cfg.ui.remoteInputLabel = label;
-      for (const p of peersNow) cfg.peers[p.name] = v;
+      cfg.ui.remoteInputLabel = labelForInput(v);
     }
   }
   persist();
-  return cur;
+  return true;
 }
 
-/* ---------------- 工作台模型 ---------------- */
+/** 这块屏此刻正显示哪台设备（读不到当前输入时返回空字符串） */
+function ownerOf(m) {
+  if (!m || !m.currentInput) return '';
+  for (const id of deviceIds()) {
+    const v = portFor(m.id, id);
+    if (v && v === m.currentInput) return id;
+  }
+  return '';
+}
 
-/**
- * 每台显示器的归属与接口。
- *
- * owner 由「当前实际输入源」和配置的接口比对得出：
- *   'local'   —— 这块屏现在显示本机
- *   'remote'  —— 现在显示对端
- *   'unknown' —— 读不到当前输入（没有 DDC），无法判断
- *
- * 界面上的「哪台在用 / 显示器排列」全靠这个字段。
- */
 function monitorRows() {
-  const pm = perMonitorMap();
   return monitorsCache.map((m) => {
-    const p = pm[m.id] || { local: '', remote: '' };
-    let owner = 'unknown';
-    if (m.currentInput) {
-      if (p.local && m.currentInput === p.local) owner = 'local';
-      else if (p.remote && m.currentInput === p.remote) owner = 'remote';
+    const ports = {};
+    for (const id of deviceIds()) {
+      const v = portFor(m.id, id);
+      ports[id] = { value: v, label: v ? labelForInput(v) : '未设置' };
     }
+    const ownerId = ownerOf(m);
     return {
       id: m.id,
       index: typeof m.index === 'number' ? m.index : null,
@@ -180,38 +281,95 @@ function monitorRows() {
       hasDdc: typeof m.index === 'number',
       currentInput: m.currentInput || '',
       currentInputLabel: m.currentInputLabel || '',
-      owner,
-      // 这块屏能不能单独切换：两个方向都配了接口才行
-      switchable: !!(p.local && p.remote),
-      local: { value: p.local, label: p.local ? (p.localLabel || labelForInput(p.local)) : '不切' },
-      remote: { value: p.remote, label: p.remote ? (p.remoteLabel || labelForInput(p.remote)) : '不切' }
+      ownerId,
+      ownerLabel: ownerId ? deviceInfo(ownerId).name : '',
+      ports,
+      deviceCount: Object.values(ports).filter((p) => p.value).length
     };
   });
 }
 
-/** 计算「单独把某台显示器切到某台电脑」的执行计划 */
-function monitorSwitchPlan(monitorId, role) {
+/* ---------------- 切换计划 ---------------- */
+
+/**
+ * 切到某台设备：算出每块屏该去哪个口，以及各自该由谁执行 DDC。
+ * DDC 必须由「这块屏当前正在显示的那台机器」发出，所以按 owner 分组。
+ */
+function buildSwitchPlan(targetId) {
+  if (!targetId) return { ok: false, total: 0, skipped: 0, localPlan: null, relays: [], label: '' };
+  const localPlan = {};
+  const groups = new Map();
+  const online = new Set(deviceIds());
+  let total = 0;
+  let skipped = 0;
+  let label = '';
+
+  for (const m of monitorsCache) {
+    if (typeof m.index !== 'number') { skipped += 1; continue; }
+    const value = portFor(m.id, targetId);
+    if (!value) { skipped += 1; continue; }
+    total += 1;
+    if (!label) label = labelForInput(value);
+    const owner = ownerOf(m);
+    if (!owner || owner === cfg.peerName || !online.has(owner)) {
+      localPlan[m.index] = value;
+    } else {
+      const g = groups.get(owner) || {};
+      g[m.index] = value;
+      groups.set(owner, g);
+    }
+  }
+
+  return {
+    ok: total > 0,
+    target: targetId,
+    total,
+    skipped,
+    localPlan: Object.keys(localPlan).length ? localPlan : null,
+    relays: [...groups.entries()].map(([to, plan]) => ({ to, plan })),
+    label: label || (targetId === cfg.peerName ? cfg.ui.localInputLabel : cfg.ui.remoteInputLabel) || ''
+  };
+}
+
+/** 单块屏切到某台设备的执行计划 */
+function monitorSwitchPlan(monitorId, targetId) {
   const m = monitorsCache.find((x) => x.id === monitorId);
   if (!m) return { ok: false, error: '找不到这台显示器' };
   if (typeof m.index !== 'number') return { ok: false, error: '这台显示器不支持 DDC，无法单独切换' };
-  const p = perMonitorMap()[monitorId] || {};
-  const value = role === 'local' ? p.local : p.remote;
-  if (!value) return { ok: false, error: '这台显示器在该方向上设为「不切」，请先选一个接口' };
-  // DDC 必须由「这块屏当前显示的那台机器」发出
-  let owner = 'unknown';
-  if (m.currentInput && m.currentInput === p.local) owner = 'local';
-  else if (m.currentInput && m.currentInput === p.remote) owner = 'remote';
+  const value = portFor(monitorId, targetId);
+  if (!value) return { ok: false, error: '这台显示器还没给这台电脑指定接口' };
+  const owner = ownerOf(m);
   return {
     ok: true,
     index: m.index,
     value,
     label: labelForInput(value),
     owner,
-    name: m.name
+    ownerOnline: !owner || owner === cfg.peerName || peersNow.some((p) => p.name === owner),
+    name: m.name,
+    target: targetId
   };
 }
 
+/** 单块屏的快捷键：在这块屏上配置过的设备之间轮换 */
+function monitorCyclePlan(monitorId) {
+  const m = monitorsCache.find((x) => x.id === monitorId);
+  if (!m) return { ok: false, error: '找不到这台显示器' };
+  const ids = deviceIds().filter((id) => portFor(monitorId, id));
+  if (!ids.length) return { ok: false, error: '这台显示器还没配置任何一台电脑的接口' };
+  const owner = ownerOf(m);
+  const i = ids.indexOf(owner);
+  const target = ids[(i + 1) % ids.length];
+  return monitorSwitchPlan(monitorId, target);
+}
 
+/** 全局切换：按排列顺序切到下一台在线设备 */
+function nextDevice() {
+  const list = arrangeOrder().filter((id) => id === cfg.peerName || peersNow.some((p) => p.name === id));
+  if (!list.length) return cfg.peerName;
+  const i = list.indexOf(activeTarget);
+  return list[(i + 1) % list.length];
+}
 
 /* ---------------- 显示器检测 ---------------- */
 
@@ -227,12 +385,7 @@ function detectMac() {
         for (const d of (gpu.spdisplays_ndrvs || [])) {
           const name = d._name || '显示器';
           const serial = String(d._spdisplays_displaySerialNumber || '').trim();
-          out.push({
-            id: serial || name,
-            name,
-            serial,
-            size: d._spdisplays_resolution || ''
-          });
+          out.push({ id: serial || name, name, serial, size: d._spdisplays_resolution || '' });
         }
       }
       resolve(out);
@@ -322,17 +475,31 @@ async function detectMonitors() {
     cfg.ui.monitorName = list[0].name;
     persist();
   }
-  const cur = list.find((m) => m.id === cfg.ui.monitorId);
+  ensurePortDefaults();
+  ensureMonitorHotkeys();
+
   pushStatus(
     via === 'dxva2' || via === 'm1ddc' || via === 'ddcctl'
       ? `已检测到 ${list.length} 台显示器（DDC 可用）`
       : `已检测到 ${list.length} 台显示器（DDC 不可用${ddcError ? '：' + ddcError : ''}）`,
     via === 'sys' ? 'warn' : 'ok'
   );
-  if (cur && cur.currentInputLabel) {
-    pushStatus(`当前输入源：${cur.currentInputLabel}`, 'info');
-  }
   return list;
+}
+
+/** 给还没配快捷键的显示器补一个默认键（显示器 A/B/C/D…） */
+function ensureMonitorHotkeys() {
+  if (!cfg.ui.hotkeys) cfg.ui.hotkeys = { global: 'F12', monitor: {} };
+  if (!cfg.ui.hotkeys.monitor) cfg.ui.hotkeys.monitor = {};
+  const map = cfg.ui.hotkeys.monitor;
+  let changed = false;
+  monitorsCache.forEach((m, i) => {
+    if (map[m.id] === undefined) {
+      map[m.id] = MONITOR_HOTKEY_DEFAULTS[i] || '';
+      changed = true;
+    }
+  });
+  if (changed) persist();
 }
 
 /* ---------------- DDC/CI 输入源切换 ---------------- */
@@ -396,7 +563,6 @@ async function switchMonitorInput(value, label) {
  */
 function accessibilityGranted() {
   if (!IS_MAC) return true;
-  // 捕获层已经成功启动 => 系统确实放行了，直接算已授权
   if (peer && typeof peer.getCaptureError === 'function' && !peer.getCaptureError()) return true;
   try { return systemPreferences.isTrustedAccessibilityClient(false); } catch { return false; }
 }
@@ -414,95 +580,87 @@ function openAccessibilitySettings() {
 
 /* ---------------- 状态聚合 ---------------- */
 
-function kindOf(platform) {
-  if (platform === 'darwin') return 'mac';
-  if (platform === 'win32') return 'win';
-  return 'pc';
+/** 当前选中的传输对象（多选）；不在线的自动剔除 */
+function targetPeerNames() {
+  const saved = Array.isArray(cfg.ui.targetPeers) ? cfg.ui.targetPeers : [];
+  const online = saved.filter((n) => peersNow.some((p) => p.name === n));
+  if (online.length) return online;
+  return peersNow[0] ? [peersNow[0].name] : [];
+}
+
+function setTargetPeers(names) {
+  const online = (Array.isArray(names) ? names : []).filter((n) => peersNow.some((p) => p.name === n));
+  cfg.ui.targetPeers = online;
+  cfg.ui.targetPeer = online[0] || '';
+  persist();
+  return online;
 }
 
 function getState() {
-  const remote = peersNow[0] || null;
-  const connected = !!remote;
-  const localName = cfg.peerName;
-  const remoteName = remote ? remote.name : (cfg._lastRemoteName || '另一台电脑');
-  const active = activeTarget === localName ? 'local' : 'remote';
+  const connected = peersNow.length > 0;
   const rows = monitorRows();
-  const localLabel = IS_MAC ? 'Mac' : 'Windows';
-  const remoteLabel = remote
-    ? (kindOf(remote.platform) === 'mac' ? 'Mac' : kindOf(remote.platform) === 'win' ? 'Windows' : 'PC')
-    : '其它电脑';
+  const arrange = arrangeOrder();
 
-  /** 把显示器列表投影到某一台电脑上：显示它从哪个接口进这块屏、这块屏此刻是否正显示它 */
-  const project = (role) => rows.map((m) => {
-    const io = role === 'local' ? m.local : m.remote;
-    return {
+  const devices = arrange.map((id) => {
+    const info = deviceInfo(id);
+    const monitors = rows.map((m) => ({
       id: m.id,
       name: m.name,
-      io: io.label,
-      connected: !!io.value,
-      // owner === 'unknown' 时无法判断，交给界面显示「未知」
-      here: m.owner === 'unknown' ? null : m.owner === role
+      port: m.ports[id] ? m.ports[id].label : '未设置',
+      hasPort: !!(m.ports[id] && m.ports[id].value),
+      here: m.ownerId === '' ? null : m.ownerId === id,
+      ownerId: m.ownerId
+    }));
+    return {
+      id,
+      name: info.name,
+      kind: info.kind,
+      local: info.local,
+      online: info.online,
+      active: id === activeTarget,
+      note: info.local ? '本机' : (info.online ? '局域网' : '离线'),
+      monitors
     };
   });
+
+  const monitors = rows.map((m, i) => ({
+    id: m.id,
+    index: m.index,
+    name: m.name,
+    hasDdc: m.hasDdc,
+    ownerId: m.ownerId,
+    ownerLabel: m.ownerLabel,
+    ports: m.ports,
+    deviceCount: m.deviceCount,
+    letter: String.fromCharCode(65 + (i % 26))
+  }));
+
+  const hotkeys = (cfg.ui.hotkeys && cfg.ui.hotkeys.monitor) || {};
+  const monitorKeys = {};
+  for (const m of monitors) monitorKeys[m.id] = hotkeys[m.id] || '';
 
   return {
     version: app.getVersion(),
     platform: process.platform,
     hostname: os.hostname(),
     isMac: IS_MAC,
-    connection: { connected, peers: peersNow, count: peersNow.length },
-    computers: {
-      local: { name: localName, kind: IS_MAC ? 'mac' : 'win', label: localLabel, local: true },
-      remote: { name: remoteName, kind: remote ? kindOf(remote.platform) : 'pc', label: remoteLabel, local: false, connected }
+    me: { identity: cfg.peerName, name: localLabel(), kind: localKind() },
+    connection: {
+      connected,
+      count: peersNow.length,
+      peers: peersNow.map((p) => ({ name: p.name, label: p.label || p.name, platform: p.platform }))
     },
-    // 双机工作台：每行一台电脑 + 它在各显示器上的落点
-    workbench: {
-      rows: [
-        {
-          id: 'local',
-          role: 'local',
-          name: localName,
-          label: localLabel,
-          kind: IS_MAC ? 'mac' : 'win',
-          note: '本机',
-          online: true,
-          active: active === 'local',
-          monitors: project('local')
-        },
-        {
-          id: 'remote',
-          role: 'remote',
-          name: remoteName,
-          label: remoteLabel,
-          kind: remote ? kindOf(remote.platform) : 'pc',
-          note: connected ? '已连接 · 局域网' : '未连接 · 等待局域网发现',
-          online: connected,
-          active: active === 'remote',
-          monitors: project('remote')
-        }
-      ],
-      monitors: rows,
-      // 有没有至少一块屏，两个方向都配好了
-      anySwitchable: rows.some((m) => m.switchable)
+    devices,
+    monitors,
+    arrange,
+    ddc: { available: monitorsCache.some((m) => typeof m.index === 'number'), error: ddcError },
+    inputs: { presets: INPUT_PRESETS },
+    hotkeys: {
+      enabled: cfg.ui.hotkeyEnabled !== false,
+      global: (cfg.ui.hotkeys && cfg.ui.hotkeys.global) || 'F12',
+      monitor: monitorKeys,
+      choices: HOTKEY_CHOICES
     },
-    monitor: {
-      list: monitorsCache.length ? monitorsCache : [{ id: cfg.ui.monitorId || 'default', name: cfg.ui.monitorName || '默认显示器', size: '', currentInput: '', currentInputLabel: '' }],
-      selectedId: cfg.ui.monitorId || '',
-      selectedName: cfg.ui.monitorName || '',
-      currentInput: (monitorsCache.find((m) => m.id === cfg.ui.monitorId) || {}).currentInput || '',
-      currentInputLabel: (monitorsCache.find((m) => m.id === cfg.ui.monitorId) || {}).currentInputLabel || ''
-    },
-    ddc: {
-      available: monitorsCache.some((m) => typeof m.index === 'number'),
-      error: ddcError
-    },
-    inputs: {
-      presets: INPUT_PRESETS,
-      local: { value: cfg.ui.localInput, label: cfg.ui.localInputLabel },
-      remote: { value: cfg.ui.remoteInput, label: cfg.ui.remoteInputLabel },
-      perMonitor: perMonitorMap()
-    },
-    hotkey: { enabled: cfg.ui.hotkeyEnabled !== false, key: cfg.ui.hotkeyKey || 'F12' },
     launchAtLogin: (() => { try { return app.getLoginItemSettings().openAtLogin; } catch { return false; } })(),
     clipboard: {
       enabled: !!cfg.clipboardSync,
@@ -512,52 +670,48 @@ function getState() {
       percent: clipPercent
     },
     inputMode: cfg.ui.inputMode,
-    mouseSpeed: cfg.ui.mouseSpeed,
-    shareInput: !!cfg.shareInput,
-    isHost: !!cfg.isHost,
     input: {
       mode: cfg.ui.inputMode,
       capturing: !!(cfg.shareInput && cfg.isHost),
       error: captureError(),
       edgeSwitch: cfg.ui.edgeSwitch !== false,
-      edgeSide: cfg.ui.edgeSide || 'right',
       modMap: cfg.ui.modMap || 'cmd-ctrl',
-      modDesc: describeModMap(cfg.ui.modMap || 'cmd-ctrl', process.platform, (remote && remote.platform) || process.platform),
-      keyDebug: !!cfg.ui.keyDebug,
-      peerPlatform: (remote && remote.platform) || ''
-    },
-    inputState: {
-      mode: cfg.ui.inputMode,
-      capturing: !!(cfg.shareInput && cfg.isHost),
-      error: captureError()
+      modDesc: describeModMap(cfg.ui.modMap || 'cmd-ctrl', process.platform, (peersNow[0] && peersNow[0].platform) || process.platform),
+      keyDebug: !!cfg.ui.keyDebug
     },
     files: {
       transfers: fileTransfers,
       recvDir: cfg.ui.receiveDir,
       autoAccept: !!cfg.ui.autoAccept,
-      target: targetPeerName()
+      targets: targetPeerNames()
     },
     permission: { accessibility: accessibilityGranted() },
-    active,
+    active: activeTarget === cfg.peerName ? 'local' : 'remote',
     activeTarget,
+    activeName: deviceInfo(activeTarget).name,
     statusLines
   };
-}
-
-/** 当前选中的接收对象：配置里存的名字若还在线就用它，否则用第一台 */
-function targetPeerName() {
-  const saved = (cfg.ui && cfg.ui.targetPeer) || '';
-  if (saved && peersNow.some((p) => p.name === saved)) return saved;
-  return peersNow[0] ? peersNow[0].name : '';
 }
 
 function setPeer(p) { peer = p; }
 
 function onPeers(list) {
   peersNow = list;
-  syncInputMapping();
-  if (list.length) cfg._lastRemoteName = list[0].name;
-  pushStatus(list.length ? `已连接：${list[0].name}` : '对端已断开', list.length ? 'ok' : 'warn');
+  // 记住显示名（改名会通过 meta 同步过来）
+  if (!cfg.ui.peerLabels) cfg.ui.peerLabels = {};
+  for (const p of list) cfg.ui.peerLabels[p.name] = p.label || p.name;
+  // 新设备补默认端口 + 排列位置
+  ensurePortDefaults();
+  arrangeOrder();
+  cfg.ui.arrange = arrangeOrder();
+  // 断开后清掉选择里的离线项
+  cfg.ui.targetPeers = targetPeerNames();
+  cfg._lastRemoteName = list[0] ? (list[0].label || list[0].name) : cfg._lastRemoteName;
+  persist();
+  pushStatus(
+    list.length ? `已连接：${list.map((p) => p.label || p.name).join('、')}` : '设备已断开',
+    list.length ? 'ok' : 'warn'
+  );
 }
 
 function onActive(target) {
@@ -591,7 +745,7 @@ async function onSwitchRequest({ input, label, from, index }) {
     } else {
       pushStatus(`切换失败：${r.error || '未知原因'}`, 'warn');
     }
-    return { ok: !!r.ok, warning: '', error: r.error || '' };
+    return { ok: !!r.ok, error: r.error || '' };
   }
 
   const name = label || (typeof input === 'string' ? labelForInput(input) : '目标接口');
@@ -600,7 +754,6 @@ async function onSwitchRequest({ input, label, from, index }) {
   if (r.ok) {
     pushStatus(from ? `已由 ${from} 把${scope}切换到 ${name}` : `已将${scope}切换到 ${name}`, 'ok');
     if (r.partial) pushStatus(`有显示器未响应：${r.error}`, 'warn');
-    // 切换后刷新一次，让「当前输入」显示跟上
     setTimeout(() => { detectMonitors().catch(() => {}); }, 1500);
   } else {
     pushStatus(`切换到 ${name} 失败`, 'warn');
@@ -610,18 +763,19 @@ async function onSwitchRequest({ input, label, from, index }) {
 }
 
 function onSwitch({ result, target, label, detail }) {
+  const name = target ? deviceInfo(target).name : '';
   if (result === 'no-input') {
-    pushStatus('未配置该机器的接口，请先在「连接与目标」里点选接口', 'warn');
+    pushStatus('这台电脑在显示器上还没指定接口，点显示器卡片上的齿轮设置', 'warn');
   } else if (result === 'relayed') {
-    pushStatus('已请求对端执行切换（画面在对端时由它发 DDC 指令）', 'ok');
+    pushStatus(`已请求当前画面所在设备把显示器切到 ${name}`, 'ok');
   } else if (result === 'peers-gone') {
     pushStatus('对端连接已断开，无法切换', 'warn');
   } else if (result === 'failed') {
     pushStatus(`切换未生效${detail && detail.error ? '：' + detail.error : ''}`, 'warn');
   } else if (result === 'screen-kept') {
-    pushStatus('已切换键鼠焦点（所有显示器都设为「不切」，画面不变）', 'info');
+    pushStatus(`已切到 ${name} 的键鼠焦点（显示器都设为「不切」）`, 'info');
   } else if (result === 'sent') {
-    pushStatus(`已切换到 ${label || target}`, 'ok');
+    pushStatus(`已切换到 ${name}`, 'ok');
   }
 }
 
@@ -630,22 +784,55 @@ function setClipProgress(percent, bytes) {
   if (typeof bytes === 'number') clipProgress = bytes;
 }
 
+/** 改本机显示名：会同步给其它设备显示 */
+function rename(text) {
+  const v = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 24);
+  if (!v) return false;
+  cfg.ui.displayName = v;
+  persist();
+  if (peer && peer.resendMeta) peer.resendMeta();
+  pushStatus(`本机名称已改为「${v}」`, 'ok');
+  return true;
+}
+
+function setHotkey(kind, id, key) {
+  if (!cfg.ui.hotkeys) cfg.ui.hotkeys = { global: 'F12', monitor: {} };
+  if (!cfg.ui.hotkeys.monitor) cfg.ui.hotkeys.monitor = {};
+  if (kind === 'global') {
+    cfg.ui.hotkeys.global = key || '';
+    cfg.ui.hotkeyKey = cfg.ui.hotkeys.global;
+  } else if (kind === 'monitor' && id) {
+    cfg.ui.hotkeys.monitor[id] = key || '';
+  }
+  persist();
+}
+
 /* ---------------- 导出 ---------------- */
 
 module.exports = {
   get cfg() { return cfg; },
   get peer() { return peer; },
+  get peers() { return peersNow; },
   ensureDefaults,
   persist,
   setPeer,
   applyInputMode,
-  syncInputMapping,
-  setMonitorInput,
-  perMonitorMap,
+  arrangeOrder,
+  setArrange,
+  deviceIds,
+  deviceInfo,
+  localLabel,
+  portFor,
+  setPort,
+  ensurePortDefaults,
   monitorRows,
+  buildSwitchPlan,
   monitorSwitchPlan,
+  monitorCyclePlan,
+  nextDevice,
   labelForInput,
-  targetPeerName,
+  targetPeerNames,
+  setTargetPeers,
   detectMonitors,
   switchMonitorInput,
   accessibilityGranted,
@@ -657,10 +844,13 @@ module.exports = {
   onSwitch,
   onSwitchRequest,
   pushStatus,
+  rename,
+  setHotkey,
   defaultReceiveDir,
   setClipProgress,
   setActiveTarget: (t) => { activeTarget = t; },
   INPUT_PRESETS,
+  HOTKEY_CHOICES,
   IS_MAC,
   IS_WIN
 };

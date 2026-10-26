@@ -11,34 +11,34 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('state:update', handler);
   },
 
+  // 设备 / 排列 / 改名
+  rename: (name) => ipcRenderer.invoke('app:rename', name),
+  setArrange: (list) => ipcRenderer.invoke('arrange:set', list),
+
+  // 显示器
   detectMonitor: () => ipcRenderer.invoke('display:detect'),
-  selectMonitor: (id) => ipcRenderer.invoke('display:select', id),
-  selectInput: (role, value) => ipcRenderer.invoke('input:select', { role, value }),
-  selectMonitorInput: (monitorId, role, value) => ipcRenderer.invoke('input:monitor', { monitorId, role, value }),
+  setPort: (monitorId, deviceId, value) => ipcRenderer.invoke('monitor:port', { monitorId, deviceId, value }),
+  switchDevice: (deviceId) => ipcRenderer.invoke('switch:device', deviceId),
+  switchMonitor: (monitorId, deviceId) => ipcRenderer.invoke('switch:monitor', { monitorId, deviceId }),
 
-  setHotkey: (enabled, key) => ipcRenderer.invoke('hotkey:set', { enabled, key }),
+  // 快捷键 / 启动
+  setHotkey: (enabled, kind, id, key) => ipcRenderer.invoke('hotkey:set', { enabled, kind, id, key }),
   setLaunchAtLogin: (open) => ipcRenderer.invoke('launch:set', open),
-  switchTo: (role) => ipcRenderer.invoke('switch:to', role),
 
+  // 剪贴板 / 键鼠
   setClipboardSync: (enabled) => ipcRenderer.invoke('clip:set', enabled),
   clipDir: (action) => ipcRenderer.invoke('clip:dir', action),
-  clipSaveConnect: () => ipcRenderer.invoke('clip:save-connect'),
-  clipCancel: () => ipcRenderer.invoke('clip:cancel'),
-
   setInputMode: (mode) => ipcRenderer.invoke('input:mode', mode),
-  setMouseSpeed: (v) => ipcRenderer.invoke('input:speed', v),
   setEdgeSwitch: (on) => ipcRenderer.invoke('input:edge', on),
-  setEdgeSide: (side) => ipcRenderer.invoke('input:edge-side', side),
   setModMap: (mode) => ipcRenderer.invoke('input:mod-map', mode),
   setKeyDebug: (on) => ipcRenderer.invoke('input:key-debug', on),
 
-  switchMonitor: (monitorId, role) => ipcRenderer.invoke('switch:monitor', { monitorId, role }),
-
-  pickFiles: (target) => ipcRenderer.invoke('files:pick', target),
-  sendPaths: (paths, target) => ipcRenderer.invoke('files:send-paths', { paths, target }),
+  // 文件 / 文本：targets 是设备身份数组，支持一次发给多台
+  pickFiles: (targets) => ipcRenderer.invoke('files:pick', targets),
+  sendPaths: (paths, targets) => ipcRenderer.invoke('files:send-paths', { paths, targets }),
   cancelTransfer: (id) => ipcRenderer.invoke('files:cancel', id),
-  sendText: (text, target) => ipcRenderer.invoke('files:text', { text, target }),
-  setTargetPeer: (name) => ipcRenderer.invoke('files:target', name),
+  sendText: (text, targets) => ipcRenderer.invoke('files:text', { text, targets }),
+  setTargets: (names) => ipcRenderer.invoke('files:targets', names),
   setAutoAccept: (on) => ipcRenderer.invoke('files:auto-accept', on),
   setAskLarge: (on) => ipcRenderer.invoke('files:ask-large', on),
   openRecvDir: () => ipcRenderer.invoke('files:open-dir'),

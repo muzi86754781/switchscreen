@@ -11,10 +11,11 @@ const WebSocket = require('ws');
  * 只有「本机 peerName 字典序小于对端」时才作为 WS 客户端主动连，否则等待对方连。
  */
 
-function startDiscovery({ port, peerName, onPeer }) {
+function startDiscovery({ port, peerName, displayName, onPeer }) {
   const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
   const MAGIC = 'SWITCHSCREEN_DISCOVER';
-  const seen = new Set();
+  // 同一个对端不去抖：60s 内只通知一次，超时后允许重新发现（对端重启/断线重连要靠它）
+  const seen = new Map();
 
   socket.on('error', (e) => console.error('[discover] udp error', e.message));
 
@@ -24,16 +25,23 @@ function startDiscovery({ port, peerName, onPeer }) {
     if (!pkt || pkt.magic !== MAGIC) return;
     if (pkt.name === peerName) return; // 自己
     const key = `${pkt.name}@${rinfo.address}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    onPeer({ name: pkt.name, address: rinfo.address, port: pkt.port, platform: pkt.platform || 'unknown' });
+    const last = seen.get(key) || 0;
+    if (Date.now() - last < 60000) return;
+    seen.set(key, Date.now());
+    onPeer({
+      name: pkt.name,
+      label: pkt.displayName || '',
+      address: rinfo.address,
+      port: pkt.port,
+      platform: pkt.platform || 'unknown'
+    });
   });
 
   socket.bind(port, () => {
     socket.setBroadcast(true);
     const beacon = () => {
       const payload = Buffer.from(JSON.stringify({
-        magic: MAGIC, name: peerName, port, platform: os.platform()
+        magic: MAGIC, name: peerName, displayName: displayName || '', port, platform: os.platform()
       }));
       socket.send(payload, 0, payload.length, port, '255.255.255.255', () => {});
     };

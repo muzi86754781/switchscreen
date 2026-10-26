@@ -21,6 +21,16 @@
       </div>
     </header>
 
+    <!-- 连接状态：所有标签页都看得到 -->
+    <div class="connbar" id="connBar">
+      <span class="conn-dot" id="connDot"></span>
+      <div class="conn-main">
+        <b id="connTitle">未连接 · 等待局域网发现</b>
+        <em id="connSub">两台电脑连同一个 Wi-Fi 或网线，都打开本软件即可自动连接，无需配对码。</em>
+      </div>
+      <div class="conn-peers" id="connPeers"></div>
+    </div>
+
     <nav class="tabs" id="tabs">
       <button class="tab is-active" data-tab="switch">切换电脑</button>
       <button class="tab" data-tab="share">传输与剪贴板</button>
@@ -30,22 +40,36 @@
     <main class="content">
       <!-- ============ 切换电脑 ============ -->
       <section class="panel is-active" data-panel="switch">
-        <div class="card">
+        <div class="card card-tight">
           <div class="card-label">
-            <span>双机工作台</span>
-            <span class="card-note" id="wbNote">一台电脑一行</span>
-            <button class="btn btn-ghost" id="redetectBtn">重新检测</button>
+            <span>键鼠模式</span>
+            <span class="card-note" id="modeNote"></span>
           </div>
-          <div class="wb-list" id="wbList"></div>
-          <div class="wb-tip">点一行右侧的「切到这台」即可换电脑 · 双击整行也可以</div>
+          <div class="seg seg-3" data-role="mode">
+            <button data-mode="separate">各用各的</button>
+            <button data-mode="local">共用本机键鼠</button>
+            <button data-mode="remote">共用对端键鼠</button>
+          </div>
+          <div class="hint" id="modeHint"></div>
         </div>
 
         <div class="card">
           <div class="card-label">
-            <span>显示器与接口</span>
-            <span class="card-note">每块屏可单独切换</span>
+            <span>设备与显示器</span>
+            <span class="card-note" id="wbNote">一台电脑一行</span>
+            <button class="btn btn-ghost" id="redetectBtn">重新检测</button>
           </div>
-          <div class="monitor-list" id="monitorList"></div>
+          <div class="wb-list" id="wbList"></div>
+          <div class="wb-tip">点没在显示这台电脑的显示器，那一块就直接切过来 · 点电脑名字可以改名</div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">
+            <span>接口映射</span>
+            <span class="card-note">每块屏接哪台电脑的哪个口</span>
+            <button class="btn btn-ghost" id="portToggle">展开设置</button>
+          </div>
+          <div class="monitor-list is-collapsed" id="monitorList"></div>
           <div class="hint" id="ddcHint"></div>
         </div>
 
@@ -54,26 +78,29 @@
           <label class="check-row">
             <input type="checkbox" id="hotkeyEnabled" />
             <span class="box"></span>
-            <span class="check-text">启用全局快捷键</span>
-            <select class="select select-sm" id="hotkeySelect"></select>
+            <span class="check-text">启用全局快捷键<span class="sub-note">（关闭窗口后仍有效）</span></span>
           </label>
-          <div class="hint" id="hotkeyHint">已启用 F12 · 关闭窗口后仍有效。</div>
+          <div class="hk-row">
+            <span class="hk-name">全部显示器切换</span>
+            <select class="select select-sm" id="hotkeyGlobal"></select>
+          </div>
+          <div class="hk-list" id="hotkeyList"></div>
+          <div class="hint" id="hotkeyHint"></div>
 
-          <label class="check-row">
+          <label class="check-row check-row-sm">
             <input type="checkbox" id="launchAtLogin" />
             <span class="box"></span>
             <span class="check-text">登录时启动</span>
           </label>
         </div>
 
-        <button class="primary-btn" id="switchBtn">一键切换全部显示器</button>
         <div class="status-block" id="switchStatus"></div>
       </section>
 
       <!-- ============ 传输与剪贴板 ============ -->
       <section class="panel" data-panel="share">
         <h1 class="panel-title">跨电脑传输</h1>
-        <p class="panel-sub">复制粘贴、发文件、发文字，都在这一页。</p>
+        <p class="panel-sub">复制粘贴、发文件、发文字，都在这一页。支持同时发给多台设备。</p>
 
         <label class="check-row check-row-lg">
           <input type="checkbox" id="clipEnabled" />
@@ -81,13 +108,8 @@
           <span class="check-text">开启剪贴板同步 · A 电脑复制，B 电脑直接粘贴</span>
         </label>
 
-        <div class="banner" id="pairBanner">
-          <div class="banner-main"><span class="tick">✓</span><span id="pairTitle">已连接</span></div>
-          <div class="banner-sub" id="pairSub">局域网内自动发现并连接，无需任何配置。</div>
-        </div>
-
         <div class="card">
-          <div class="card-label"><span class="num">01</span> 发送到</div>
+          <div class="card-label"><span class="num">01</span> 发送到<span class="card-note" id="targetNote"></span></div>
           <div class="peers" id="peerChips"></div>
 
           <div class="dropzone" id="dropzone">
@@ -139,69 +161,30 @@
       <!-- ============ 共用键鼠 ============ -->
       <section class="panel" data-panel="input">
         <h1 class="panel-title">一套键鼠，无缝流动</h1>
-        <p class="panel-sub">选好谁接物理键鼠，之后鼠标推到屏幕边上就换电脑，不用按任何键。</p>
-
-        <div class="mode-list" id="modeList">
-          <button class="mode" data-mode="separate">
-            <span class="mode-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                <rect x="2.5" y="7" width="19" height="10" rx="2" />
-                <path d="M6 11h.01M9 11h.01M12 11h.01M15 11h.01M18 11h.01M8 14h8" />
-              </svg>
-            </span>
-            <span class="mode-text">
-              <b>各用各的键鼠</b>
-              <em>两台电脑分别使用自己的键盘与鼠标</em>
-            </span>
-            <span class="radio"></span>
-          </button>
-
-          <button class="mode" data-mode="local">
-            <span class="mode-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="4" y="5" width="16" height="10" rx="1.6" />
-                <path d="M2 18h20" />
-              </svg>
-            </span>
-            <span class="mode-text">
-              <b id="modeLocalTitle">共用 Mac 的键鼠</b>
-              <em id="modeLocalDesc">Mac 的键鼠跟随画面，控制当前电脑</em>
-            </span>
-            <span class="radio"></span>
-          </button>
-
-          <button class="mode" data-mode="remote">
-            <span class="mode-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="4" width="18" height="12" rx="1.6" />
-                <path d="M9 20h6M12 16v4" />
-              </svg>
-            </span>
-            <span class="mode-text">
-              <b id="modeRemoteTitle">共用 Windows 的键鼠</b>
-              <em id="modeRemoteDesc">Windows 的键鼠跟随画面，控制当前电脑</em>
-            </span>
-            <span class="radio"></span>
-          </button>
-        </div>
+        <p class="panel-sub">下面按从左到右排出局域网里的设备，鼠标推到边缘就流到相邻那台。</p>
 
         <div class="card">
-          <div class="card-label">无缝移动</div>
+          <div class="card-label">
+            <span>设备排列</span>
+            <span class="card-note">拖动可调整顺序</span>
+          </div>
+          <div class="arrange" id="arrangeStrip"></div>
           <label class="check-row">
             <input type="checkbox" id="edgeSwitch" />
             <span class="box"></span>
             <span class="check-text">鼠标推到屏幕边缘就换电脑</span>
           </label>
-          <div class="row row-tight edge-side">
-            <span class="row-label">另一台电脑在我</span>
-            <div class="seg" id="edgeSideSeg">
-              <button data-side="left">左侧</button>
-              <button data-side="right">右侧</button>
-              <button data-side="top">上方</button>
-              <button data-side="bottom">下方</button>
-            </div>
+          <div class="hint" id="arrangeHint"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">键鼠模式</div>
+          <div class="seg seg-3" data-role="mode">
+            <button data-mode="separate">各用各的</button>
+            <button data-mode="local">共用本机键鼠</button>
+            <button data-mode="remote">共用对端键鼠</button>
           </div>
-          <div class="hint">推过去：画面与键鼠一起到对端；在对端推回来：又回到本机。两台分辨率不同也能一路走到底。</div>
+          <div class="hint" id="inputModeHint"></div>
         </div>
 
         <div class="card">
@@ -226,7 +209,7 @@
             <span id="permText">键鼠控制已就绪</span>
           </div>
           <button class="btn" id="openPerm">打开辅助功能设置</button>
-          <div class="kv"><span>当前画面</span><b id="currentScreen">Mac</b></div>
+          <div class="kv"><span>当前画面</span><b id="currentScreen">—</b></div>
           <div class="kv"><span>键鼠来自</span><b id="currentHost">—</b></div>
         </div>
       </section>

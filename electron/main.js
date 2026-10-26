@@ -21,14 +21,14 @@ function createWindow() {
   // 适配小屏（13 寸 MacBook 工作区高度约 800）：窗口不超出可用区域
   let wa = { width: 1440, height: 900 };
   try { wa = screen.getPrimaryDisplay().workAreaSize; } catch { /* ignore */ }
-  const width = Math.min(900, Math.max(780, wa.width - 80));
-  const height = Math.min(880, Math.max(600, wa.height - 60));
+  const width = Math.min(940, Math.max(800, wa.width - 80));
+  const height = Math.min(920, Math.max(620, wa.height - 60));
 
   win = new BrowserWindow({
     width,
     height,
-    minWidth: 780,
-    minHeight: 600,
+    minWidth: 800,
+    minHeight: 620,
     show: false,
     backgroundColor: '#12151f',
     title: '电脑切换',
@@ -50,12 +50,23 @@ function createWindow() {
   // 至少还能在窗口里按键生效。全局已注册的情况下不重复触发。
   win.webContents.on('before-input-event', (e, input) => {
     if (input.type !== 'keyDown') return;
-    if (input.control || input.alt || input.meta || input.shift) return;
-    const want = services.cfg.ui.hotkeyKey || 'F12';
-    if (input.key !== want) return;
-    if (registeredHotkey === want) return;
-    e.preventDefault();
-    doSwitch();
+    const hk = services.cfg.ui.hotkeys || {};
+    if (services.cfg.ui.hotkeyEnabled === false) return;
+
+    if (matchAccel(hk.global, input) && registeredHotkey !== hk.global) {
+      e.preventDefault();
+      doSwitchAll();
+      return;
+    }
+    const monitors = services.monitorRows();
+    for (const m of monitors) {
+      const key = (hk.monitor || {})[m.id];
+      if (key && matchAccel(key, input)) {
+        e.preventDefault();
+        doSwitchMonitor(m.id);
+        return;
+      }
+    }
   });
 
   win.on('closed', () => { win = null; });
@@ -70,8 +81,21 @@ function showWindow() {
 
 function trayMenu() {
   const cfg = services.cfg;
+  const devices = services.getState().devices || [];
+  const monitorItems = (services.monitorRows() || []).map((m, i) => ({
+    label: `显示器 ${String.fromCharCode(65 + i)}（${m.name}）`,
+    click: () => doSwitchMonitor(m.id)
+  }));
   return Menu.buildFromTemplate([
-    { label: `SwitchScreen · ${cfg.peerName}`, enabled: false },
+    { label: `SwitchScreen · ${services.localLabel()}`, enabled: false },
+    { type: 'separator' },
+    ...[...devices].map((d) => ({
+      label: `${d.active ? '● ' : '   '}${d.name}${d.local ? '（本机）' : (d.online ? '' : '（离线）')}`,
+      enabled: !d.active && d.online,
+      click: () => doSwitchAll(d.id)
+    })),
+    { type: 'separator' },
+    ...(monitorItems.length ? monitorItems : [{ label: '未检测到显示器', enabled: false }]),
     { type: 'separator' },
     {
       label: `共用键鼠：${cfg.shareInput ? '开' : '关'}`,
@@ -91,9 +115,7 @@ function trayMenu() {
       }
     },
     { type: 'separator' },
-    { label: '切换电脑', click: () => doSwitch() },
     { label: '打开主界面', click: () => showWindow() },
-    { type: 'separator' },
     { label: '退出', click: () => { app.isQuitting = true; app.quit(); } }
   ]);
 }
@@ -112,54 +134,91 @@ const HOTKEY_FALLBACKS = [
   'CommandOrControl+Shift+Space'
 ];
 
-function tryRegister(key) {
-  try {
-    if (globalShortcut.register(key, () => { doSwitch(); })) return true;
-  } catch { /* ignore */ }
-  return false;
+function tryRegister(key, fn) {
+  if (!key) return false;
+  try { return globalShortcut.register(key, fn); } catch { return false; }
 }
 
-function registerHotkey(key) {
-  if (registeredHotkey) {
-    try { globalShortcut.unregister(registeredHotkey); } catch { /* ignore */ }
-    registeredHotkey = '';
-  }
-  if (!key || !services.cfg.ui.hotkeyEnabled) return '';
-  if (tryRegister(key)) {
-    registeredHotkey = key;
-    return key;
-  }
-  // 被系统占用：自动换一个可用的，并把实际生效的键回写到配置与界面
-  for (const alt of HOTKEY_FALLBACKS) {
-    if (alt === key) continue;
-    if (tryRegister(alt)) {
-      registeredHotkey = alt;
-      services.cfg.ui.hotkeyKey = alt;
+/**
+ * 注册全部快捷键：全局切换 + 每块显示器各自一个。
+ * 注册失败不会静默：要么回退到可用的键并写回配置，要么在状态栏说明。
+ */
+function registerHotkeys() {
+  try { globalShortcut.unregisterAll(); } catch { /* ignore */ }
+  registeredHotkey = '';
+  const cfg = services.cfg;
+  if (cfg.ui.hotkeyEnabled === false) return;
+  if (!cfg.ui.hotkeys) cfg.ui.hotkeys = { global: 'F12', monitor: {} };
+
+  const want = cfg.ui.hotkeys.global || '';
+  if (!want) {
+    services.pushStatus('全局切换键已关闭，只能用界面上的按钮切换', 'info');
+  } else if (tryRegister(want, () => doSwitchAll())) {
+    registeredHotkey = want;
+  } else {
+    let picked = '';
+    for (const alt of HOTKEY_FALLBACKS) {
+      if (alt === want) continue;
+      if (tryRegister(alt, () => doSwitchAll())) { picked = alt; break; }
+    }
+    if (picked) {
+      cfg.ui.hotkeys.global = picked;
+      cfg.ui.hotkeyKey = picked;
+      registeredHotkey = picked;
       services.persist();
-      services.pushStatus(`${key} 被系统占用，已改用 ${alt}`, 'warn');
-      return alt;
+      services.pushStatus(`${want} 被系统占用，全局切换已改用 ${picked}`, 'warn');
+    } else {
+      services.pushStatus(`全局切换键 ${want} 注册失败（可能被其它程序占用）`, 'warn');
     }
   }
-  services.pushStatus(`快捷键 ${key} 注册失败（可能被其它程序占用）`, 'warn');
-  return '';
+
+  const monitors = services.monitorRows();
+  monitors.forEach((m, i) => {
+    const key = (cfg.ui.hotkeys.monitor || {})[m.id];
+    if (!key) return;
+    const letter = String.fromCharCode(65 + i);
+    if (key === registeredHotkey) {
+      services.pushStatus(`显示器 ${letter} 的快捷键与全局切换重复，已忽略`, 'warn');
+      return;
+    }
+    if (!tryRegister(key, () => doSwitchMonitor(m.id))) {
+      services.pushStatus(`显示器 ${letter} 的快捷键 ${key} 注册失败（可能被占用）`, 'warn');
+    }
+  });
+}
+
+function matchAccel(accel, input) {
+  if (!accel) return false;
+  const parts = accel.split('+');
+  const key = parts[parts.length - 1];
+  const cmd = parts.includes('CommandOrControl');
+  const ctrl = parts.includes('Control');
+  const alt = parts.includes('Alt');
+  const shift = parts.includes('Shift');
+  const wantCmd = cmd && IS_MAC;
+  const wantCtrl = (cmd && !IS_MAC) || ctrl;
+  if (!!input.meta !== wantCmd) return false;
+  if (!!input.control !== wantCtrl) return false;
+  if (!!input.alt !== alt) return false;
+  if (!!input.shift !== shift) return false;
+  return String(input.key || '').toUpperCase() === key.toUpperCase();
 }
 
 /* ---------------- 动作 ---------------- */
 
-async function doSwitch(targetRole) {
+/** 切到某台设备（所有在它上面配置了接口的显示器一起切） */
+async function doSwitchAll(explicitTarget) {
   if (!peer) return { ok: false, reason: 'no-peer' };
   if (switching) return { ok: false, reason: 'busy' };
-  const localName = services.cfg.peerName;
-  const peers = peer.listPeers();
-  if (!peers.length) {
-    services.pushStatus('未发现另一台电脑，请确认两台在同一局域网并都打开了本软件', 'warn');
+  if (!peer.listPeers().length) {
+    services.pushStatus('还没发现其它设备，请确认在同一局域网并都打开了本软件', 'warn');
     broadcastState();
     return { ok: false, reason: 'no-peer' };
   }
-  const target = targetRole === 'local' ? localName : peers[0].name;
-  // 等 DDC 真正执行完再刷新界面，这样成败都能立刻看到
+  const target = explicitTarget || services.nextDevice();
+  const name = services.deviceInfo(target).name;
   switching = true;
-  services.pushStatus(`正在切换到 ${targetRole === 'local' ? '本机' : target}…`, 'info');
+  services.pushStatus(`正在切换到 ${name}…`, 'info');
   broadcastState();
   let result = 'failed';
   try {
@@ -171,6 +230,26 @@ async function doSwitch(targetRole) {
   }
   broadcastState();
   return { ok: result !== 'failed' && result !== 'no-input', target, result };
+}
+
+/** 只切一块显示器：按这块屏当前显示的是谁来决定由哪台设备下发 DDC */
+async function doSwitchMonitor(monitorId, explicitTarget) {
+  const plan = explicitTarget
+    ? services.monitorSwitchPlan(monitorId, explicitTarget)
+    : services.monitorCyclePlan(monitorId);
+  if (!plan.ok) {
+    services.pushStatus(plan.error, 'warn');
+    broadcastState();
+    return { ok: false, error: plan.error };
+  }
+  if (plan.owner && plan.owner !== services.cfg.peerName && plan.ownerOnline && peer) {
+    peer.relayDdc(plan.owner, { input: plan.value, label: plan.label, index: plan.index });
+    services.pushStatus(`已请求 ${services.deviceInfo(plan.owner).name} 把「${plan.name}」切到 ${plan.label}`, 'ok');
+  } else {
+    await services.onSwitchRequest({ input: plan.value, label: plan.label, index: plan.index });
+  }
+  broadcastState();
+  return { ok: true };
 }
 
 /* ---------------- IPC ---------------- */
@@ -206,6 +285,7 @@ function fmtSize(n) {
 function askIncoming(payload) {
   return new Promise((resolve) => {
     const name = payload.name || '文件';
+    const from = services.deviceInfo(payload.from).name || payload.from;
     const opts = {
       type: 'question',
       buttons: ['接收', '取消'],
@@ -213,16 +293,13 @@ function askIncoming(payload) {
       cancelId: 1,
       noLink: true,
       title: '收到文件',
-      message: `${payload.from || '另一台电脑'} 想发送 ${name}`,
+      message: `${from} 想发送 ${name}`,
       detail: `${payload.count || 1} 项 · 共 ${fmtSize(payload.total || 0)}\n保存到：${services.cfg.ui.receiveDir || services.defaultReceiveDir()}`
     };
     const p = win && !win.isDestroyed() ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts);
     p.then((r) => {
       const accept = r.response === 0;
-      services.pushStatus(
-        accept ? `正在接收 ${name}` : `已拒绝来自 ${payload.from || '对端'} 的 ${name}`,
-        accept ? 'ok' : 'info'
-      );
+      services.pushStatus(accept ? `正在接收 ${name}` : `已拒绝来自 ${from} 的 ${name}`, accept ? 'ok' : 'info');
       broadcastState();
       resolve(accept);
     }).catch(() => resolve(false));
@@ -232,6 +309,7 @@ function askIncoming(payload) {
 /** 收到文本：直接弹窗展示全文 + 一键拷贝 */
 function showIncomingText(payload) {
   const text = String(payload.text || '');
+  const from = services.deviceInfo(payload.from).name || payload.from || '另一台电脑';
   const long = text.length > 400;
   const opts = {
     type: 'info',
@@ -239,7 +317,7 @@ function showIncomingText(payload) {
     defaultId: 0,
     cancelId: 1,
     noLink: true,
-    title: `来自 ${payload.from || '另一台电脑'} 的文本`,
+    title: `来自 ${from} 的文本`,
     message: long ? `${text.slice(0, 400)}…` : text,
     detail: long ? `共 ${text.length} 字，点「拷贝到剪贴板」复制全文` : '点「拷贝到剪贴板」直接粘贴到当前应用'
   };
@@ -256,55 +334,60 @@ function showIncomingText(payload) {
 function registerIpc() {
   ipcMain.handle('state:get', () => services.getState());
   ipcMain.handle('state:refresh', async () => {
-    if (!services.getState().monitor.list.length) await services.detectMonitors();
+    if (!services.getState().monitors.length) await services.detectMonitors();
     return services.getState();
   });
 
   ipcMain.handle('display:detect', async () => {
     await services.detectMonitors();
+    registerHotkeys();
     return services.getState();
   });
 
-  ipcMain.handle('display:select', (_e, id) => {
-    const st = services.getState();
-    const m = st.monitor.list.find((x) => x.id === id);
-    if (m) {
-      services.cfg.ui.monitorId = m.id;
-      services.cfg.ui.monitorName = m.name;
-      services.persist();
-      services.pushStatus(`已选择显示器：${m.name}`, 'ok');
-    }
+  /* ---------- 设备 / 排列 / 改名 ---------- */
+
+  ipcMain.handle('app:rename', (_e, name) => {
+    services.rename(name);
     return services.getState();
   });
 
-  ipcMain.handle('input:select', (_e, { role, value }) => {
-    const preset = services.INPUT_PRESETS.find((p) => p.value === value) || { value, label: value };
-    if (role === 'local') {
-      services.cfg.ui.localInput = preset.value;
-      services.cfg.ui.localInputLabel = preset.label;
-    } else {
-      services.cfg.ui.remoteInput = preset.value;
-      services.cfg.ui.remoteInputLabel = preset.label;
-    }
-    services.syncInputMapping();
-    services.pushStatus(`设置已保存 · ${preset.label}`, 'ok');
+  ipcMain.handle('arrange:set', (_e, list) => {
+    services.setArrange(list);
+    services.pushStatus('排列已保存，鼠标会按这个顺序穿越', 'ok');
     return services.getState();
   });
 
-  // 单台显示器指定接口（多显示器各接不同端口时用）
-  ipcMain.handle('input:monitor', (_e, { monitorId, role, value }) => {
-    if (!monitorId) return services.getState();
-    services.setMonitorInput(monitorId, role === 'local' ? 'local' : 'remote', value);
+  /* ---------- 显示器 / 接口 ---------- */
+
+  ipcMain.handle('monitor:port', (_e, { monitorId, deviceId, value } = {}) => {
+    if (!services.setPort(monitorId, deviceId, value)) return services.getState();
     services.pushStatus(`接口已保存 · ${services.labelForInput(value)}`, 'ok');
     return services.getState();
   });
 
-  ipcMain.handle('hotkey:set', (_e, { enabled, key }) => {
-    services.cfg.ui.hotkeyEnabled = !!enabled;
-    if (key) services.cfg.ui.hotkeyKey = key;
+  ipcMain.handle('switch:device', async (_e, deviceId) => {
+    const r = await doSwitchAll(deviceId);
+    return { result: r, state: services.getState() };
+  });
+
+  ipcMain.handle('switch:monitor', async (_e, { monitorId, deviceId } = {}) => {
+    await doSwitchMonitor(monitorId, deviceId || '');
+    return services.getState();
+  });
+
+  /* ---------- 快捷键 ---------- */
+
+  ipcMain.handle('hotkey:set', (_e, { enabled, kind, id, key } = {}) => {
+    if (typeof enabled === 'boolean') services.cfg.ui.hotkeyEnabled = enabled;
+    if (kind) services.setHotkey(kind, id, key);
     services.persist();
-    const actual = registerHotkey(services.cfg.ui.hotkeyKey) || services.cfg.ui.hotkeyKey;
-    services.pushStatus(enabled ? `已启用 ${actual} · 关闭窗口后仍有效` : '全局快捷键已关闭', enabled ? 'ok' : 'info');
+    registerHotkeys();
+    services.pushStatus(
+      services.cfg.ui.hotkeyEnabled === false
+        ? '全局快捷键已关闭'
+        : `快捷键已更新 · 关闭窗口后仍有效`,
+      'ok'
+    );
     return services.getState();
   });
 
@@ -316,68 +399,12 @@ function registerIpc() {
     return services.getState();
   });
 
-  ipcMain.handle('switch:to', async (_e, role) => {
-    const r = await doSwitch(role);
-    return { result: r, state: services.getState() };
-  });
+  /* ---------- 剪贴板 / 键鼠 ---------- */
 
   ipcMain.handle('clip:set', (_e, enabled) => {
     services.cfg.clipboardSync = !!enabled;
     services.persist();
     services.pushStatus(enabled ? '剪贴板同步已开启' : '剪贴板同步已关闭', enabled ? 'ok' : 'info');
-    return services.getState();
-  });
-
-  /* ---------- 单台显示器切换 ---------- */
-
-  ipcMain.handle('switch:monitor', async (_e, { monitorId, role } = {}) => {
-    const plan = services.monitorSwitchPlan(monitorId, role === 'local' ? 'local' : 'remote');
-    if (!plan.ok) {
-      services.pushStatus(plan.error, 'warn');
-      return services.getState();
-    }
-    const conn = services.getState().connection;
-    // DDC 必须由「这块屏当前正在显示的那台机器」发出
-    if (plan.owner === 'remote' && conn.count && peer) {
-      const remoteName = conn.peers[0].name;
-      peer.relayDdc(remoteName, { input: plan.value, label: plan.label, index: plan.index });
-      services.pushStatus(`已请求 ${remoteName} 把「${plan.name}」切到 ${plan.label}`, 'ok');
-    } else {
-      await services.onSwitchRequest({ input: plan.value, label: plan.label, index: plan.index });
-    }
-    return services.getState();
-  });
-
-  /* ---------- 共用键鼠：无缝移动 ---------- */
-
-  ipcMain.handle('input:edge', (_e, on) => {
-    services.cfg.ui.edgeSwitch = !!on;
-    services.persist();
-    services.pushStatus(on ? '已开启边缘切换：鼠标推到边上就换电脑' : '已关闭边缘切换', on ? 'ok' : 'info');
-    return services.getState();
-  });
-
-  ipcMain.handle('input:edge-side', (_e, side) => {
-    const ok = ['right', 'left', 'top', 'bottom'];
-    services.cfg.ui.edgeSide = ok.includes(side) ? side : 'right';
-    services.persist();
-    const map = { right: '右侧', left: '左侧', top: '上方', bottom: '下方' };
-    services.pushStatus(`另一台电脑在${map[services.cfg.ui.edgeSide]}，鼠标推向那一侧即可切换`, 'info');
-    return services.getState();
-  });
-
-  ipcMain.handle('input:mod-map', (_e, mode) => {
-    const ok = ['cmd-ctrl', 'swap', 'off'];
-    services.cfg.ui.modMap = ok.includes(mode) ? mode : 'cmd-ctrl';
-    services.persist();
-    services.pushStatus(`按键映射：${services.getState().input.modDesc}`, 'ok');
-    return services.getState();
-  });
-
-  ipcMain.handle('input:key-debug', (_e, on) => {
-    services.cfg.ui.keyDebug = !!on;
-    services.persist();
-    services.pushStatus(on ? '已开启按键诊断：按任意键会在下方显示原始键码' : '已关闭按键诊断', 'info');
     return services.getState();
   });
 
@@ -405,21 +432,6 @@ function registerIpc() {
     return services.getState();
   });
 
-  ipcMain.handle('clip:save-connect', () => {
-    try { fs.mkdirSync(services.cfg.ui.receiveDir, { recursive: true }); } catch { /* ignore */ }
-    services.persist();
-    services.setClipProgress(0);
-    const n = services.getState().connection.count;
-    services.pushStatus(n ? '设置已保存，已重新连接' : '设置已保存，等待对端连接', n ? 'ok' : 'warn');
-    return services.getState();
-  });
-
-  ipcMain.handle('clip:cancel', () => {
-    services.setClipProgress(0);
-    services.pushStatus('已取消传输', 'info');
-    return services.getState();
-  });
-
   ipcMain.handle('input:mode', (_e, mode) => {
     services.applyInputMode(mode);
     const map = { separate: '各用各的键鼠', local: '共用本机键鼠', remote: '共用对端键鼠' };
@@ -427,9 +439,25 @@ function registerIpc() {
     return services.getState();
   });
 
-  ipcMain.handle('input:speed', (_e, v) => {
-    services.cfg.ui.mouseSpeed = Math.max(0.5, Math.min(2, Number(v) || 1));
+  ipcMain.handle('input:edge', (_e, on) => {
+    services.cfg.ui.edgeSwitch = !!on;
     services.persist();
+    services.pushStatus(on ? '已开启无缝移动：鼠标推到边上就换电脑' : '已关闭无缝移动', on ? 'ok' : 'info');
+    return services.getState();
+  });
+
+  ipcMain.handle('input:mod-map', (_e, mode) => {
+    const ok = ['cmd-ctrl', 'swap', 'off'];
+    services.cfg.ui.modMap = ok.includes(mode) ? mode : 'cmd-ctrl';
+    services.persist();
+    services.pushStatus(`按键映射：${services.getState().input.modDesc}`, 'ok');
+    return services.getState();
+  });
+
+  ipcMain.handle('input:key-debug', (_e, on) => {
+    services.cfg.ui.keyDebug = !!on;
+    services.persist();
+    services.pushStatus(on ? '已开启按键诊断：按任意键会在下方显示原始键码' : '已关闭按键诊断', 'info');
     return services.getState();
   });
 
@@ -446,13 +474,16 @@ function registerIpc() {
 
   /* ---------- 文件 / 文本传输 ---------- */
 
-  /** 目标机：显式指定的优先，否则用界面上选中的，再否则第一台在线对端 */
-  function resolveTarget(explicit) {
-    const conn = services.getState().connection;
-    if (!conn.count) return '';
-    if (explicit && conn.peers.some((p) => p.name === explicit)) return explicit;
-    const saved = services.targetPeerName();
-    return saved || conn.peers[0].name;
+  /** 发送对象：可以多台；显式指定的优先，否则用界面勾选的，再否则第一台在线设备 */
+  function resolveTargets(explicit) {
+    const online = services.peers.map((p) => p.name);
+    if (!online.length) return [];
+    const want = Array.isArray(explicit) ? explicit : (explicit ? [explicit] : []);
+    const ok = want.filter((n) => online.includes(n));
+    if (ok.length) return ok;
+    const saved = services.targetPeerNames();
+    if (saved.length) return saved;
+    return [online[0]];
   }
 
   /** 统计待发送的总字节（用于「超过 1GB 发送前询问」） */
@@ -472,23 +503,24 @@ function registerIpc() {
     return sum;
   }
 
-  async function sendPaths(paths, explicitTarget) {
+  async function sendPaths(paths, explicitTargets) {
     if (!peer) { services.pushStatus('网络层未启动', 'warn'); return services.getState(); }
-    const target = resolveTarget(explicitTarget);
-    if (!target) { services.pushStatus('未连接另一台电脑，无法发送', 'warn'); return services.getState(); }
+    const targets = resolveTargets(explicitTargets);
+    if (!targets.length) { services.pushStatus('未连接其它设备，无法发送', 'warn'); return services.getState(); }
     if (!paths || !paths.length) return services.getState();
 
     // 超过 1GB 且开启了询问：先确认
     if (services.cfg.ui.askLarge !== false) {
       const total = await totalBytes(paths);
       if (total > 1024 * 1024 * 1024) {
+        const names = targets.map((n) => services.deviceInfo(n).name).join('、');
         const r = await dialog.showMessageBox(win, {
           type: 'question',
           buttons: ['继续发送', '取消'],
           defaultId: 1,
           cancelId: 1,
           title: '确认发送大文件',
-          message: `将向 ${target} 发送 ${fmtSize(total)}`,
+          message: `将向 ${names} 发送 ${fmtSize(total)}`,
           detail: `${paths.length} 项内容，超过 1GB，发送会占用较多网络带宽。`
         });
         if (r.response !== 0) {
@@ -498,22 +530,24 @@ function registerIpc() {
       }
     }
 
-    const res = await peer.offerFiles(paths, target);
-    if (!res || !res.ok) services.pushStatus((res && res.error) || '发送失败', 'warn');
-    else services.pushStatus(`已发送 ${paths.length} 项到 ${target}`, 'ok');
+    for (const target of targets) {
+      const res = await peer.offerFiles(paths, target);
+      if (!res || !res.ok) services.pushStatus((res && res.error) || '发送失败', 'warn');
+      else services.pushStatus(`已发送 ${paths.length} 项到 ${services.deviceInfo(target).name}`, 'ok');
+    }
     return services.getState();
   }
 
-  ipcMain.handle('files:pick', async (_e, explicitTarget) => {
+  ipcMain.handle('files:pick', async (_e, targets) => {
     const r = await dialog.showOpenDialog(win, {
       properties: ['openFile', 'multiSelections', 'openDirectory'],
       title: '选择要发送的文件或文件夹'
     });
     if (r.canceled || !r.filePaths.length) return services.getState();
-    return sendPaths(r.filePaths, explicitTarget);
+    return sendPaths(r.filePaths, targets);
   });
 
-  ipcMain.handle('files:send-paths', (_e, { paths, target } = {}) => sendPaths(paths || [], target));
+  ipcMain.handle('files:send-paths', (_e, { paths, targets } = {}) => sendPaths(paths || [], targets));
 
   ipcMain.handle('files:cancel', (_e, id) => {
     if (peer) peer.cancelTransfer(id);
@@ -521,19 +555,20 @@ function registerIpc() {
     return services.getState();
   });
 
-  ipcMain.handle('files:text', (_e, { text, target } = {}) => {
+  ipcMain.handle('files:text', (_e, { text, targets } = {}) => {
     if (!peer || !text) return services.getState();
-    const to = resolveTarget(target);
-    if (!to) { services.pushStatus('未连接另一台电脑，无法发送', 'warn'); return services.getState(); }
-    peer.sendText(text, to);
-    services.pushStatus(`已发送文本到 ${to}`, 'ok');
+    const list = resolveTargets(targets);
+    if (!list.length) { services.pushStatus('未连接其它设备，无法发送', 'warn'); return services.getState(); }
+    for (const to of list) {
+      peer.sendText(text, to);
+      services.pushStatus(`已发送文本到 ${services.deviceInfo(to).name}`, 'ok');
+    }
     return services.getState();
   });
 
-  // 选择接收对象（多对端时可切换）
-  ipcMain.handle('files:target', (_e, name) => {
-    services.cfg.ui.targetPeer = name || '';
-    services.persist();
+  // 选择发送对象（可多选）
+  ipcMain.handle('files:targets', (_e, names) => {
+    services.setTargetPeers(names || []);
     return services.getState();
   });
 
@@ -598,16 +633,17 @@ app.whenReady().then(() => {
   }
 
   createWindow();
-  registerHotkey(services.cfg.ui.hotkeyKey);
 
   // 网络/输入层单独 try，避免原生模块不可用时整个界面打不开
   try {
     peer = createPeer(services.cfg, {
-      onPeers: (list) => { services.onPeers(list); broadcastState(); },
+      onPeers: (list) => { services.onPeers(list); registerHotkeys(); broadcastState(); },
       onActive: (t) => { services.onActive(t); broadcastState(); },
       onSwitch: (info) => { services.onSwitch(info); broadcastState(); },
+      // 每块屏的接口由服务层算，peer 只负责执行与状态同步
+      getSwitchPlan: (target) => services.buildSwitchPlan(target),
       onSwitchRequest: (info) => {
-        Promise.resolve(services.onSwitchRequest(info)).then(broadcastState).catch(() => {});
+        return Promise.resolve(services.onSwitchRequest(info)).then((r) => { broadcastState(); return r; }).catch(() => ({ ok: false }));
       },
       onFileUpdate: (list) => { services.onFileUpdate(list); broadcastStateThrottled(); },
       // 收到文件前询问：接收 / 取消
@@ -616,7 +652,7 @@ app.whenReady().then(() => {
       onText: (payload) => { showIncomingText(payload); broadcastStateThrottled(); },
       // 鼠标穿越边界自动切换
       onEdgeSwitch: ({ to }) => {
-        services.pushStatus(`鼠标越过屏幕边界，已切到 ${to}`, 'ok');
+        services.pushStatus(`鼠标越过屏幕边界，已切到 ${services.deviceInfo(to).name}`, 'ok');
         broadcastState();
       },
       // 按键诊断（排查跨平台键位时用）
@@ -631,7 +667,9 @@ app.whenReady().then(() => {
     services.pushStatus(`网络层启动失败：${e.message}`, 'warn');
   }
 
-  services.detectMonitors().then(broadcastState).catch(() => {});
+  services.detectMonitors()
+    .then(() => { registerHotkeys(); broadcastState(); })
+    .catch(() => { registerHotkeys(); broadcastState(); });
   broadcastState();
 });
 

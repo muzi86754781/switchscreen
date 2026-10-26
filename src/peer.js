@@ -6,7 +6,7 @@ const { startDiscovery, connectPeer, startServer } = require('./net');
 const { createClipboardSync } = require('./clipboard');
 const { createFileTransfer } = require('./filetransfer');
 const { switchSource, getPlatform } = require('./monitor');
-const { createCapture, createInjector, moveLocalCursor, localScreenSize } = require('./input');
+const { createCapture, createInjector, localScreenSize, moveLocalCursor } = require('./input');
 const { loadConfig } = require('./config');
 
 /**
@@ -16,13 +16,15 @@ const { loadConfig } = require('./config');
  *
  * 键鼠共用采用「相对位移 + 幻影指针」模型：
  *   - 接物理键鼠的一端（host）捕获事件，鼠标只发相对位移，两端分辨率不同也一致；
- *   - host 另外维护一个「对端指针位置」的幻影坐标，用来判断指针是否顶到对端屏幕
- *     的另一侧边缘 —— 顶到了就把画面切回本机，形成真正意义上的无缝穿梭；
+ *   - host 另外维护一个「对端指针位置」的幻影坐标，用来判断指针是否顶到当前屏幕
+ *     的左右边缘 —— 顶到了就按「设备排列」找相邻的那台，形成无缝穿梭；
  *   - 修饰键在发送前按两端平台做语义映射（⌘ ⇄ Ctrl），见 keymap.js。
  *
  * hooks（可选，供 GUI 订阅）：
  *   onPeers(list) / onActive(name) / onSwitch({...}) / onFileUpdate / onAskIncoming
- *   onText({text, from}) / onInputError(line) / onEdgeSwitch({...})
+ *   onText({text, from}) / onInputDebug(line) / onEdgeSwitch({...})
+ *   getSwitchPlan(target) -> { localPlan, relays, label }  （由 GUI 侧计算每块屏的接口）
+ *   onSwitchRequest({target, input, label}) -> Promise<{ok}>
  */
 function createPeer(userConfig, hooks) {
   const cfg = userConfig || loadConfig();
@@ -31,7 +33,7 @@ function createPeer(userConfig, hooks) {
   const platform = getPlatform();
 
   const peers = new Map();       // name -> ws
-  const peersMeta = new Map();   // name -> { name, platform, screen }
+  const peersMeta = new Map();   // name -> { name, label, platform, screen }
   let activePeer = myName;
   let capture = null;
   let captureError = '';
@@ -45,11 +47,27 @@ function createPeer(userConfig, hooks) {
     return v === undefined || v === null ? dflt : v;
   }
 
+  function myLabel() {
+    return (cfg.ui && cfg.ui.displayName) || myName;
+  }
+
+  function metaPayload() {
+    return { type: 'meta', platform, screen: localScreenSize(), name: myName, displayName: myLabel() };
+  }
+
   function notifyPeers() {
     if (typeof h.onPeers === 'function') h.onPeers(listPeers());
   }
   function listPeers() {
-    return [...peers.keys()].map((n) => peersMeta.get(n) || { name: n, platform: 'unknown' });
+    return [...peers.keys()].map((n) => {
+      const m = peersMeta.get(n) || {};
+      return {
+        name: n,
+        label: m.label || n,
+        platform: m.platform || 'unknown',
+        screen: m.screen || null
+      };
+    });
   }
   function notifyActive() {
     if (typeof h.onActive === 'function') h.onActive(activePeer);
@@ -69,31 +87,29 @@ function createPeer(userConfig, hooks) {
     return false;
   }
 
-  /* ---------------- 目标接口计算 ---------------- */
+  /* ---------------- 设备排列（无缝移动的方向依据） ---------------- */
 
-  /**
-   * 计算「切到 target 时，显示器应该去的接口」。
-   * 返回：字符串（所有显示器同一个接口）或 map（{ "0": "0x12", "1": "0x11" }）。
-   */
-  function inputForTarget(target) {
-    const role = target === myName ? 'local' : 'remote';
-    const per = (cfg.ui && cfg.ui.perMonitor) || {};
-    const keys = Object.keys(per);
-    if (keys.length) {
-      const map = {};
-      for (const k of keys) {
-        const v = per[k] && per[k][role];
-        // 空字符串 = 这台显示器在这个方向上「不切」
-        if (v) map[k.replace(/^ddc:/, '')] = v;
-      }
-      return map;
-    }
-    return target === myName ? cfg.selfInput : cfg.peers[target];
+  /** 排列里记录所有设备（含暂时离线的），位置不会因为掉线被忘掉 */
+  function arrangeOrder() {
+    const raw = Array.isArray(ui('arrange', [])) ? ui('arrange').slice() : [];
+    for (const id of [myName, ...peers.keys()]) if (!raw.includes(id)) raw.push(id);
+    return raw;
   }
 
-  function labelForTarget(target) {
-    if (target === myName) return (cfg.ui && cfg.ui.localInputLabel) || cfg.selfInput || '';
-    return (cfg.ui && cfg.ui.remoteInputLabel) || cfg.peers[target] || '';
+  function isOnline(id) {
+    return id === myName || peers.has(id);
+  }
+
+  /** 从 id 出发，往 dir（left/right）找第一台在线设备 */
+  function neighborOf(id, dir) {
+    const list = arrangeOrder();
+    const i = list.indexOf(id);
+    if (i < 0) return '';
+    const step = dir === 'left' ? -1 : 1;
+    for (let j = i + step; j >= 0 && j < list.length; j += step) {
+      if (isOnline(list[j])) return list[j];
+    }
+    return '';
   }
 
   /* ---------------- 切换 ---------------- */
@@ -106,53 +122,72 @@ function createPeer(userConfig, hooks) {
   }
 
   /**
-   * @param {string} target 目标机器名
-   * @param {{edge?:{side:string,nx:number,ny:number}, silent?:boolean}} [opts]
+   * @param {string} target 目标设备（peerName）
+   * @param {{edge?:{side:string,nx:number,ny:number}}} [opts]
    */
   async function applySwitch(target, opts) {
     const o = opts || {};
     const prev = activePeer;
-    const raw = inputForTarget(target);
-    const isMap = raw && typeof raw === 'object';
-    const hasTarget = isMap ? Object.keys(raw).length > 0 : !!raw;
-    const input = raw;
-    const label = labelForTarget(target);
     let result = 'skipped';
     let detail = null;
+    let label = '';
+    let plan = null;
+
+    if (typeof h.getSwitchPlan === 'function') {
+      try { plan = h.getSwitchPlan(target); } catch (e) { console.warn('[peer] 计算切换计划失败:', e.message); }
+    }
 
     activePeer = target;
 
-    if (hasTarget) {
-      // DDC 指令必须由「显示器当前正在显示的那台机器」发出。
-      // 若当前画面在对端，就把指令转给它执行；否则本机执行。
-      if (prev !== myName && prev !== target) {
-        if (sendTo(prev, { type: 'ddc', input, label })) {
-          result = 'relayed';
-          console.log(`[peer] 已请求 ${prev} 执行 DDC 切换 -> ${JSON.stringify(input)}`);
-        } else {
-          result = 'peers-gone';
-        }
-      }
-      if (result === 'skipped') {
-        result = 'sent';
-        if (typeof h.onSwitchRequest === 'function') {
+    if (plan) {
+      label = plan.label || '';
+      if (plan.localPlan && typeof h.onSwitchRequest === 'function') {
+        try {
           // 等 DDC 真正执行完，把结果回传给界面（否则界面永远停在「切换中」）
-          try {
-            detail = await h.onSwitchRequest({ target, input, label });
-          } catch (e) {
-            detail = { ok: false, error: e.message };
-            result = 'failed';
-          }
-          if (detail && detail.ok === false) result = 'failed';
-        } else {
-          switchSource({ platform, command: (cfg.monitor.command[platform]), input });
+          detail = await h.onSwitchRequest({ target, input: plan.localPlan, label });
+          result = detail && detail.ok === false ? 'failed' : 'sent';
+        } catch (e) {
+          detail = { ok: false, error: e.message };
+          result = 'failed';
         }
       }
-    } else if (isMap) {
-      result = 'screen-kept'; // 所有显示器都设成「不切」：只切键鼠焦点
-    } else if (target !== myName) {
-      result = 'no-input';
-      console.warn(`[peer] 未配置对端 ${target} 的显示器输入源（config.peers[${target}]）`);
+      // 有些屏当前显示的是别的机器 —— DDC 必须由那台机器发，转给它执行
+      const relays = plan.relays || [];
+      for (const r of relays) {
+        if (sendTo(r.to, { type: 'ddc', input: r.plan, label })) {
+          if (result === 'skipped') result = 'relayed';
+        }
+      }
+      if (result === 'skipped') result = relays.length ? 'relayed' : 'screen-kept';
+      if (!plan.total) result = 'no-input';
+    } else {
+      // 兜底：没有注入计划时，用配置里的单一接口值
+      const input = target === myName ? cfg.selfInput : cfg.peers[target];
+      label = target === myName
+        ? ((cfg.ui && cfg.ui.localInputLabel) || input || '')
+        : ((cfg.ui && cfg.ui.remoteInputLabel) || input || '');
+      if (input) {
+        if (prev !== myName && prev !== target) {
+          if (sendTo(prev, { type: 'ddc', input, label })) result = 'relayed';
+          else result = 'peers-gone';
+        }
+        if (result === 'skipped') {
+          result = 'sent';
+          if (typeof h.onSwitchRequest === 'function') {
+            try {
+              detail = await h.onSwitchRequest({ target, input, label });
+            } catch (e) {
+              detail = { ok: false, error: e.message };
+              result = 'failed';
+            }
+            if (detail && detail.ok === false) result = 'failed';
+          } else {
+            switchSource({ platform, command: (cfg.monitor.command[platform]), input });
+          }
+        }
+      } else {
+        result = 'screen-kept';
+      }
     }
 
     // DDC 明确失败时，画面其实没换，键鼠焦点也不该留在对端
@@ -160,29 +195,34 @@ function createPeer(userConfig, hooks) {
 
     resetInputState();
 
-    // 告诉对端「现在画面在哪台」
+    // 告诉所有设备「现在画面在哪台」
     broadcast({ type: 'active', target: activePeer });
 
     // 进入对端：把对端指针放到穿越进来的那条边上
     if (activePeer !== myName) {
       const meta = peersMeta.get(activePeer);
       const scr = (meta && meta.screen) || localScreenSize();
-      const edge = (o.edge && o.edge.side) || ui('edgeSide', 'right');
-      const nx = o.edge ? o.edge.nx : 0.5;
-      const ny = o.edge ? o.edge.ny : 0.5;
-      if (o.edge) {
-        sendTo(activePeer, { type: 'cursor-enter', edge, nx, ny });
-        phantom = enterPoint(scr, edge, nx, ny);
+      const edge = (o.edge && o.edge.side) || '';
+      if (edge) {
+        sendTo(activePeer, { type: 'cursor-enter', edge, nx: o.edge.nx, ny: o.edge.ny });
+        phantom = enterPoint(scr, edge, o.edge.nx, o.edge.ny);
       } else {
         phantom = { x: Math.round(scr.width / 2), y: Math.round(scr.height / 2) };
         sendTo(activePeer, { type: 'cursor-enter', edge: 'center', nx: 0.5, ny: 0.5 });
       }
+    } else if (o.edge) {
+      // 穿回本机：把本机指针放到对应那一侧的边上，手感才连续
+      phantom = null;
+      const lscr = localScreenSize();
+      const ny = typeof o.edge.ny === 'number' ? o.edge.ny : 0.5;
+      if (o.edge.side === 'right') moveLocalCursor(6, ny * lscr.height);
+      else if (o.edge.side === 'left') moveLocalCursor(lscr.width - 16, ny * lscr.height);
     } else {
       phantom = null;
     }
 
     notifyActive();
-    if (typeof h.onSwitch === 'function') h.onSwitch({ target, input, label, result, detail, edge: o.edge || null });
+    if (typeof h.onSwitch === 'function') h.onSwitch({ target, label, result, detail, edge: o.edge || null });
     console.log(`[peer] 已切换到: ${target} (${result})`);
     return result;
   }
@@ -196,9 +236,9 @@ function createPeer(userConfig, hooks) {
   }
 
   function triggerSwitch() {
-    const order = [myName, ...[...peers.keys()]];
-    const idx = order.indexOf(activePeer);
-    const next = order[(idx + 1) % order.length];
+    const list = arrangeOrder().filter(isOnline);
+    const idx = list.indexOf(activePeer);
+    const next = list[(idx + 1) % list.length] || myName;
     return applySwitch(next);
   }
 
@@ -222,7 +262,6 @@ function createPeer(userConfig, hooks) {
         peerPlatform: 'unknown',
         modMap: ui('modMap', 'cmd-ctrl'),
         edgeSwitch: !!ui('edgeSwitch', true) && peers.size > 0,
-        edgeSide: ui('edgeSide', 'right'),
         screen: localScreenSize()
       };
     }
@@ -233,7 +272,6 @@ function createPeer(userConfig, hooks) {
       peerPlatform: (meta && meta.platform) || 'unknown',
       modMap: ui('modMap', 'cmd-ctrl'),
       edgeSwitch: false,
-      edgeSide: ui('edgeSide', 'right'),
       screen: localScreenSize(),
       keyDebug: !!ui('keyDebug', false)
     };
@@ -247,49 +285,36 @@ function createPeer(userConfig, hooks) {
     const scr = (meta && meta.screen) || localScreenSize();
     if (!phantom) phantom = { x: scr.width / 2, y: scr.height / 2 };
 
-    const before = { x: phantom.x, y: phantom.y };
     phantom.x += sx;
     phantom.y += sy;
 
     send({ type: 'input', ev: { kind: 'move', dx: sx, dy: sy } });
 
-    // 幻影指针越过对端屏幕另一侧 → 说明用户想回到本机
-    const side = ui('edgeSide', 'right');
-    if (!ui('edgeSwitch', true) || side === 'off') return;
-    let back = false;
-    if (side === 'right' && phantom.x < 0) back = true;
-    else if (side === 'left' && phantom.x > scr.width - 1) back = true;
-    else if (side === 'bottom' && phantom.y < 0) back = true;
-    else if (side === 'top' && phantom.y > scr.height - 1) back = true;
-    if (!back) return;
+    if (!ui('edgeSwitch', true)) return;
+    // 幻影指针顶出当前屏幕的左右边缘 → 交给排列里相邻的那台
+    let dir = '';
+    if (phantom.x < 0) dir = 'left';
+    else if (phantom.x > scr.width - 1) dir = 'right';
+    if (!dir) return;
 
-    phantom = before;
-    returnToLocal(before, scr, side).catch(() => {});
-  }
-
-  /** 从对端穿回本机：切屏 + 把本机指针放到对应的边上 */
-  async function returnToLocal(pos, remoteScr, side) {
-    if (busy) return;
-    busy = true;
-    try {
-      await applySwitch(myName);
-      const lscr = localScreenSize();
-      const nx = Math.max(0, Math.min(1, pos.x / Math.max(1, remoteScr.width)));
-      const ny = Math.max(0, Math.min(1, pos.y / Math.max(1, remoteScr.height)));
-      if (side === 'right') moveLocalCursor(lscr.width - 16, ny * lscr.height);
-      else if (side === 'left') moveLocalCursor(6, ny * lscr.height);
-      else if (side === 'bottom') moveLocalCursor(nx * lscr.width, lscr.height - 16);
-      else if (side === 'top') moveLocalCursor(nx * lscr.width, 6);
-      if (typeof h.onEdgeSwitch === 'function') h.onEdgeSwitch({ to: myName, side });
-    } finally {
-      busy = false;
+    const target = neighborOf(activePeer, dir);
+    if (!target) {
+      // 边上是墙：把幻影指针夹回屏幕内，避免一直触发
+      phantom.x = Math.max(0, Math.min(scr.width - 1, phantom.x));
+      return;
     }
+    const nx = Math.max(0, Math.min(1, phantom.x / Math.max(1, scr.width)));
+    const ny = Math.max(0, Math.min(1, phantom.y / Math.max(1, scr.height)));
+    phantom = null;
+    applySwitch(target, { edge: { side: dir, nx, ny } }).catch(() => {});
   }
 
-  /** 指针推到本机边缘：切到对端并把指针放到对侧 */
-  async function edgeToPeer(info) {
+  /** 指针推到本机边缘：按排列切到相邻设备，并把指针放到对侧 */
+  async function edgeTo(info) {
     if (busy) return;
-    const target = [...peers.keys()][0];
+    const dir = info.side === 'left' ? 'left' : info.side === 'right' ? 'right' : '';
+    if (!dir) return;
+    const target = neighborOf(myName, dir);
     if (!target) return;
     busy = true;
     try {
@@ -325,9 +350,12 @@ function createPeer(userConfig, hooks) {
     if (msg.type === 'clipboard') clipboard.onRemoteClipboard(msg.text);
     else if (msg.type === 'meta') {
       const meta = peersMeta.get(name) || { name };
+      const before = meta.label;
       meta.platform = msg.platform || meta.platform || 'unknown';
       if (msg.screen && msg.screen.width) meta.screen = msg.screen;
+      if (msg.displayName) meta.label = msg.displayName;
       peersMeta.set(name, meta);
+      if (meta.label !== before) notifyPeers();
     }
     else if (msg.type === 'input') {
       const ev = msg.ev || {};
@@ -343,7 +371,7 @@ function createPeer(userConfig, hooks) {
     }
     else if (msg.type === 'ddc') {
       // 对端请求本机执行 DDC 切换（本机才是当前画面输出方）
-      // index 有值表示只切某台显示器
+      // index 有值表示只切某台显示器；input 是对象表示按显示器下发计划
       if (typeof h.onSwitchRequest === 'function') {
         h.onSwitchRequest({ input: msg.input, label: msg.label, index: msg.index, from: name });
       } else {
@@ -351,7 +379,7 @@ function createPeer(userConfig, hooks) {
       }
     }
     else if (msg.type === 'active') {
-      // 两端必须对「当前画面在哪台」保持一致，否则下一次切换会由错误的机器执行 DDC
+      // 各端必须对「当前画面在哪台」保持一致，否则下一次切换会由错误的机器执行 DDC
       const t = msg.target;
       if (t && t !== activePeer && (t === myName || peers.has(t))) {
         activePeer = t;
@@ -363,17 +391,16 @@ function createPeer(userConfig, hooks) {
     }
   }
 
-  function track(ws, name, peerPlatform) {
+  function track(ws, name, peerPlatform, label) {
     peers.set(name, ws);
     const meta = peersMeta.get(name) || { name };
     meta.platform = peerPlatform || meta.platform || 'unknown';
+    if (label) meta.label = label;
     peersMeta.set(name, meta);
     notifyPeers();
 
-    // 交换屏幕尺寸：跨分辨率移动要靠它换算幻影指针
-    try {
-      ws.send(JSON.stringify({ type: 'meta', platform, screen: localScreenSize() }));
-    } catch { /* ignore */ }
+    // 交换屏幕尺寸与显示名：跨分辨率移动要靠它换算幻影指针
+    try { ws.send(JSON.stringify(metaPayload())); } catch { /* ignore */ }
 
     ws.on('message', (data) => {
       let msg = null;
@@ -382,7 +409,6 @@ function createPeer(userConfig, hooks) {
     });
     ws.on('close', () => {
       peers.delete(name);
-      peersMeta.delete(name);
       if (activePeer === name) { activePeer = myName; phantom = null; notifyActive(); }
       notifyPeers();
     });
@@ -422,7 +448,7 @@ function createPeer(userConfig, hooks) {
           onMove: forwardMove,
           onWheel,
           onButton,
-          onEdge: (info) => { edgeToPeer(info).catch(() => {}); },
+          onEdge: (info) => { edgeTo(info).catch(() => {}); },
           onHotkey: checkHotkey,
           onDebug: (line) => { if (typeof h.onInputDebug === 'function') h.onInputDebug(line); }
         });
@@ -445,13 +471,15 @@ function createPeer(userConfig, hooks) {
 
   if (cfg.discover) {
     startDiscovery({
-      port: cfg.port, peerName: myName,
-      onPeer: ({ name, address, port, platform: remotePlatform }) => {
+      port: cfg.port,
+      peerName: myName,
+      displayName: myLabel(),
+      onPeer: ({ name, label, address, port, platform: remotePlatform }) => {
         if (peers.has(name)) return;
         // 字典序小的主动连，避免双向重复
         if (myName < name) {
           const ws = connectPeer(address, port, name);
-          ws.on('open', () => track(ws, name, remotePlatform));
+          ws.on('open', () => track(ws, name, remotePlatform, label));
         }
       }
     });
@@ -473,6 +501,8 @@ function createPeer(userConfig, hooks) {
     getCaptureError: () => captureError,
     /** 让指定对端执行一次 DDC（单台显示器切换时用） */
     relayDdc: (target, payload) => sendTo(target, { type: 'ddc', ...payload }),
+    /** 改名后重新广播一次身份，其它设备立刻能看到新名字 */
+    resendMeta: () => broadcast(metaPayload()),
     getPhantom: () => phantom,
     stop: () => {
       if (capture) { try { capture.stop(); } catch { /* ignore */ } capture = null; }

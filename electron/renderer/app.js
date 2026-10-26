@@ -3,15 +3,6 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-const HOTKEYS = [
-  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
-  'CommandOrControl+Shift+F12',
-  'CommandOrControl+Alt+F12',
-  'CommandOrControl+Shift+Space'
-];
-
-const EDGE_TEXT = { left: '左侧', right: '右侧', top: '上方', bottom: '下方' };
-
 let S = null;
 
 /* ---------------- 工具 ---------------- */
@@ -21,9 +12,11 @@ function isMacPlatform() {
 }
 
 function hotkeyLabel(v) {
-  if (!v) return '—';
+  if (!v) return '关闭';
+  if (v === 'NONE') return '关闭';
   return v
     .replace('CommandOrControl', isMacPlatform() ? '⌘' : 'Ctrl')
+    .replace(/\bAlt\b/, isMacPlatform() ? '⌥' : 'Alt')
     .replace(/\+/g, ' + ');
 }
 
@@ -49,8 +42,7 @@ function setOptions(select, items, value) {
 function hexLabel(v) {
   if (!v) return '';
   const preset = ((S && S.inputs && S.inputs.presets) || []).find((p) => p.value === v);
-  if (preset) return preset.label;
-  return String(v);
+  return preset ? preset.label : String(v);
 }
 
 function fmtSize(n) {
@@ -70,90 +62,223 @@ function el(tag, cls, text) {
   return n;
 }
 
-/* ---------------- 图标 ---------------- */
-
 const ICON_PC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="1.6"/><path d="M9 20h6M12 16v4"/></svg>';
 const ICON_MAC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="12" rx="1.6"/><path d="M2 19.5h20"/></svg>';
-const ICON_MON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="1.6"/><path d="M9 20h6M12 16v4"/></svg>';
+const ICON_MON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="11" rx="1.6"/><path d="M8 20h8M12 16v4"/></svg>';
 
-/* ---------------- 双机工作台 ---------------- */
+/* ---------------- 顶部连接状态 ---------------- */
+
+function renderConn(s) {
+  const c = s.connection || { count: 0, peers: [] };
+  const connected = !!c.connected;
+
+  $('#netDot').classList.toggle('ok', connected);
+  $('#netText').textContent = connected ? `${c.count} 台设备在线` : '未连接';
+
+  const bar = $('#connBar');
+  bar.classList.toggle('ok', connected);
+  $('#connDot').classList.toggle('ok', connected);
+  $('#connTitle').textContent = connected
+    ? `已连接 ${c.count} 台设备 · 局域网自动发现`
+    : '未连接 · 等待局域网发现';
+  $('#connSub').textContent = connected
+    ? 'A 电脑复制 B 电脑粘贴；文件与文字可以直接发，也可以同时发给多台。'
+    : '两台电脑连同一个 Wi-Fi 或网线，都打开本软件即可自动连接，无需配对码。';
+
+  const box = $('#connPeers');
+  const sig = c.peers.map((p) => `${p.name}:${p.label}`).join(',');
+  if (box.dataset.sig !== sig) {
+    box.dataset.sig = sig;
+    box.innerHTML = '';
+    for (const p of c.peers) {
+      const chip = el('span', 'conn-peer');
+      chip.appendChild(el('i', 'dot'));
+      chip.appendChild(el('span', '', p.label || p.name));
+      box.appendChild(chip);
+    }
+  }
+}
+
+/* ---------------- 键鼠模式（顶部 + 共用键鼠页共用一套按钮） ---------------- */
+
+function renderModes(s) {
+  const me = s.me ? s.me.name : '本机';
+  const other = (s.connection && s.connection.peers[0] && (s.connection.peers[0].label || s.connection.peers[0].name)) || '对端';
+  $$('[data-role="mode"] button').forEach((b) => {
+    b.classList.toggle('is-on', b.dataset.mode === s.inputMode);
+  });
+  const label = (b, mode) => {
+    if (mode === 'local') return `共用 ${me} 键鼠`;
+    if (mode === 'remote') return `共用 ${other} 键鼠`;
+    return '各用各的';
+  };
+  $$('[data-role="mode"] button').forEach((b) => {
+    b.textContent = label(b, b.dataset.mode);
+  });
+
+  const text = s.inputMode === 'separate'
+    ? '两台电脑各用各的键盘鼠标，互不干扰。'
+    : s.inputMode === 'local'
+      ? `用 ${me} 接的键盘鼠标控制所有电脑；鼠标推到边缘就流到相邻设备。`
+      : `用 ${other} 接的键盘鼠标控制所有电脑；本机只接收操作。`;
+  if ($('#modeHint')) $('#modeHint').textContent = text;
+  if ($('#inputModeHint')) $('#inputModeHint').textContent = text;
+  if ($('#modeNote')) $('#modeNote').textContent = s.inputMode === 'separate' ? '互不干扰' : '一套键鼠走多台';
+}
+
+/* ---------------- 设备与显示器 ---------------- */
+
+function monitorLetters(s) {
+  const map = {};
+  for (const m of (s.monitors || [])) map[m.id] = m.letter || '?';
+  return map;
+}
 
 function buildWorkbench(s) {
   const box = $('#wbList');
-  const wb = s.workbench;
-  if (!wb) return;
+  const devices = s.devices || [];
+  const letters = monitorLetters(s);
 
-  const sig = wb.rows
-    .map((r) => `${r.role}|${r.name}|${r.label}|${r.online}|${r.active}|` +
-      r.monitors.map((m) => `${m.id}:${m.io}:${String(m.here)}`).join(','))
+  const sig = devices
+    .map((d) => `${d.id}|${d.name}|${d.online}|${d.active}|` +
+      d.monitors.map((m) => `${m.id}:${m.here}:${m.hasPort}:${m.port}`).join(','))
     .join(';');
   if (box.dataset.sig === sig) return;
   box.dataset.sig = sig;
   box.innerHTML = '';
 
-  for (const r of wb.rows) {
-    const row = el('div', `wb-row${r.active ? ' is-active' : ''}${r.online ? '' : ' is-off'}`);
-    row.dataset.role = r.role;
+  for (const d of devices) {
+    const row = el('div', `wb-row${d.active ? ' is-active' : ''}${d.online ? '' : ' is-off'}`);
 
-    const main = el('div', 'wb-main');
+    /* 行首：图标 + 名字（本机可点开改名）+ 状态 */
+    const head = el('div', 'wb-head');
     const ico = el('span', 'wb-ico');
-    ico.innerHTML = r.kind === 'mac' ? ICON_MAC : ICON_PC;
-    main.appendChild(ico);
+    ico.innerHTML = d.kind === 'mac' ? ICON_MAC : ICON_PC;
+    head.appendChild(ico);
 
-    const id = el('div', 'wb-id');
+    const idBox = el('div', 'wb-id');
     const nameLine = el('div', 'wb-name');
-    nameLine.appendChild(el('b', '', r.label));
-    nameLine.appendChild(el('span', 'wb-chip', r.note));
-    id.appendChild(nameLine);
-    id.appendChild(el('div', 'wb-note', r.name));
-    main.appendChild(id);
+    const nameNode = el('b', 'wb-name-text', d.name);
+    if (d.local) {
+      nameNode.classList.add('is-editable');
+      nameNode.title = '点一下改这台电脑的名字（会同步到其它设备）';
+      nameNode.addEventListener('click', () => startRename(d, nameNode));
+    }
+    nameLine.appendChild(nameNode);
+    nameLine.appendChild(el('span', `wb-chip${d.online ? '' : ' off'}`, d.note));
+    if (d.local) nameLine.appendChild(el('span', 'wb-chip quiet', '可改名'));
+    idBox.appendChild(nameLine);
+    idBox.appendChild(el('div', 'wb-sub', d.local ? `本机 · 正在这台电脑上操作` : (d.online ? '已连接 · 同局域网' : '离线')));
+    head.appendChild(idBox);
 
     const right = el('div', 'wb-right');
-    if (r.active) right.appendChild(el('span', 'wb-flag', '使用中'));
-    const go = el('button', 'wb-go', r.active ? '当前' : '切到这台');
-    go.disabled = r.active || !r.online;
+    if (d.active) right.appendChild(el('span', 'wb-flag', '使用中'));
+    const go = el('button', 'wb-go', d.active ? '当前' : '全部切到这台');
+    go.type = 'button';
+    go.disabled = d.active || !d.online;
     go.addEventListener('click', (e) => {
       e.stopPropagation();
-      doSwitch(r.role, go);
+      switchToDevice(d.id);
     });
     right.appendChild(go);
-    main.appendChild(right);
-    row.appendChild(main);
+    head.appendChild(right);
+    row.appendChild(head);
 
-    // 显示器排列：从左到右按检测顺序排开，正在显示这台的高亮
+    /* 行内：这台电脑在各块显示器上的落点 */
     const strip = el('div', 'wb-mons');
-    if (!r.monitors.length) {
+    if (!d.monitors.length) {
       strip.appendChild(el('div', 'wb-empty', '未检测到显示器'));
     } else {
-      for (const m of r.monitors) {
+      for (const m of d.monitors) {
         const here = m.here === true;
-        const unknown = m.here === null;
-        const card = el('div', `wb-mon${here ? ' is-here' : ''}${unknown ? ' is-unknown' : ''}`);
-        card.title = `${m.name} · ${m.io || '未指定接口'}${here ? ' · 正在显示这台' : ''}`;
+        const away = m.here === false;
+        const tile = el('button', 'wb-mon' + (here ? ' is-here' : '') + (away ? ' is-away' : '') + (m.hasPort ? '' : ' is-noport'));
+        tile.type = 'button';
+        tile.dataset.mon = m.id;
+        tile.dataset.device = d.id;
+
         const bar = el('span', 'wb-mon-bar');
-        card.appendChild(bar);
-        card.appendChild(el('span', 'wb-mon-name', m.name));
-        card.appendChild(el('span', 'wb-mon-io', m.connected ? m.io : '未设接口'));
-        strip.appendChild(card);
+        tile.appendChild(bar);
+
+        const body = el('span', 'wb-mon-body');
+        body.appendChild(el('span', 'wb-mon-name', `显示器 ${letters[m.id] || '?'} · ${m.name}`));
+        let metaText;
+        if (here) metaText = '正在显示这台';
+        else if (!m.hasPort) metaText = '未设置接口 · 点齿轮配置';
+        else if (away) metaText = `点一下切到这台 · ${m.port}`;
+        else metaText = `接口 ${m.port}`;
+        body.appendChild(el('span', 'wb-mon-meta', metaText));
+        tile.appendChild(body);
+
+        if (!here && m.hasPort) tile.appendChild(el('span', 'wb-mon-go', '切'));
+
+        if (!here) {
+          tile.title = m.hasPort
+            ? `把「${m.name}」切到 ${d.name}（${m.port}）`
+            : '先展开「接口映射」给这台电脑选一个口';
+          tile.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (!m.hasPort) { revealPorts(); return; }
+            await switchMonitor(m.id, d.id, tile);
+          });
+        }
+        strip.appendChild(tile);
       }
     }
     row.appendChild(strip);
 
     row.addEventListener('dblclick', () => {
-      if (!r.active) doSwitch(r.role);
+      if (!d.active && d.online) switchToDevice(d.id);
     });
     box.appendChild(row);
   }
 
-  const n = wb.monitors ? wb.monitors.length : 0;
-  $('#wbNote').textContent = n ? `${n} 块显示器` : '未检测到显示器';
+  const n = (s.monitors || []).length;
+  const devs = devices.length;
+  $('#wbNote').textContent = n ? `${devs} 台设备 · ${n} 块显示器` : '未检测到显示器';
 }
 
-/* ---------------- 显示器与接口 ---------------- */
+/* 本机改名（就地编辑） */
+function startRename(d, node) {
+  if (node.dataset.editing === '1') return;
+  node.dataset.editing = '1';
+  const input = document.createElement('input');
+  input.className = 'wb-rename';
+  input.value = d.name;
+  input.maxLength = 24;
+  node.replaceWith(input);
+  input.focus();
+  input.select();
 
-function chipItemsFor(current, m) {
-  const items = ((S.inputs && S.inputs.presets) || []).map((p) => ({ value: p.value, label: p.label }));
-  for (const v of [m.local.value, m.remote.value, current]) {
+  let done = false;
+  const commit = (save) => {
+    if (done) return;
+    done = true;
+    const v = input.value.trim();
+    input.replaceWith(node);
+    node.dataset.editing = '0';
+    if (save && v && v !== d.name) push(window.api.rename(v));
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+  });
+  input.addEventListener('blur', () => commit(true));
+}
+
+/* ---------------- 接口映射（折叠的进阶设置） ---------------- */
+
+function revealPorts() {
+  const list = $('#monitorList');
+  if (list) list.classList.remove('is-collapsed');
+  const btn = $('#portToggle');
+  if (btn) btn.textContent = '收起设置';
+  if (list) list.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function chipItems(values) {
+  const items = ((S && S.inputs && S.inputs.presets) || []).map((p) => ({ value: p.value, label: p.label }));
+  for (const v of values) {
     if (v && !items.some((i) => i.value === v)) items.push({ value: v, label: hexLabel(v) });
   }
   items.push({ value: '', label: '不切' });
@@ -162,69 +287,49 @@ function chipItemsFor(current, m) {
 
 function buildMonitorList(s) {
   const ml = $('#monitorList');
-  const wb = s.workbench || {};
-  const rows = wb.monitors || [];
-  const localLabel = s.computers.local.label;
-  const remoteLabel = s.computers.remote.label;
+  if (!ml) return;
+  const monitors = s.monitors || [];
+  const devices = s.devices || [];
+  const letters = monitorLetters(s);
 
-  const sig = rows
-    .map((m) => `${m.id}|${m.name}|${m.currentInputLabel}|${m.owner}|${m.local.value}|${m.remote.value}|${m.switchable}`)
-    .join(',');
+  const sig = monitors
+    .map((m) => `${m.id}|${m.name}|${m.ownerId}|` + devices.map((d) => `${d.id}:${(m.ports[d.id] || {}).value}`).join(','))
+    .join(';');
   if (ml.dataset.sig === sig) return;
   ml.dataset.sig = sig;
   ml.innerHTML = '';
 
-  if (!rows.length) {
+  if (!monitors.length) {
     ml.appendChild(el('div', 'empty', '未检测到显示器，点右上角「重新检测」。'));
     return;
   }
 
-  for (const m of rows) {
+  for (const m of monitors) {
     const item = el('div', 'monitor-item');
-    item.dataset.mon = m.id;
 
     const head = el('div', 'mon-head');
     const ico = el('span', 'mon-ico');
     ico.innerHTML = ICON_MON;
     head.appendChild(ico);
-
     const main = el('div', 'mon-main');
-    main.appendChild(el('b', '', m.name));
-    let stateText = m.currentInputLabel ? `当前输入：${m.currentInputLabel}` : '当前输入：未知';
-    if (m.owner === 'local') stateText += ` · 正显示 ${localLabel}`;
-    else if (m.owner === 'remote') stateText += ` · 正显示 ${remoteLabel}`;
-    main.appendChild(el('em', '', stateText));
+    main.appendChild(el('b', '', `显示器 ${letters[m.id] || '?'} · ${m.name}`));
+    main.appendChild(el('em', '', m.ownerLabel ? `正在显示 ${m.ownerLabel}` : '当前显示：未知（DDC 读不到）'));
     head.appendChild(main);
-
-    const actions = el('div', 'mon-actions');
-    for (const role of ['local', 'remote']) {
-      const isLocal = role === 'local';
-      const label = isLocal ? localLabel : remoteLabel;
-      const b = el('button', 'btn btn-mini', `切到 ${label}`);
-      b.disabled = !m.switchable || m.owner === role;
-      b.addEventListener('click', () => push(window.api.switchMonitor(m.id, role)));
-      actions.appendChild(b);
-    }
-    head.appendChild(actions);
     item.appendChild(head);
 
-    const ioRows = [
-      { key: 'local', label: localLabel, cur: m.local },
-      { key: 'remote', label: remoteLabel, cur: m.remote }
-    ];
-    for (const r of ioRows) {
+    for (const d of devices) {
       const line = el('div', 'mon-io');
-      const role = el('span', 'mon-io-role', r.label);
-      role.title = r.label;
+      const role = el('span', 'mon-io-role', d.name);
+      role.title = d.name;
       line.appendChild(role);
+
       const chips = el('div', 'chips');
-      for (const it of chipItemsFor(m.currentInput || '', m)) {
+      const cur = (m.ports[d.id] || {}).value || '';
+      for (const it of chipItems([cur])) {
         const b = el('button', 'chip', it.label);
-        b.dataset.value = it.value;
-        b.dataset.role = r.key;
-        if (it.value === r.cur.value) b.classList.add('is-on');
-        if (it.value && it.value === m.currentInput) b.classList.add('is-cur');
-        b.addEventListener('click', () => push(window.api.selectMonitorInput(m.id, r.key, it.value)));
+        b.type = 'button';
+        if (it.value === cur) b.classList.add('is-on');
+        b.addEventListener('click', () => push(window.api.setPort(m.id, d.id, it.value)));
         chips.appendChild(b);
       }
       line.appendChild(chips);
@@ -234,51 +339,48 @@ function buildMonitorList(s) {
   }
 }
 
-/* ---------------- 渲染：切换电脑 ---------------- */
+/* ---------------- 快捷键 ---------------- */
 
-function renderSwitch(s) {
-  buildWorkbench(s);
-  buildMonitorList(s);
+function buildHotkeys(s) {
+  const hk = s.hotkeys || { enabled: true, global: 'F12', monitor: {}, choices: [] };
+  const monitors = s.monitors || [];
+  const letters = monitorLetters(s);
 
-  // 快捷键
-  setOptions($('#hotkeySelect'), HOTKEYS.map((k) => ({ value: k, label: hotkeyLabel(k) })), s.hotkey.key);
-  $('#hotkeyEnabled').checked = !!s.hotkey.enabled;
-  $('#hotkeySelect').disabled = !s.hotkey.enabled;
-  $('#hotkeyHint').textContent = s.hotkey.enabled
-    ? `已启用 ${hotkeyLabel(s.hotkey.key)} · 关闭窗口后仍有效。`
-    : '全局快捷键未启用，仅可用界面按钮切换。';
+  const choices = [{ value: 'NONE', label: '关闭' }]
+    .concat((hk.choices || []).map((k) => ({ value: k, label: hotkeyLabel(k) })));
 
-  $('#launchAtLogin').checked = !!s.launchAtLogin;
+  $('#hotkeyEnabled').checked = !!hk.enabled;
+  setOptions($('#hotkeyGlobal'), choices, hk.global || 'NONE');
+  $('#hotkeyGlobal').disabled = !hk.enabled;
 
-  // DDC 状态
-  const hint = $('#ddcHint');
-  const ddcOk = s.ddc && s.ddc.available;
-  const nMon = (s.workbench && s.workbench.monitors) ? s.workbench.monitors.length : 0;
-  hint.textContent = ddcOk
-    ? `${nMon} 块显示器均已就绪 · 点「切到」只动那一块屏`
-    : `DDC 不可用${s.ddc && s.ddc.error ? `（${s.ddc.error}）` : ''} · 请在显示器菜单里开启 DDC/CI`;
-  hint.className = ddcOk ? 'hint' : 'hint warn-text';
-
-  // 一键切换
-  const btn = $('#switchBtn');
-  const localLabel = s.computers.local.label;
-  const goingTo = s.active === 'local' ? s.computers.remote.label : localLabel;
-  btn.textContent = `一键切换全部显示器 → ${goingTo}`;
-  btn.dataset.target = s.active === 'local' ? 'remote' : 'local';
-
-  // 状态行
-  const block = $('#switchStatus');
-  block.innerHTML = '';
-  const lines = (s.statusLines || []).slice(0, 3);
-  if (!lines.length) block.appendChild(el('span', '', '准备就绪'));
-  else {
-    for (const it of lines) {
-      block.appendChild(el('div', it.kind === 'warn' ? 'warn' : it.kind === 'ok' ? 'ok' : '', it.text));
+  const list = $('#hotkeyList');
+  const sig = monitors.map((m) => `${m.id}:${(hk.monitor || {})[m.id]}`).join(',');
+  if (list.dataset.sig !== sig) {
+    list.dataset.sig = sig;
+    list.innerHTML = '';
+    for (const m of monitors) {
+      const row = el('div', 'hk-row');
+      row.appendChild(el('span', 'hk-name', `显示器 ${letters[m.id] || '?'} 切换`));
+      const sel = document.createElement('select');
+      sel.className = 'select select-sm';
+      sel.dataset.mon = m.id;
+      row.appendChild(sel);
+      list.appendChild(row);
+      setOptions(sel, choices, (hk.monitor || {})[m.id] || 'NONE');
+      sel.disabled = !hk.enabled;
+      sel.addEventListener('change', (e) => {
+        push(window.api.setHotkey(true, 'monitor', m.id, e.target.value === 'NONE' ? '' : e.target.value));
+      });
     }
   }
+  $$('#hotkeyList select').forEach((sel) => { sel.disabled = !hk.enabled; });
+
+  $('#hotkeyHint').textContent = hk.enabled
+    ? `全部显示器切换：${hotkeyLabel(hk.global)} · 窗口关闭后仍然有效。某块屏专注用时可以直接用它的专属键。`
+    : '全局快捷键未启用，只能用界面上的按钮切换。';
 }
 
-/* ---------------- 渲染：传输与剪贴板 ---------------- */
+/* ---------------- 传输与剪贴板 ---------------- */
 
 const STATUS_TEXT = {
   waiting: '等待对方接收…',
@@ -290,50 +392,56 @@ const STATUS_TEXT = {
   rejected: '对方已拒绝'
 };
 
+function targetsOf(s) {
+  return (s.files && s.files.targets) || [];
+}
+
 function renderPeers(s) {
   const box = $('#peerChips');
   const peers = (s.connection && s.connection.peers) || [];
-  const target = (s.files && s.files.target) || '';
-  const sig = peers.map((p) => p.name).join(',') + '|' + target;
+  const targets = targetsOf(s);
+  const sig = peers.map((p) => `${p.name}:${p.label}`).join(',') + '|' + targets.join(',');
   if (box.dataset.sig !== sig) {
     box.innerHTML = '';
     if (!peers.length) {
-      box.appendChild(el('div', 'peers-empty', '未连接 · 让另一台电脑也打开本软件，同一局域网会自动发现'));
+      box.appendChild(el('div', 'peers-empty', '未连接 · 让其它电脑也打开本软件，同一局域网会自动发现'));
     } else {
       for (const p of peers) {
         const b = el('button', 'peer-chip');
+        b.type = 'button';
         b.dataset.name = p.name;
-        if (p.name === target) b.classList.add('is-on');
-        b.innerHTML = '<span class="dot"></span><span class="nm"></span><span class="tag"></span>';
-        b.querySelector('.nm').textContent = p.name;
+        if (targets.includes(p.name)) b.classList.add('is-on');
+        b.innerHTML = '<span class="dot"></span><span class="nm"></span><span class="tag"></span><span class="tick">✓</span>';
+        b.querySelector('.nm').textContent = p.label || p.name;
         b.querySelector('.tag').textContent = p.platform === 'darwin' ? 'Mac' : p.platform === 'win32' ? 'Windows' : '';
-        b.addEventListener('click', () => push(window.api.setTargetPeer(p.name)));
+        b.addEventListener('click', () => {
+          const next = targets.includes(p.name)
+            ? targets.filter((n) => n !== p.name)
+            : targets.concat(p.name);
+          push(window.api.setTargets(next));
+        });
         box.appendChild(b);
       }
     }
     box.dataset.sig = sig;
   }
-  $('#dzPeer').textContent = target ? `发送到 ${target}` : '未连接 · 等待另一台电脑';
+
+  const names = targets.map((n) => {
+    const p = peers.find((x) => x.name === n);
+    return p ? (p.label || p.name) : n;
+  });
+  $('#dzPeer').textContent = names.length ? `发送到 ${names.join('、')}` : '未连接 · 等待其它设备';
+  $('#targetNote').textContent = names.length > 1 ? `已选 ${names.length} 台` : '';
 }
 
 function renderShare(s) {
-  const c = s.clipboard;
+  const c = s.clipboard || {};
   const f = s.files || { transfers: [], recvDir: '' };
 
   $('#clipEnabled').checked = !!c.enabled;
   $('#fileRecvDir').value = f.recvDir || '';
   $('#askLarge').checked = c.askLarge !== false;
   $('#autoAccept').checked = !!f.autoAccept;
-
-  const banner = $('#pairBanner');
-  const connected = s.connection.connected;
-  banner.classList.toggle('warn', !connected);
-  $('#pairTitle').textContent = connected ? `已连接 · ${s.connection.peers[0].name}` : '未连接 · 等待局域网发现';
-  $('#pairSub').textContent = connected
-    ? (c.enabled
-      ? '双向连接已验证 · A 电脑复制，B 电脑直接粘贴；文件与文字也能直接发。'
-      : '双向连接已验证 · 剪贴板同步当前关闭，但文件与文字仍可发送。')
-    : '两台电脑连同一个 Wi-Fi 或网线，都打开本软件即可自动连接，无需配对码。';
 
   renderPeers(s);
   renderTransfers(s);
@@ -397,37 +505,95 @@ function renderTransfers(s) {
   });
 }
 
+/* ---------------- 共用键鼠：设备排列 ---------------- */
+
+function renderArrange(s) {
+  const box = $('#arrangeStrip');
+  const devices = s.devices || [];
+  const sig = s.arrange.map((id) => {
+    const d = devices.find((x) => x.id === id) || { name: id, online: false };
+    return `${id}:${d.name}:${d.online}`;
+  }).join('|') + '#' + (s.input && s.input.edgeSwitch ? '1' : '0');
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  box.innerHTML = '';
+
+  s.arrange.forEach((id, i) => {
+    const d = devices.find((x) => x.id === id) || { id, name: id, online: false, local: false };
+    const tile = el('div', `arr-tile${d.online ? '' : ' is-off'}${d.local ? ' is-local' : ''}`);
+    tile.draggable = true;
+    tile.dataset.id = id;
+
+    tile.appendChild(el('span', 'arr-idx', String(i + 1)));
+    const ico = el('span', 'arr-ico');
+    ico.innerHTML = d.kind === 'mac' ? ICON_MAC : ICON_PC;
+    tile.appendChild(ico);
+    const body = el('div', 'arr-body');
+    body.appendChild(el('b', '', d.name));
+    body.appendChild(el('em', '', d.local ? '本机' : (d.online ? '在线' : '离线')));
+    tile.appendChild(body);
+    tile.appendChild(el('span', 'arr-grip', '⠿'));
+
+    tile.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', id);
+      e.dataTransfer.effectAllowed = 'move';
+      tile.classList.add('is-drag');
+    });
+    tile.addEventListener('dragend', () => tile.classList.remove('is-drag'));
+    tile.addEventListener('dragover', (e) => { e.preventDefault(); tile.classList.add('is-over'); });
+    tile.addEventListener('dragleave', () => tile.classList.remove('is-over'));
+    tile.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      tile.classList.remove('is-over');
+      const from = e.dataTransfer.getData('text/plain');
+      if (!from || from === id) return;
+      const list = s.arrange.slice();
+      list.splice(list.indexOf(from), 1);
+      list.splice(list.indexOf(id), 0, from);
+      push(window.api.setArrange(list));
+    });
+    box.appendChild(tile);
+
+    if (i < s.arrange.length - 1) box.appendChild(el('span', 'arr-arrow', '→'));
+  });
+
+  box.ondragover = (e) => e.preventDefault();
+  box.ondrop = (e) => {
+    e.preventDefault();
+    const from = e.dataTransfer.getData('text/plain');
+    if (!from || from === s.arrange[s.arrange.length - 1]) return;
+    const list = s.arrange.filter((x) => x !== from);
+    list.push(from);
+    push(window.api.setArrange(list));
+  };
+
+  const others = devices.filter((d) => !d.local).length;
+  const hint = $('#arrangeHint');
+  if (hint) {
+    if (!others) {
+      hint.textContent = '还没发现其它设备。让别的电脑也打开本软件（同一局域网），它们会自动出现在这里，再拖到想要的位置。';
+    } else {
+      const first = devices.find((d) => s.arrange.indexOf(d.id) === 0);
+      hint.textContent = `当前从左到右：${s.arrange.map((id) => (devices.find((x) => x.id === id) || {}).name || id).join(' → ')}。`
+        + '鼠标推到某台设备的右边缘，就流到它右边那台；推回左边缘就流回来。';
+      if (first && first.local) hint.textContent += '';
+    }
+  }
+}
+
 /* ---------------- 渲染：共用键鼠 ---------------- */
 
 function renderInput(s) {
-  const local = s.computers.local;
-  const remote = s.computers.remote;
   const st = s.input || {};
 
-  $$('#modeList .mode').forEach((n) => {
-    n.classList.toggle('is-on', n.dataset.mode === s.inputMode);
-  });
-
-  $('#modeLocalTitle').textContent = `共用 ${local.label} 的键鼠`;
-  $('#modeLocalDesc').textContent = `${local.label} 的键鼠跟随画面，控制当前电脑`;
-  $('#modeRemoteTitle').textContent = `共用 ${remote.label} 的键鼠`;
-  $('#modeRemoteDesc').textContent = `${remote.label} 的键鼠跟随画面，控制当前电脑`;
-
-  // 边缘切换
   $('#edgeSwitch').checked = st.edgeSwitch !== false;
-  $$('#edgeSideSeg button').forEach((b) => {
-    b.classList.toggle('is-on', b.dataset.side === (st.edgeSide || 'right'));
-    b.disabled = st.edgeSwitch === false;
-  });
-
-  // 按键映射
   $$('#modSeg button').forEach((b) => {
     b.classList.toggle('is-on', b.dataset.mod === (st.modMap || 'cmd-ctrl'));
   });
   $('#modHint').textContent = st.modDesc || '';
   $('#keyDebug').checked = !!st.keyDebug;
 
-  // 权限：只在真正捕获失败时才报警（未签名应用的系统 API 常误报未授权）
   const granted = s.permission.accessibility;
   const capturing = !!st.capturing;
   const line = $('#permLine');
@@ -445,11 +611,27 @@ function renderInput(s) {
   }
   $('#openPerm').style.display = s.isMac && !granted ? '' : 'none';
 
-  const currentLabel = s.active === 'local' ? local.label : remote.label;
-  $('#currentScreen').textContent = currentLabel;
-  $('#currentHost').textContent = s.inputMode === 'local'
-    ? local.label
-    : s.inputMode === 'remote' ? remote.label : '各自独立';
+  $('#currentScreen').textContent = s.activeName || '—';
+  const hostLabel = s.inputMode === 'local'
+    ? (s.me ? s.me.name : '本机')
+    : s.inputMode === 'remote'
+      ? ((s.connection.peers[0] && (s.connection.peers[0].label || s.connection.peers[0].name)) || '对端')
+      : '各自独立';
+  $('#currentHost').textContent = hostLabel;
+}
+
+/* ---------------- 状态行 ---------------- */
+
+function renderStatus(s) {
+  const block = $('#switchStatus');
+  block.innerHTML = '';
+  const lines = (s.statusLines || []).slice(0, 3);
+  if (!lines.length) block.appendChild(el('span', '', '准备就绪'));
+  else {
+    for (const it of lines) {
+      block.appendChild(el('div', it.kind === 'warn' ? 'warn' : it.kind === 'ok' ? 'ok' : '', it.text));
+    }
+  }
 }
 
 /* ---------------- 总渲染 ---------------- */
@@ -457,14 +639,17 @@ function renderInput(s) {
 function apply(s) {
   S = s;
   document.body.classList.toggle('win', !s.isMac);
-  const connected = s.connection.connected;
-  $('#netDot').classList.toggle('ok', connected);
-  $('#netText').textContent = connected ? `${s.connection.peers[0].name} 已连接` : '未连接 · 等待另一台电脑';
   $('#footVer').textContent = `v${s.version}`;
 
-  renderSwitch(s);
+  renderConn(s);
+  renderModes(s);
+  buildWorkbench(s);
+  buildMonitorList(s);
+  buildHotkeys(s);
   renderShare(s);
+  renderArrange(s);
   renderInput(s);
+  renderStatus(s);
 }
 
 /* ---------------- 事件 ---------------- */
@@ -487,33 +672,49 @@ async function push(promise) {
   }
 }
 
-async function doSwitch(role, btn) {
-  const old = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '切换中…'; }
+async function switchToDevice(deviceId) {
   try {
-    const r = await window.api.switchTo(role);
+    const r = await window.api.switchDevice(deviceId);
     if (r && r.state) apply(r.state);
+  } catch (e) {
+    console.error('[ui] switch', e);
+  }
+}
+
+async function switchMonitor(monitorId, deviceId, tile) {
+  if (tile) { tile.classList.add('is-busy'); }
+  try {
+    const s = await window.api.switchMonitor(monitorId, deviceId);
+    if (s && s.version) apply(s);
+  } catch (e) {
+    console.error('[ui] switchMonitor', e);
   } finally {
-    if (btn) { btn.textContent = old; btn.disabled = false; }
+    if (tile) tile.classList.remove('is-busy');
   }
 }
 
 function bindSwitchPanel() {
   $('#redetectBtn').addEventListener('click', () => push(window.api.detectMonitor()));
 
-  $('#hotkeyEnabled').addEventListener('change', (e) => {
-    push(window.api.setHotkey(e.target.checked, $('#hotkeySelect').value));
+  $$('[data-role="mode"] button').forEach((b) => {
+    b.addEventListener('click', () => push(window.api.setInputMode(b.dataset.mode)));
   });
-  $('#hotkeySelect').addEventListener('change', (e) => {
-    push(window.api.setHotkey(true, e.target.value));
+
+  $('#portToggle').addEventListener('click', () => {
+    const list = $('#monitorList');
+    const collapsed = list.classList.toggle('is-collapsed');
+    $('#portToggle').textContent = collapsed ? '展开设置' : '收起设置';
+  });
+
+  $('#hotkeyEnabled').addEventListener('change', (e) => {
+    push(window.api.setHotkey(e.target.checked, 'global', '', $('#hotkeyGlobal').value));
+  });
+  $('#hotkeyGlobal').addEventListener('change', (e) => {
+    const v = e.target.value === 'NONE' ? '' : e.target.value;
+    push(window.api.setHotkey(true, 'global', '', v));
   });
 
   $('#launchAtLogin').addEventListener('change', (e) => push(window.api.setLaunchAtLogin(e.target.checked)));
-
-  $('#switchBtn').addEventListener('click', (e) => {
-    const role = e.currentTarget.dataset.target || 'remote';
-    doSwitch(role, e.currentTarget);
-  });
 }
 
 function bindSharePanel() {
@@ -524,11 +725,11 @@ function bindSharePanel() {
   $('#fileRecvChoose').addEventListener('click', () => push(window.api.setRecvDir()));
   $('#fileRecvOpen').addEventListener('click', () => push(window.api.openRecvDir()));
 
-  const target = () => (S && S.files && S.files.target) || '';
+  const targets = () => targetsOf(S || {});
 
   $('#pickFiles').addEventListener('click', (e) => {
     e.stopPropagation();
-    push(window.api.pickFiles(target()));
+    push(window.api.pickFiles(targets()));
   });
 
   const sendTextNow = () => {
@@ -536,7 +737,7 @@ function bindSharePanel() {
     const text = input.value.trim();
     if (!text) return;
     input.value = '';
-    push(window.api.sendText(text, target()));
+    push(window.api.sendText(text, targets()));
   };
   $('#sendTextBtn').addEventListener('click', sendTextNow);
   $('#textInput').addEventListener('keydown', (e) => {
@@ -551,22 +752,15 @@ function bindSharePanel() {
     e.preventDefault();
     over(false);
     const paths = Array.from(e.dataTransfer.files || []).map((f) => f.path).filter(Boolean);
-    if (paths.length) push(window.api.sendPaths(paths, target()));
+    if (paths.length) push(window.api.sendPaths(paths, targets()));
   });
   window.addEventListener('dragover', (e) => e.preventDefault());
   window.addEventListener('drop', (e) => e.preventDefault());
 }
 
 function bindInputPanel() {
-  $$('#modeList .mode').forEach((btn) => {
-    btn.addEventListener('click', () => push(window.api.setInputMode(btn.dataset.mode)));
-  });
   $('#openPerm').addEventListener('click', () => push(window.api.openAccessibility()));
-
   $('#edgeSwitch').addEventListener('change', (e) => push(window.api.setEdgeSwitch(e.target.checked)));
-  $$('#edgeSideSeg button').forEach((b) => {
-    b.addEventListener('click', () => push(window.api.setEdgeSide(b.dataset.side)));
-  });
   $$('#modSeg button').forEach((b) => {
     b.addEventListener('click', () => push(window.api.setModMap(b.dataset.mod)));
   });

@@ -7,8 +7,7 @@ const path = require('path');
 const CONFIG_DIR = path.join(os.homedir(), '.switchscreen');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 
-// 默认配置。switchHotkey 用 iohook 的 keycode。
-// 默认：Ctrl + Alt + ` (keycode 192) 作为「切到下一台」快捷键。
+// 默认配置。switchHotkey 用 iohook 的 keycode（仅非 GUI 场景用到）。
 const DEFAULTS = {
   peerName: os.hostname(),
   port: 47748,
@@ -17,8 +16,7 @@ const DEFAULTS = {
   clipboardSync: true,     // 剪贴板同步开关
   isHost: true,            // 本机是否接物理键鼠（捕获端）
   switchHotkey: { keycode: 192, ctrl: true, alt: true, shift: false, meta: false },
-  // 显示器输入源切换命令（按平台）。{input} 会被替换成目标机的输入源值。
-  // 例：Linux/Win 用 ddcutil，macOS 用 ddcctl。
+  // 显示器输入源切换命令（旧版命令行兜底，GUI 走内置 DDC）
   monitor: {
     command: {
       linux: 'ddcutil setvcp 60 {input}',
@@ -26,17 +24,20 @@ const DEFAULTS = {
       darwin: 'ddcctl -d 1 -i {input}'
     }
   },
-  // 本机对应的显示器输入源值（切回本机时用）。例 "0x11"
+  // 本机对应的显示器输入源值（默认值，逐显示器的配置见 ui.portMap）
   selfInput: '0x11',
-  // 对端名 -> 显示器输入源值。切换时用目标机的 input 填到 monitor.command。
-  peers: {
-    // "MacBook-Pro": "0x12"
-  },
+  // 对端名 -> 显示器输入源值（旧字段，保留兼容）
+  peers: {},
   // 界面层配置（GUI 使用）
   ui: {
     activeTab: 'switch',      // switch | share | input
+    // 本机显示名：可以随便改，会同步给其它设备显示（网络标识仍用 peerName）
+    displayName: '',
     hotkeyEnabled: true,
-    hotkeyKey: 'F12',         // 界面里展示的快捷键名，实际生效见 switchHotkey
+    // 快捷键：global = 全局切换（切到下一台）；monitor = 每块显示器各自一个
+    // { global: 'F12', monitor: { 'ddc:0': 'CommandOrControl+Alt+1' } }
+    hotkeyKey: 'F12',         // 兼容旧字段，等同于 hotkeys.global
+    hotkeys: { global: 'F12', monitor: {} },
     launchAtLogin: false,
     inputMode: 'separate',    // separate 各用各的 | local 共用本机键鼠 | remote 共用对端键鼠
     mouseSpeed: 1,            // 0.5 ~ 2（相对位移的缩放系数）
@@ -48,14 +49,16 @@ const DEFAULTS = {
     remoteInputLabel: 'HDMI2',
     receiveDir: '',           // 空则用 ~/Desktop/SwitchScreen/clipboard/received
     askLarge: true,
-    // 每台显示器各自的接口：{ "ddc:0": { local: "0x11", remote: "0x12" } }
-    // 未配置时回退到上面的 localInput / remoteInput
-    perMonitor: {},
+    // 每块显示器上，每台电脑各自接哪个口：{ 'ddc:0': { 'PC-A': '0x11', 'PC-B': '0x12' } }
+    portMap: {},
+    perMonitor: {},           // 旧字段，首次启动自动迁移到 portMap
     autoAccept: false,        // true = 不需要确认直接接收文件（默认需手动确认）
-    targetPeer: '',           // 上次选中的接收对象
-    // ---- 共用键鼠 ----
-    edgeSwitch: true,         // 鼠标推到屏幕边缘就切到另一台
-    edgeSide: 'right',        // 另一台电脑在本机的哪一侧：right | left | top | bottom
+    targetPeer: '',           // 上次选中的接收对象（兼容旧字段）
+    targetPeers: [],          // 传输对象（可多选）
+    // ---- 共用键鼠 / 无缝移动 ----
+    edgeSwitch: true,         // 鼠标推到屏幕边缘就换电脑
+    arrange: [],              // 设备排列顺序（deviceId 数组，含本机）；数组下标 = 从左到右的位置
+    edgeSide: 'right',        // 旧字段，保留兼容（排列模型已取代它）
     modMap: 'cmd-ctrl',       // 修饰键映射：cmd-ctrl（推荐）| swap | off
     keyDebug: false           // 打开后在状态栏打印原始键码，排查按键问题用
   }
