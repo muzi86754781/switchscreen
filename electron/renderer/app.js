@@ -354,7 +354,8 @@ function buildWorkbench(s) {
     left.appendChild(head);
 
     const actions = el('div', 'wb-actions');
-    if (d.inUse) actions.appendChild(el('span', 'wb-flag', hereCount === total ? '全部显示中' : '使用中'));
+    // 全部在用时不重复说一遍（按钮已经写着「全部显示中」）
+    if (d.inUse && !allHere) actions.appendChild(el('span', 'wb-flag', '使用中'));
     const go = el('button', 'wb-go', allHere ? '全部显示中' : '全部切到这台');
     go.type = 'button';
     go.disabled = allHere || !d.online;

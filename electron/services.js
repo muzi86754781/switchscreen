@@ -331,9 +331,13 @@ function importPorts(list) {
     if (!m) continue;
     if (!cfg.ui.portMap) cfg.ui.portMap = {};
     const t = cfg.ui.portMap[m.id] || {};
+    const live = normInput(m.currentInput);
     for (const dev of Object.keys(it.ports)) {
       const v = normInput(it.ports[dev]);
       if (!v || t[dev]) continue;
+      // 本机此刻正用着这个口（DDC 实测）：一块屏的一个口只接一根线，
+      // 说明对端这条记错了 —— 本机实测是唯一能自证的方向，拒收。
+      if (dev !== cfg.peerName && live && sameInput(v, live)) continue;
       // 冲突保护：同一个口不可能同时属于两台设备。
       // 如果本地那条是本次「猜」的，就让位给对端（对端的配置是它自己屏幕上的事实）；
       // 不是猜的就保持本地优先，谁也不覆盖谁 —— 否则两端会互相「确认」着错下去。
@@ -354,58 +358,68 @@ function importPorts(list) {
 }
 
 /**
- * 自动补齐接口。
- *
- * 能证明「这块屏此刻显示的是谁」的时候才学：
- *   1) 这块屏当前的输入源已经等于某台设备配过的口 —— 归属自证；
- *   2) 上次我们亲手把这块屏切给某台设备并成功了（ownerMap）。
- * 都没有时，按「屏幕正显示最后切到的那台」记一条**猜测**，好让第一次安装就能用；
- * 猜测会被对端同步过来的真实配置推翻（importPorts 里的冲突处理），不会将错就错。
- */
-/**
  * 本次启动里「猜」出来的接口（`显示器id|设备名`）。
  * 猜的东西不许固执：对端把真实配置同步过来、且跟猜测冲突时，直接撤掉猜测。
  */
 const guessedPorts = new Set();
 
+/**
+ * 自动补齐接口。
+ *
+ * 铁证只有一条，但它是决定性的：
+ *
+ *   **本机的 DDC 能枚举到这块屏，就说明这块屏此刻正在显示本机的画面。**
+ *
+ * 显示器切到别的机器后，本机系统会认为这块屏「已断开」，压根枚举不到
+ * （Windows 的 dxva2 走 EnumDisplayMonitors，macOS 的 m1ddc 也只列活动显示器）。
+ * 既然它正在显示本机，那它**当前的输入源就是本机在这块屏上的口** ——
+ * 配置里存了别的值，就是存错了（v0.8.2 遗留的假配置），直接纠正。
+ *
+ * 这条规则不会让两台机器互相打架：屏幕显示谁，就只有谁枚举得到它，
+ * 也只有那一方能读到这个口，同一个口不可能被两台同时读成「自己的」。
+ *
+ * 读不到当前输入源（不少显示器不支持读 VCP 0x60）时不动配置，
+ * 归属退回 ownerMap（上次亲手切成功的记录）。
+ */
 function learnPorts() {
   if (!monitorsCache.length) return 0;
   if (!cfg.ui.portMap) cfg.ui.portMap = {};
   if (!cfg.ui.ownerMap) cfg.ui.ownerMap = {};
+  const me = cfg.peerName;
   const ids = deviceIds();
   let n = 0;
+  let changed = false;
   for (const m of monitorsCache) {
-    if (m.internal || !m.currentInput) continue;
+    if (m.internal) continue;
+
+    // 枚举得到这块屏 = 它此刻正在显示本机 → 归属一定是本机（不管读不读得到输入源）
+    if (cfg.ui.ownerMap[m.id] !== me) {
+      cfg.ui.ownerMap[m.id] = me;
+      n += 1;
+    }
+
     const cur = normInput(m.currentInput);
-    if (!cur) continue;
+    if (!cur) continue; // 读不到就别碰接口配置，免得把对的改错
     const t = cfg.ui.portMap[m.id] || {};
 
-    // 1) 这个口已经有主：顺手确认归属（这块屏现在就是这台在用）
-    const claimed = ids.find((id) => t[id] && sameInput(t[id], cur));
-    if (claimed) {
-      if (cfg.ui.ownerMap[m.id] !== claimed) { cfg.ui.ownerMap[m.id] = claimed; n += 1; }
-      continue;
+    // 铁证：这块屏正在显示本机 → 当前输入源就是本机的口（存错了就纠正）
+    if (!sameInput(t[me], cur)) {
+      t[me] = cur;
+      guessedPorts.delete(`${m.id}|${me}`);
+      n += 1;
+      changed = true;
     }
 
-    // 2) 归属已确认过、只是这台设备在这块屏上还没填口 → 现在读到的就是它的口
-    const own = cfg.ui.ownerMap[m.id];
-    if (own && ids.includes(own) && !t[own]) {
-      t[own] = cur;
-      cfg.ui.portMap[m.id] = t;
+    // 一个口只能接一根线、属于一台机器：别的设备也记着这个口，那条一定是错的
+    for (const id of ids) {
+      if (id === me || !t[id] || !sameInput(t[id], cur)) continue;
+      delete t[id];
+      if (cfg.ui.ownerMap[m.id] === id) cfg.ui.ownerMap[m.id] = me;
+      guessedPorts.delete(`${m.id}|${id}`);
       n += 1;
-      continue;
+      changed = true;
     }
-
-    // 3) 谁都没认领：先按「屏幕正显示的是最后切到的那台」记一条**猜测**。
-    //    之所以敢猜：绝大多数人都是在「正看着这台机器」的时候第一次打开软件。
-    //    猜错也不怕 —— 对端会把它的真实配置同步过来，冲突时这条猜测会被撤掉（见 importPorts）。
-    if (activeTarget && !t[activeTarget]) {
-      t[activeTarget] = cur;
-      cfg.ui.portMap[m.id] = t;
-      cfg.ui.ownerMap[m.id] = activeTarget;
-      guessedPorts.add(`${m.id}|${activeTarget}`);
-      n += 1;
-    }
+    if (changed) { cfg.ui.portMap[m.id] = t; changed = false; }
   }
   if (n) persist();
   return n;
