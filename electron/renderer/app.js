@@ -193,6 +193,18 @@ function buildChain(d, letters, color) {
   }
 
   const map = el('div', 'chain-map');
+  // 没有系统坐标的屏（被切走的、memo 补出来的）不参与等比定位，
+  // 但也不能叠在左上角 —— 给它排到已定位屏的最右边
+  let vx = 0;
+  for (const m of items) {
+    if (m.pos) vx = Math.max(vx, m.pos.x + m.pos.width);
+  }
+  for (const m of items) {
+    if (!m.pos && !m.internal) {
+      m.pos = { x: vx + 60, y: 0, width: 1920, height: 1080 };
+      vx += 2040;
+    }
+  }
   for (const m of items) map.appendChild(buildTile(m, d, letters, color));
   chain.appendChild(map);
 

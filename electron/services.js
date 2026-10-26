@@ -411,13 +411,29 @@ function learnPorts() {
   for (const m of monitorsCache) {
     if (m.internal) continue;
 
+    const cur = normInput(m.currentInput);
+
+    // Mac 的系统枚举（system_profiler）会把「正显示别的电脑」的屏也列出来 —— 线还插着，EDID 就在。
+    // 所以在 Mac 上「枚举到」不是归属证据，唯一可信的是 DDC 读回的输入源：
+    // 它等于某台设备已配的口 → 自证归它；对不上任何已配口 → 这根线可能根本是另一台电脑的，绝不写。
+    if (IS_MAC) {
+      if (!cur) continue;
+      const t = cfg.ui.portMap[m.id] || {};
+      const claimed = ids.find((id) => t[id] && sameInput(t[id], cur));
+      if (claimed && cfg.ui.ownerMap[m.id] !== claimed) {
+        cfg.ui.ownerMap[m.id] = claimed;
+        n += 1;
+      }
+      continue;
+    }
+
+    // Windows：dxva2 只枚举活动屏，切走的屏会从系统里消失。
     // 枚举得到这块屏 = 它此刻正在显示本机 → 归属一定是本机（不管读不读得到输入源）
     if (cfg.ui.ownerMap[m.id] !== me) {
       cfg.ui.ownerMap[m.id] = me;
       n += 1;
     }
 
-    const cur = normInput(m.currentInput);
     if (!cur) continue; // 读不到就别碰接口配置，免得把对的改错
     const t = cfg.ui.portMap[m.id] || {};
 
@@ -459,8 +475,12 @@ function ownerOf(m) {
     for (const id of deviceIds()) {
       if (sameInput(portFor(m.id, id), m.currentInput)) return id;
     }
-  } else if (m.present !== false) {
-    // 2) 本机枚举得到它、只是读不到输入源 —— 它就在显示本机
+    // 读到了但对不上任何已配口 —— 这块屏正显示「某个还没配过的口」。
+    // 在 Mac 上它很可能是另一台电脑的线（Mac 的系统枚举把切走的屏也列出来），不能判本机。
+  } else if (m.present !== false && IS_WIN) {
+    // 2) 只在 Windows 上「枚举得到它 = 它就在显示本机」：
+    //    dxva2 只枚举活动屏，切到别的电脑后系统里就看不到它了。
+    //    Mac 的 system_profiler 会把切走的屏一起列出来，绝不能这么判。
     return cfg.peerName;
   }
 
@@ -597,13 +617,16 @@ function offlineRows() {
   const out = [];
   for (const s of a.screens) {
     if (!s.key || have.has(s.key)) continue;
+    // 只补「本机真的接过线、见过的屏」（screenMemo 里有记录）。
+    // 对端接了、但本机从没见过的屏不属于本机这行 —— 画出来只会把排列搅乱。
     const memo = (cfg.ui.screenMemo && cfg.ui.screenMemo[s.key]) || {};
+    if (!memo.name && !memo.pos) continue;
     out.push({
       key: s.key,
       id: 'mem:' + String(s.key).replace(/[^a-zA-Z0-9]+/g, '_'),
       index: null,
       displayId: null,
-      name: s.name || memo.name || '显示器',
+      name: memo.name || s.name || '显示器',
       serial: memo.serial || '',
       size: '',
       currentInput: '',
@@ -1373,11 +1396,11 @@ async function onSwitchRequest({ input, label, from, index, target }) {
       persist();
     }
     pushStatus(from ? `已由 ${from} 把${scope}切换到 ${name}` : `已将${scope}切换到 ${name}`, 'ok');
-    if (r.partial) pushStatus(`有显示器未响应：${r.error}`, 'warn');
+    if (r.partial) pushStatus(`有显示器未响应：${r.error}（VGA 线和一些转接头不走 DDC，屏幕收不到切换指令，属于正常现象，这根线连的口请在接了 DDC 可用线的那台电脑上切）`, 'warn');
     setTimeout(() => { detectMonitors().catch(() => {}); }, 1500);
   } else {
     pushStatus(`切换到 ${name} 失败`, 'warn');
-    pushStatus(r.error || '未知原因', 'warn');
+    pushStatus(`${r.error || '未知原因'}（若显示器经 VGA / 转接头连接，它可能不支持 DDC/CI，无法远程切换）`, 'warn');
   }
   return r;
 }

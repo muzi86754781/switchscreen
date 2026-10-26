@@ -156,13 +156,20 @@ function createPeer(userConfig, hooks) {
     // 由鼠标推边缘触发的切换不加锁，否则无缝移动会「走到头就卡住」。
     if (!o.edge) autoLockUntil = Date.now() + 1500;
 
-    if (typeof h.getSwitchPlan === 'function') {
+    // 鼠标跨设备流动只切「键鼠控制权」，不动显示器 ——
+    // 屏幕怎么分是用户在「设备与显示器」里手动切的，边缘穿越不能去改它。
+    if (o.edge) {
+      plan = null;
+    } else if (typeof h.getSwitchPlan === 'function') {
       try { plan = h.getSwitchPlan(target); } catch (e) { console.warn('[peer] 计算切换计划失败:', e.message); }
     }
 
     activePeer = target;
 
-    if (plan) {
+    if (o.edge) {
+      // 边缘流动：只切键鼠控制权，不动显示器（也不通知对端切屏）
+      result = 'sent';
+    } else if (plan) {
       label = plan.label || '';
       const hadPlan = !!plan.plan;
       // 本机直接切自己接线能碰到的每一块屏（DDC 走视频线，与当前画面在哪台无关）
