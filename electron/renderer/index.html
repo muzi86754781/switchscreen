@@ -23,9 +23,8 @@
 
     <nav class="tabs" id="tabs">
       <button class="tab is-active" data-tab="switch">切换电脑</button>
-      <button class="tab" data-tab="clip">复制粘贴</button>
+      <button class="tab" data-tab="share">传输与剪贴板</button>
       <button class="tab" data-tab="input">共用键鼠</button>
-      <button class="tab" data-tab="file">文件传输</button>
     </nav>
 
     <main class="content">
@@ -77,10 +76,6 @@
             <button class="btn btn-ghost" id="redetectBtn">重新检测</button>
           </div>
           <div class="monitor-list" id="monitorList"></div>
-          <div class="row row-tight">
-            <span class="row-label" id="remoteInputLabel">Windows 所在接口</span>
-            <select class="select" id="remoteInputSelect"></select>
-          </div>
           <div class="hint" id="ddcHint"></div>
         </div>
 
@@ -97,33 +92,23 @@
           <label class="check-row">
             <input type="checkbox" id="launchAtLogin" />
             <span class="box"></span>
-            <span class="check-text">登录时启动（保存此应用的启动位置）</span>
+            <span class="check-text">登录时启动</span>
           </label>
-
-          <details class="compat">
-            <summary>兼容设置</summary>
-            <div class="compat-body">
-              <div class="row row-tight">
-                <span class="row-label">本机所在接口</span>
-                <select class="select" id="localInputSelect"></select>
-              </div>
-              <div class="hint">显示器不支持 DDC/CI 时可只切换鼠标焦点；接口值因显示器而异。</div>
-            </div>
-          </details>
         </div>
 
         <button class="primary-btn" id="switchBtn">切换到 Windows</button>
         <div class="status-block" id="switchStatus"></div>
       </section>
 
-      <!-- ============ 复制粘贴 ============ -->
-      <section class="panel" data-panel="clip">
-        <h1 class="panel-title">跨电脑复制粘贴</h1>
+      <!-- ============ 传输与剪贴板 ============ -->
+      <section class="panel" data-panel="share">
+        <h1 class="panel-title">跨电脑传输</h1>
+        <p class="panel-sub">复制粘贴、发文件、发文字，都在这一页。</p>
 
         <label class="check-row check-row-lg">
           <input type="checkbox" id="clipEnabled" />
           <span class="box"></span>
-          <span class="check-text">开启同步</span>
+          <span class="check-text">开启剪贴板同步 · A 电脑复制，B 电脑直接粘贴</span>
         </label>
 
         <div class="banner" id="pairBanner">
@@ -146,32 +131,52 @@
         </div>
 
         <div class="card">
-          <div class="card-label"><span class="num">02</span> 接收目录</div>
-          <div class="row">
-            <input class="input grow" id="receiveDir" readonly />
-            <button class="btn" data-dir="choose">选择…</button>
-            <button class="btn" data-dir="open">打开目录</button>
-            <button class="btn" data-dir="reset">恢复默认</button>
-          </div>
-        </div>
+          <div class="card-label"><span class="num">02</span> 发送到</div>
+          <div class="peers" id="peerChips"></div>
 
-        <div class="card">
-          <div class="card-label"><span class="num">03</span> 传输进度</div>
+          <div class="dropzone" id="dropzone">
+            <div class="dz-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 16V4" />
+                <path d="M7 9l5-5 5 5" />
+                <path d="M20 15v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3" />
+              </svg>
+            </div>
+            <div class="dz-title">把文件拖到这里</div>
+            <div class="dz-sub">或 <button class="link-inline" id="pickFiles">选择文件</button> · 支持多选与整个文件夹</div>
+            <div class="dz-peer" id="dzPeer">未连接</div>
+          </div>
+
+          <div class="row">
+            <input class="input grow" id="textInput" placeholder="粘贴一段文字直接发过去…" />
+            <button class="btn btn-primary" id="sendTextBtn">发送文字</button>
+          </div>
+
           <label class="check-row check-row-sm">
             <input type="checkbox" id="askLarge" />
             <span class="box"></span>
             <span class="check-text">超过 1GB，发送前询问</span>
           </label>
-          <div class="row btn-row">
-            <button class="btn btn-primary" id="saveConnect">保存并连接</button>
-            <button class="btn" id="cancelTransfer">取消传输</button>
-            <button class="btn" id="useRecent">使用最近接收</button>
+          <label class="check-row check-row-sm">
+            <input type="checkbox" id="autoAccept" />
+            <span class="box"></span>
+            <span class="check-text">免确认自动接收文件<span class="sub-note">（默认关闭：每次先问「接收 / 取消」）</span></span>
+          </label>
+        </div>
+
+        <div class="card">
+          <div class="card-label"><span class="num">03</span> 传输记录<span class="card-note" id="txSummary"></span></div>
+          <div class="tx-list" id="txList"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-label"><span class="num">04</span> 接收目录</div>
+          <div class="row">
+            <input class="input grow" id="fileRecvDir" readonly />
+            <button class="btn" id="fileRecvChoose">选择…</button>
+            <button class="btn" id="fileRecvOpen">打开目录</button>
           </div>
-          <div class="progress">
-            <div class="progress-bar"><i id="progressFill"></i></div>
-            <span class="progress-num" id="progressNum">0%</span>
-          </div>
-          <div class="hint" id="clipHint">已放入剪贴板，可以 ⌘V 粘贴。文件请粘贴到 Finder 文件夹。</div>
+          <div class="hint">对端发来的文件保存在这里，同名文件会自动加 (1)。</div>
         </div>
       </section>
 
@@ -225,68 +230,13 @@
         </div>
 
         <div class="card">
-          <div class="card-label">权限与当前状态</div>
-          <div class="perm-line">
+          <div class="card-label">当前状态</div>
+          <div class="perm-line" id="permLine">
             <span class="tick" id="permMark">✓</span>
-            <span id="permText">Mac 辅助功能已授权</span>
+            <span id="permText">键鼠控制已就绪</span>
           </div>
           <button class="btn" id="openPerm">打开辅助功能设置</button>
           <div class="kv"><span>当前画面</span><b id="currentScreen">Mac</b></div>
-        </div>
-
-        <div class="card">
-          <div class="card-label" id="hostCardLabel">Mac 显示器与鼠标</div>
-          <div class="row">
-            <select class="select grow" id="monitorSelect2"></select>
-            <button class="btn" id="redetectBtn2">重新检测</button>
-          </div>
-          <div class="slider-row">
-            <span class="row-label">鼠标发送速度 · 0.5 ~ 2 倍</span>
-            <span class="speed-val" id="speedVal">1.0×</span>
-          </div>
-          <input type="range" class="range" id="speedRange" min="0.5" max="2" step="0.1" value="1" />
-        </div>
-      </section>
-
-      <!-- ============ 文件传输 ============ -->
-      <section class="panel" data-panel="file">
-        <h1 class="panel-title">文件传输</h1>
-        <p class="panel-sub">拖进来就发走 · 文字、图片、文件、文件夹都能直接传到另一台。</p>
-
-        <div class="dropzone" id="dropzone">
-          <div class="dz-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 16V4" />
-              <path d="M7 9l5-5 5 5" />
-              <path d="M20 15v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3" />
-            </svg>
-          </div>
-          <div class="dz-title">把文件拖到这里</div>
-          <div class="dz-sub">或 <button class="link-inline" id="pickFiles">选择文件</button> · 支持多选与整个文件夹</div>
-          <div class="dz-peer" id="dzPeer">未连接</div>
-        </div>
-
-        <div class="card">
-          <div class="card-label">发送文字<span class="card-note">Ctrl / ⌘ + Enter</span></div>
-          <div class="row">
-            <input class="input grow" id="textInput" placeholder="粘贴一段文字直接发到另一台…" />
-            <button class="btn btn-primary" id="sendTextBtn">发送</button>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-label">传输记录<span class="card-note" id="txSummary"></span></div>
-          <div class="tx-list" id="txList"></div>
-        </div>
-
-        <div class="card">
-          <div class="card-label">接收目录</div>
-          <div class="row">
-            <input class="input grow" id="fileRecvDir" readonly />
-            <button class="btn" id="fileRecvChoose">选择…</button>
-            <button class="btn" id="fileRecvOpen">打开目录</button>
-          </div>
-          <div class="hint">对端发来的文件保存在这里，同名文件会自动加 (1)。</div>
         </div>
       </section>
     </main>

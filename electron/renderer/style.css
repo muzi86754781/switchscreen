@@ -83,7 +83,7 @@ body.win .head-right { padding-right: 128px; }
 .tabs {
   margin: 6px 24px 14px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 4px;
   padding: 5px;
   background: rgba(19, 24, 37, 0.9);
@@ -184,17 +184,15 @@ body.win .head-right { padding-right: 128px; }
 }
 .btn-ghost:hover { background: rgba(255, 255, 255, 0.08); }
 
-/* 显示器列表（不使用下拉框） */
-.monitor-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+/* 显示器列表（不使用下拉框，每台显示器各自选接口） */
+.monitor-list { display: flex; flex-direction: column; gap: 9px; margin-bottom: 12px; }
 .monitor-item {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 10px 13px;
+  padding: 11px 13px;
   border-radius: 12px;
   background: rgba(15, 20, 32, 0.62);
   border: 1px solid rgba(255, 255, 255, 0.07);
 }
+.mon-head { display: flex; align-items: center; gap: 11px; }
 .mon-ico { flex: 0 0 auto; width: 26px; height: 26px; color: #c3d0ea; }
 .mon-ico svg { width: 100%; height: 100%; }
 .mon-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -218,6 +216,84 @@ body.win .head-right { padding-right: 128px; }
 }
 .mon-tag.ok { color: #8fe0a1; border-color: rgba(126, 224, 143, 0.3); background: rgba(40, 90, 55, 0.32); }
 .mon-tag.no { color: var(--warn); border-color: rgba(240, 180, 91, 0.28); background: rgba(90, 72, 30, 0.3); }
+
+/* 每台显示器的「本机 / 对端」接口芯片组 */
+.mon-io {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.06);
+}
+.mon-io-role {
+  flex: 0 0 34px;
+  font-size: 11px;
+  color: var(--text-3);
+  padding-top: 5px;
+  letter-spacing: 0.04em;
+}
+.chips { display: flex; flex-wrap: wrap; gap: 5px; flex: 1 1 auto; min-width: 0; }
+.chip {
+  appearance: none;
+  font-family: inherit;
+  font-size: 11.5px;
+  line-height: 1;
+  padding: 6px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+.chip:hover { background: rgba(255, 255, 255, 0.1); color: #dbe4f7; }
+.chip.is-on {
+  color: #fff;
+  font-weight: 600;
+  background: linear-gradient(180deg, rgba(98, 149, 251, 0.95), rgba(61, 108, 214, 0.95));
+  border-color: rgba(150, 182, 255, 0.55);
+  box-shadow: 0 4px 12px rgba(52, 104, 214, 0.28);
+}
+.chip.is-cur::after {
+  content: "•";
+  margin-left: 4px;
+  color: #8fe0a1;
+}
+
+/* 接收对象选择 */
+.peers { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
+.peer-chip {
+  appearance: none;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  padding: 9px 13px;
+  border-radius: 11px;
+  cursor: pointer;
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+.peer-chip:hover { background: rgba(255, 255, 255, 0.1); }
+.peer-chip.is-on {
+  color: #eaf1ff;
+  font-weight: 600;
+  background: rgba(91, 140, 240, 0.22);
+  border-color: rgba(150, 182, 255, 0.5);
+}
+.peer-chip .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 2.5px rgba(126, 224, 143, 0.16);
+}
+.peer-chip .tag { font-size: 10px; color: var(--text-3); font-weight: 400; }
+.peers-empty { font-size: 12px; color: var(--text-3); }
+
+.sub-note { font-size: 11px; color: var(--text-3); margin-left: 2px; }
 
 /* 工作台：当前电脑用颜色标注 */
 .device { cursor: pointer; border-radius: 14px; padding: 8px 6px; transition: background 0.16s, color 0.16s; }
@@ -499,6 +575,7 @@ body.win .head-right { padding-right: 128px; }
 }
 .primary-btn:hover { filter: brightness(1.06); }
 .primary-btn:active { transform: translateY(1px); }
+.primary-btn:disabled { opacity: 0.55; cursor: default; filter: none; }
 
 .status-block {
   margin: 12px 2px 18px;

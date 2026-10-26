@@ -96,6 +96,51 @@ async function winSet(index, hexValue) {
   };
 }
 
+/**
+ * Windows：一次 PowerShell 进程内按计划切换（每台显示器可以指向不同接口）。
+ * plan: [{ index, value }]，value 为 "0x11" 形式的字符串。
+ */
+async function winSetPlan(plan) {
+  const script = psScriptPath();
+  const str = plan
+    .filter((p) => typeof p.index === 'number')
+    .map((p) => `${p.index}=${parseInt(p.value, 16)}`)
+    .join(';');
+  const r = await run('powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+    '-Action', 'setplan', '-Plan', str
+  ]);
+  const results = [];
+  for (const line of r.out.split(/\r?\n/)) {
+    const m = line.trim().match(/^MON=(\d+)\|(True|False|SKIP)\|(\d+)$/i);
+    if (!m) continue;
+    const verdict = m[2].toUpperCase();
+    if (verdict === 'SKIP') continue;
+    const ok = verdict === 'TRUE';
+    results.push({
+      index: Number(m[1]),
+      ok,
+      via: 'dxva2',
+      error: ok ? '' : (m[3] === '31' ? '显示器拒绝了 DDC 指令（请在显示器菜单里开启 DDC/CI）' : `设置失败，错误码 ${m[3]}`)
+    });
+  }
+  return summarize(results, 'dxva2', r.err);
+}
+
+function summarize(results, via, fallbackError) {
+  const okList = results.filter((x) => x.ok);
+  const failList = results.filter((x) => !x.ok);
+  return {
+    ok: okList.length > 0,
+    partial: okList.length > 0 && failList.length > 0,
+    total: results.length,
+    success: okList.length,
+    via,
+    results,
+    error: failList.length ? failList[0].error : (fallbackError || '')
+  };
+}
+
 /* ---------------- macOS：m1ddc / ddcctl ---------------- */
 
 function toolPath(names) {
@@ -195,31 +240,45 @@ async function setInput(index, hexValue) {
 }
 
 /**
- * 把所有检测到的显示器一起切到同一个输入源。
+ * 把所有检测到的显示器一起切到目标输入源。
+ *
+ * target 可以是：
+ *   - "0x11" 字符串：所有显示器切到同一个接口；
+ *   - { "0": "0x11", "1": "0x12" } 对象：按显示器 index 分别指定接口
+ *     （多显示器各接不同端口时用，key 也接受 "ddc:0" 形式）。
+ *
  * 顺序执行（并发读写 DDC 容易互相干扰），并统计成功/失败。
  */
-async function setInputAll(hexValue) {
+async function setInputAll(target) {
   const l = await listDisplays();
   const list = (l.displays || []).slice();
   if (!list.length) {
     return { ok: false, total: 0, success: 0, via: l.via, error: l.error || '未检测到显示器' };
   }
-  const results = [];
+
+  const isMap = target && typeof target === 'object';
+  const plan = [];
   for (const d of list) {
-    const r = await setInput(d.index, hexValue);
-    results.push({ index: d.index, name: d.name, ...r });
+    let v = isMap ? (target[d.index] || target[`ddc:${d.index}`]) : target;
+    if (!v) continue;
+    plan.push({ index: d.index, name: d.name, value: v });
   }
-  const okList = results.filter((r) => r.ok);
-  const failList = results.filter((r) => !r.ok);
-  return {
-    ok: okList.length > 0,
-    partial: okList.length > 0 && failList.length > 0,
-    total: results.length,
-    success: okList.length,
-    via: (okList[0] && okList[0].via) || l.via,
-    results,
-    error: failList.length ? failList[0].error : ''
-  };
+  if (!plan.length) {
+    return { ok: false, total: list.length, success: 0, via: l.via, error: '没有可用的接口配置' };
+  }
+
+  // Windows：一次性切完（单个 PowerShell 进程，省掉重复 Add-Type 开销）
+  if (IS_WIN) {
+    const all = await winSetPlan(plan);
+    if (all.total > 0) return all;
+  }
+
+  const results = [];
+  for (const p of plan) {
+    const r = await setInput(p.index, p.value);
+    results.push({ index: p.index, name: p.name, ...r });
+  }
+  return summarize(results, l.via, '');
 }
 
 module.exports = { listDisplays, setInput, setInputAll, labelOf, INPUT_LABELS, IS_WIN, IS_MAC };

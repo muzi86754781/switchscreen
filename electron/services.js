@@ -64,6 +64,9 @@ function ensureDefaults() {
   if (typeof ui.mouseSpeed !== 'number') ui.mouseSpeed = 1;
   if (!ui.inputMode) ui.inputMode = 'separate';
   if (!ui.hotkeyKey) ui.hotkeyKey = 'F12';
+  if (!ui.perMonitor || typeof ui.perMonitor !== 'object') ui.perMonitor = {};
+  if (typeof ui.autoAccept !== 'boolean') ui.autoAccept = false;
+  if (typeof ui.targetPeer !== 'string') ui.targetPeer = '';
   saveConfig(cfg);
 }
 
@@ -92,6 +95,57 @@ function syncInputMapping() {
   cfg.selfInput = cfg.ui.localInput;
   for (const p of peersNow) cfg.peers[p.name] = cfg.ui.remoteInput;
   persist();
+}
+
+/**
+ * 每台显示器的接口设置。key 用显示器 id（"ddc:0"）。
+ * 返回 { [id]: { local, remote, localLabel, remoteLabel } }
+ * 注意：显式存成空字符串表示「这台显示器在这个方向上不切」，不能被全局值覆盖。
+ */
+function perMonitorMap() {
+  if (!cfg.ui.perMonitor) cfg.ui.perMonitor = {};
+  const out = {};
+  for (const m of monitorsCache) {
+    const saved = cfg.ui.perMonitor[m.id] || {};
+    const hasLocal = Object.prototype.hasOwnProperty.call(saved, 'local');
+    const hasRemote = Object.prototype.hasOwnProperty.call(saved, 'remote');
+    const local = hasLocal ? saved.local : cfg.ui.localInput;
+    const remote = hasRemote ? saved.remote : cfg.ui.remoteInput;
+    out[m.id] = {
+      local,
+      remote,
+      localLabel: local ? (saved.localLabel || labelForInput(local)) : '不切',
+      remoteLabel: remote ? (saved.remoteLabel || labelForInput(remote)) : '不切'
+    };
+  }
+  return out;
+}
+
+function labelForInput(value) {
+  const p = INPUT_PRESETS.find((x) => x.value === value);
+  return p ? p.label : String(value || '');
+}
+
+/** 保存某台显示器的接口配置；value 传空字符串表示「这台不切」 */
+function setMonitorInput(monitorId, role, value) {
+  if (!cfg.ui.perMonitor) cfg.ui.perMonitor = {};
+  const cur = cfg.ui.perMonitor[monitorId] || {};
+  const v = value || '';
+  const label = v ? labelForInput(v) : '不切';
+  if (role === 'local') { cur.local = v; cur.localLabel = label; }
+  else { cur.remote = v; cur.remoteLabel = label; }
+  cfg.ui.perMonitor[monitorId] = cur;
+  // 同时把全局值跟上，作为兜底（「不切」不影响全局）
+  if (v) {
+    if (role === 'local') { cfg.ui.localInput = v; cfg.ui.localInputLabel = label; cfg.selfInput = v; }
+    else {
+      cfg.ui.remoteInput = v;
+      cfg.ui.remoteInputLabel = label;
+      for (const p of peersNow) cfg.peers[p.name] = v;
+    }
+  }
+  persist();
+  return cur;
 }
 
 /* ---------------- 显示器检测 ---------------- */
@@ -228,7 +282,8 @@ function tryExec(cmd, args) {
 }
 
 /**
- * 执行一次输入源切换：把所有检测到的显示器一起切到指定输入源。
+ * 执行一次输入源切换。
+ * value 可以是统一接口值（"0x12"），也可以是按显示器 index 的 map（{ "0":"0x11" }）。
  * 1) 首选原生 DDC 层（Windows=dxva2，macOS=m1ddc/ddcctl），无需外部安装；
  * 2) 全部失败时才用外部命令行工具兜底；
  * 3) 都失败则如实返回原因，供界面提示。
@@ -250,14 +305,15 @@ async function switchMonitorInput(value, label) {
   ddcError = native.error || '';
 
   // 兜底：外部工具（仅 Windows）
-  if (IS_WIN) {
+  const flat = typeof value === 'string' ? value : Object.values(value || {})[0];
+  if (IS_WIN && flat) {
     const tools = path.join(path.dirname(app.getPath('exe')), 'tools');
     const cmm = path.join(tools, 'ControlMyMonitor.exe');
     if (fs.existsSync(cmm)) {
-      const r = await tryExec(cmm, ['/SetValue', 'Primary', '60', value]);
+      const r = await tryExec(cmm, ['/SetValue', 'Primary', '60', flat]);
       if (r.ok) return { ok: true, via: 'ControlMyMonitor', label, success: 1, total: 1 };
     }
-    const r2 = await tryExec('ddcutil', ['setvcp', '60', value]);
+    const r2 = await tryExec('ddcutil', ['setvcp', '60', flat]);
     if (r2.ok) return { ok: true, via: 'ddcutil', label, success: 1, total: 1 };
   }
 
@@ -266,9 +322,23 @@ async function switchMonitorInput(value, label) {
 
 /* ---------------- 权限 ---------------- */
 
+/**
+ * macOS 辅助功能授权状态。
+ *
+ * 注意：未签名（ad-hoc）的 Electron 应用里，isTrustedAccessibilityClient() 经常
+ * 在用户已经勾选授权后仍然返回 false，导致界面误报「未授权」。
+ * 更可信的判断是「键鼠捕获到底起没起来」——真正的功能是否可用，而不是 API 的口径。
+ */
 function accessibilityGranted() {
   if (!IS_MAC) return true;
+  // 捕获层已经成功启动 => 系统确实放行了，直接算已授权
+  if (peer && typeof peer.getCaptureError === 'function' && !peer.getCaptureError()) return true;
   try { return systemPreferences.isTrustedAccessibilityClient(false); } catch { return false; }
+}
+
+function captureError() {
+  if (!peer || typeof peer.getCaptureError !== 'function') return '';
+  return peer.getCaptureError() || '';
 }
 
 function openAccessibilitySettings() {
@@ -316,7 +386,8 @@ function getState() {
     inputs: {
       presets: INPUT_PRESETS,
       local: { value: cfg.ui.localInput, label: cfg.ui.localInputLabel },
-      remote: { value: cfg.ui.remoteInput, label: cfg.ui.remoteInputLabel }
+      remote: { value: cfg.ui.remoteInput, label: cfg.ui.remoteInputLabel },
+      perMonitor: perMonitorMap()
     },
     hotkey: { enabled: cfg.ui.hotkeyEnabled !== false, key: cfg.ui.hotkeyKey || 'F12' },
     launchAtLogin: (() => { try { return app.getLoginItemSettings().openAtLogin; } catch { return false; } })(),
@@ -333,15 +404,29 @@ function getState() {
     mouseSpeed: cfg.ui.mouseSpeed,
     shareInput: !!cfg.shareInput,
     isHost: !!cfg.isHost,
+    inputState: {
+      mode: cfg.ui.inputMode,
+      capturing: !!(cfg.shareInput && cfg.isHost),
+      error: captureError()
+    },
     files: {
       transfers: fileTransfers,
-      recvDir: cfg.ui.receiveDir
+      recvDir: cfg.ui.receiveDir,
+      autoAccept: !!cfg.ui.autoAccept,
+      target: targetPeerName()
     },
     permission: { accessibility: accessibilityGranted() },
     active,
     activeTarget,
     statusLines
   };
+}
+
+/** 当前选中的接收对象：配置里存的名字若还在线就用它，否则用第一台 */
+function targetPeerName() {
+  const saved = (cfg.ui && cfg.ui.targetPeer) || '';
+  if (saved && peersNow.some((p) => p.name === saved)) return saved;
+  return peersNow[0] ? peersNow[0].name : '';
 }
 
 function setPeer(p) { peer = p; }
@@ -374,7 +459,7 @@ function onFileUpdate(list) {
 
 /** peer 发起一次显示器输入源切换时调用：真正执行并如实回报结果 */
 async function onSwitchRequest({ input, label, from }) {
-  const name = label || input;
+  const name = label || (typeof input === 'string' ? labelForInput(input) : '目标接口');
   const r = await switchMonitorInput(input, name);
   const scope = r.total > 1 ? `${r.success}/${r.total} 台显示器` : '显示器';
   if (r.ok) {
@@ -389,13 +474,19 @@ async function onSwitchRequest({ input, label, from }) {
   return r;
 }
 
-function onSwitch({ result }) {
+function onSwitch({ result, target, label, detail }) {
   if (result === 'no-input') {
-    pushStatus('未配置该机器的接口，请先在「连接与目标」里选择', 'warn');
+    pushStatus('未配置该机器的接口，请先在「连接与目标」里点选接口', 'warn');
   } else if (result === 'relayed') {
     pushStatus('已请求对端执行切换（画面在对端时由它发 DDC 指令）', 'ok');
   } else if (result === 'peers-gone') {
     pushStatus('对端连接已断开，无法切换', 'warn');
+  } else if (result === 'failed') {
+    pushStatus(`切换未生效${detail && detail.error ? '：' + detail.error : ''}`, 'warn');
+  } else if (result === 'screen-kept') {
+    pushStatus('已切换键鼠焦点（所有显示器都设为「不切」，画面不变）', 'info');
+  } else if (result === 'sent') {
+    pushStatus(`已切换到 ${label || target}`, 'ok');
   }
 }
 
@@ -414,6 +505,10 @@ module.exports = {
   setPeer,
   applyInputMode,
   syncInputMapping,
+  setMonitorInput,
+  perMonitorMap,
+  labelForInput,
+  targetPeerName,
   detectMonitors,
   switchMonitorInput,
   accessibilityGranted,

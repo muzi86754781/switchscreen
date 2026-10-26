@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, shell, globalShortcut, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, shell, globalShortcut, screen, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -13,6 +13,7 @@ let win = null;
 let tray = null;
 let peer = null;
 let registeredHotkey = '';
+let switching = false;
 
 /* ---------------- 窗口 ---------------- */
 
@@ -44,6 +45,19 @@ function createWindow() {
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.once('ready-to-show', () => win.show());
+
+  // 窗口聚焦时也响应切换键：全局快捷键被系统占用时（F12 常被开发者工具抢占）
+  // 至少还能在窗口里按键生效。全局已注册的情况下不重复触发。
+  win.webContents.on('before-input-event', (e, input) => {
+    if (input.type !== 'keyDown') return;
+    if (input.control || input.alt || input.meta || input.shift) return;
+    const want = services.cfg.ui.hotkeyKey || 'F12';
+    if (input.key !== want) return;
+    if (registeredHotkey === want) return;
+    e.preventDefault();
+    doSwitch();
+  });
+
   win.on('closed', () => { win = null; });
 }
 
@@ -90,25 +104,51 @@ function refreshTray() {
 
 /* ---------------- 全局快捷键 ---------------- */
 
+// 单按功能键（F1~F12）在不少系统上会被占用，注册失败时按这个顺序回退
+const HOTKEY_FALLBACKS = [
+  'F11', 'F10', 'F9', 'F8',
+  'CommandOrControl+Shift+F12',
+  'CommandOrControl+Alt+F12',
+  'CommandOrControl+Shift+Space'
+];
+
+function tryRegister(key) {
+  try {
+    if (globalShortcut.register(key, () => { doSwitch(); })) return true;
+  } catch { /* ignore */ }
+  return false;
+}
+
 function registerHotkey(key) {
   if (registeredHotkey) {
     try { globalShortcut.unregister(registeredHotkey); } catch { /* ignore */ }
     registeredHotkey = '';
   }
-  if (!key || !services.cfg.ui.hotkeyEnabled) return;
-  try {
-    const ok = globalShortcut.register(key, () => doSwitch());
-    if (ok) registeredHotkey = key;
-    else services.pushStatus(`快捷键 ${key} 被系统占用，未能注册`, 'warn');
-  } catch (e) {
-    services.pushStatus(`快捷键 ${key} 注册失败：${e.message}`, 'warn');
+  if (!key || !services.cfg.ui.hotkeyEnabled) return '';
+  if (tryRegister(key)) {
+    registeredHotkey = key;
+    return key;
   }
+  // 被系统占用：自动换一个可用的，并把实际生效的键回写到配置与界面
+  for (const alt of HOTKEY_FALLBACKS) {
+    if (alt === key) continue;
+    if (tryRegister(alt)) {
+      registeredHotkey = alt;
+      services.cfg.ui.hotkeyKey = alt;
+      services.persist();
+      services.pushStatus(`${key} 被系统占用，已改用 ${alt}`, 'warn');
+      return alt;
+    }
+  }
+  services.pushStatus(`快捷键 ${key} 注册失败（可能被其它程序占用）`, 'warn');
+  return '';
 }
 
 /* ---------------- 动作 ---------------- */
 
-function doSwitch(targetRole) {
-  if (!peer) return { ok: false };
+async function doSwitch(targetRole) {
+  if (!peer) return { ok: false, reason: 'no-peer' };
+  if (switching) return { ok: false, reason: 'busy' };
   const localName = services.cfg.peerName;
   const peers = peer.listPeers();
   if (!peers.length) {
@@ -117,9 +157,20 @@ function doSwitch(targetRole) {
     return { ok: false, reason: 'no-peer' };
   }
   const target = targetRole === 'local' ? localName : peers[0].name;
-  peer.switchTo(target);
+  // 等 DDC 真正执行完再刷新界面，这样成败都能立刻看到
+  switching = true;
+  services.pushStatus(`正在切换到 ${targetRole === 'local' ? '本机' : target}…`, 'info');
   broadcastState();
-  return { ok: true, target };
+  let result = 'failed';
+  try {
+    result = await peer.switchTo(target);
+  } catch (e) {
+    services.pushStatus(`切换出错：${e.message}`, 'warn');
+  } finally {
+    switching = false;
+  }
+  broadcastState();
+  return { ok: result !== 'failed' && result !== 'no-input', target, result };
 }
 
 /* ---------------- IPC ---------------- */
@@ -139,6 +190,67 @@ function broadcastStateThrottled() {
     stateTimer = null;
     broadcastState();
   }, 100);
+}
+
+function fmtSize(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return `${v} B`;
+  const u = ['KB', 'MB', 'GB', 'TB'];
+  let i = -1;
+  let x = v;
+  do { x /= 1024; i += 1; } while (x >= 1024 && i < u.length - 1);
+  return `${x >= 10 || i === 0 ? x.toFixed(0) : x.toFixed(1)} ${u[i]}`;
+}
+
+/** 接收方弹窗：接收 / 取消（默认不自动接收，除非用户开了免确认） */
+function askIncoming(payload) {
+  return new Promise((resolve) => {
+    const name = payload.name || '文件';
+    const opts = {
+      type: 'question',
+      buttons: ['接收', '取消'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+      title: '收到文件',
+      message: `${payload.from || '另一台电脑'} 想发送 ${name}`,
+      detail: `${payload.count || 1} 项 · 共 ${fmtSize(payload.total || 0)}\n保存到：${services.cfg.ui.receiveDir || services.defaultReceiveDir()}`
+    };
+    const p = win && !win.isDestroyed() ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts);
+    p.then((r) => {
+      const accept = r.response === 0;
+      services.pushStatus(
+        accept ? `正在接收 ${name}` : `已拒绝来自 ${payload.from || '对端'} 的 ${name}`,
+        accept ? 'ok' : 'info'
+      );
+      broadcastState();
+      resolve(accept);
+    }).catch(() => resolve(false));
+  });
+}
+
+/** 收到文本：直接弹窗展示全文 + 一键拷贝 */
+function showIncomingText(payload) {
+  const text = String(payload.text || '');
+  const long = text.length > 400;
+  const opts = {
+    type: 'info',
+    buttons: ['拷贝到剪贴板', '关闭'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+    title: `来自 ${payload.from || '另一台电脑'} 的文本`,
+    message: long ? `${text.slice(0, 400)}…` : text,
+    detail: long ? `共 ${text.length} 字，点「拷贝到剪贴板」复制全文` : '点「拷贝到剪贴板」直接粘贴到当前应用'
+  };
+  const p = win && !win.isDestroyed() ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts);
+  p.then((r) => {
+    if (r.response === 0) {
+      try { clipboard.writeText(text); } catch { /* ignore */ }
+      services.pushStatus('已拷贝到剪贴板', 'ok');
+      broadcastState();
+    }
+  }).catch(() => {});
 }
 
 function registerIpc() {
@@ -179,12 +291,20 @@ function registerIpc() {
     return services.getState();
   });
 
+  // 单台显示器指定接口（多显示器各接不同端口时用）
+  ipcMain.handle('input:monitor', (_e, { monitorId, role, value }) => {
+    if (!monitorId) return services.getState();
+    services.setMonitorInput(monitorId, role === 'local' ? 'local' : 'remote', value);
+    services.pushStatus(`接口已保存 · ${services.labelForInput(value)}`, 'ok');
+    return services.getState();
+  });
+
   ipcMain.handle('hotkey:set', (_e, { enabled, key }) => {
     services.cfg.ui.hotkeyEnabled = !!enabled;
     if (key) services.cfg.ui.hotkeyKey = key;
     services.persist();
-    registerHotkey(services.cfg.ui.hotkeyKey);
-    services.pushStatus(enabled ? `已启用 ${services.cfg.ui.hotkeyKey} · 关闭窗口后仍有效` : '全局快捷键已关闭', enabled ? 'ok' : 'info');
+    const actual = registerHotkey(services.cfg.ui.hotkeyKey) || services.cfg.ui.hotkeyKey;
+    services.pushStatus(enabled ? `已启用 ${actual} · 关闭窗口后仍有效` : '全局快捷键已关闭', enabled ? 'ok' : 'info');
     return services.getState();
   });
 
@@ -196,8 +316,8 @@ function registerIpc() {
     return services.getState();
   });
 
-  ipcMain.handle('switch:to', (_e, role) => {
-    const r = doSwitch(role);
+  ipcMain.handle('switch:to', async (_e, role) => {
+    const r = await doSwitch(role);
     return { result: r, state: services.getState() };
   });
 
@@ -285,28 +405,76 @@ function registerIpc() {
     shell.openExternal('https://github.com/muzi86754781/switchscreen#readme');
   });
 
-  /* ---------- 文件传输 ---------- */
+  /* ---------- 文件 / 文本传输 ---------- */
 
-  async function sendPaths(paths) {
-    if (!peer) { services.pushStatus('网络层未启动', 'warn'); return services.getState(); }
+  /** 目标机：显式指定的优先，否则用界面上选中的，再否则第一台在线对端 */
+  function resolveTarget(explicit) {
     const conn = services.getState().connection;
-    if (!conn.count) { services.pushStatus('未连接另一台电脑，无法发送', 'warn'); return services.getState(); }
-    const res = await peer.offerFiles(paths, conn.peers[0].name);
+    if (!conn.count) return '';
+    if (explicit && conn.peers.some((p) => p.name === explicit)) return explicit;
+    const saved = services.targetPeerName();
+    return saved || conn.peers[0].name;
+  }
+
+  /** 统计待发送的总字节（用于「超过 1GB 发送前询问」） */
+  async function totalBytes(paths) {
+    const fsp = require('fs/promises');
+    let sum = 0;
+    const walk = async (p) => {
+      let st;
+      try { st = await fsp.stat(p); } catch { return; }
+      if (st.isFile()) { sum += st.size; return; }
+      if (!st.isDirectory()) return;
+      let entries = [];
+      try { entries = await fsp.readdir(p, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) await walk(path.join(p, e.name));
+    };
+    for (const p of paths) await walk(p);
+    return sum;
+  }
+
+  async function sendPaths(paths, explicitTarget) {
+    if (!peer) { services.pushStatus('网络层未启动', 'warn'); return services.getState(); }
+    const target = resolveTarget(explicitTarget);
+    if (!target) { services.pushStatus('未连接另一台电脑，无法发送', 'warn'); return services.getState(); }
+    if (!paths || !paths.length) return services.getState();
+
+    // 超过 1GB 且开启了询问：先确认
+    if (services.cfg.ui.askLarge !== false) {
+      const total = await totalBytes(paths);
+      if (total > 1024 * 1024 * 1024) {
+        const r = await dialog.showMessageBox(win, {
+          type: 'question',
+          buttons: ['继续发送', '取消'],
+          defaultId: 1,
+          cancelId: 1,
+          title: '确认发送大文件',
+          message: `将向 ${target} 发送 ${fmtSize(total)}`,
+          detail: `${paths.length} 项内容，超过 1GB，发送会占用较多网络带宽。`
+        });
+        if (r.response !== 0) {
+          services.pushStatus('已取消发送', 'info');
+          return services.getState();
+        }
+      }
+    }
+
+    const res = await peer.offerFiles(paths, target);
     if (!res || !res.ok) services.pushStatus((res && res.error) || '发送失败', 'warn');
-    else services.pushStatus(`已发送 ${paths.length} 项到 ${conn.peers[0].name}`, 'ok');
+    else services.pushStatus(`已发送 ${paths.length} 项到 ${target}`, 'ok');
     return services.getState();
   }
 
-  ipcMain.handle('files:pick', async () => {
+  ipcMain.handle('files:pick', async (_e, explicitTarget) => {
     const r = await dialog.showOpenDialog(win, {
       properties: ['openFile', 'multiSelections', 'openDirectory'],
       title: '选择要发送的文件或文件夹'
     });
     if (r.canceled || !r.filePaths.length) return services.getState();
-    return sendPaths(r.filePaths);
+    return sendPaths(r.filePaths, explicitTarget);
   });
 
-  ipcMain.handle('files:send-paths', (_e, paths) => sendPaths(paths || []));
+  ipcMain.handle('files:send-paths', (_e, { paths, target } = {}) => sendPaths(paths || [], target));
 
   ipcMain.handle('files:cancel', (_e, id) => {
     if (peer) peer.cancelTransfer(id);
@@ -314,12 +482,34 @@ function registerIpc() {
     return services.getState();
   });
 
-  ipcMain.handle('files:text', (_e, text) => {
-    if (!peer) return services.getState();
-    const conn = services.getState().connection;
-    if (!conn.count) { services.pushStatus('未连接另一台电脑，无法发送', 'warn'); return services.getState(); }
-    peer.sendText(text, conn.peers[0].name);
-    services.pushStatus('已发送文本', 'ok');
+  ipcMain.handle('files:text', (_e, { text, target } = {}) => {
+    if (!peer || !text) return services.getState();
+    const to = resolveTarget(target);
+    if (!to) { services.pushStatus('未连接另一台电脑，无法发送', 'warn'); return services.getState(); }
+    peer.sendText(text, to);
+    services.pushStatus(`已发送文本到 ${to}`, 'ok');
+    return services.getState();
+  });
+
+  // 选择接收对象（多对端时可切换）
+  ipcMain.handle('files:target', (_e, name) => {
+    services.cfg.ui.targetPeer = name || '';
+    services.persist();
+    return services.getState();
+  });
+
+  // 免确认自动接收（默认关闭 = 每次都要手动点接收）
+  ipcMain.handle('files:auto-accept', (_e, on) => {
+    services.cfg.ui.autoAccept = !!on;
+    services.persist();
+    services.pushStatus(on ? '已开启免确认自动接收' : '接收文件前会先询问', on ? 'ok' : 'info');
+    return services.getState();
+  });
+
+  // 「超过 1GB 发送前询问」开关
+  ipcMain.handle('files:ask-large', (_e, on) => {
+    services.cfg.ui.askLarge = !!on;
+    services.persist();
     return services.getState();
   });
 
@@ -380,7 +570,11 @@ app.whenReady().then(() => {
       onSwitchRequest: (info) => {
         Promise.resolve(services.onSwitchRequest(info)).then(broadcastState).catch(() => {});
       },
-      onFileUpdate: (list) => { services.onFileUpdate(list); broadcastStateThrottled(); }
+      onFileUpdate: (list) => { services.onFileUpdate(list); broadcastStateThrottled(); },
+      // 收到文件前询问：接收 / 取消
+      onAskIncoming: (payload) => askIncoming(payload),
+      // 收到文本：直接弹窗展示并发拷贝按钮
+      onText: (payload) => { showIncomingText(payload); broadcastStateThrottled(); }
     });
     services.setPeer(peer);
   } catch (e) {

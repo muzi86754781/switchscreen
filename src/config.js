@@ -49,7 +49,12 @@ const DEFAULTS = {
     usePassword: true,
     password: '',             // 6 位数字，空则首次启动自动生成
     receiveDir: '',           // 空则用 ~/Desktop/SwitchScreen/clipboard/received
-    askLarge: true
+    askLarge: true,
+    // 每台显示器各自的接口：{ "ddc:0": { local: "0x11", remote: "0x12" } }
+    // 未配置时回退到上面的 localInput / remoteInput
+    perMonitor: {},
+    autoAccept: false,        // true = 不需要确认直接接收文件（默认需手动确认）
+    targetPeer: ''            // 上次选中的接收对象
   }
 };
 

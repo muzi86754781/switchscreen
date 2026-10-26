@@ -40,7 +40,7 @@ async function uniquePath(dir) {
   }
 }
 
-function createFileTransfer({ send, recvDir, onUpdate }) {
+function createFileTransfer({ send, recvDir, onUpdate, shouldAccept }) {
   const outgoing = new Map();
   const incoming = new Map();
   const records = new Map();
@@ -97,7 +97,7 @@ function createFileTransfer({ send, recvDir, onUpdate }) {
     if (!files.length) return { ok: false, error: '没有可发送的文件' };
     const id = crypto.randomBytes(6).toString('hex');
     const total = files.reduce((a, f) => a + f.size, 0);
-    outgoing.set(id, { id, files, index: 0, sent: 0, total, canceled: false });
+    outgoing.set(id, { id, files, index: 0, sent: 0, total, canceled: false, target: target || '' });
     record(id, {
       id,
       dir: 'out',
@@ -105,9 +105,10 @@ function createFileTransfer({ send, recvDir, onUpdate }) {
       size: total,
       done: 0,
       status: 'waiting',
-      peer: target || ''
+      peer: target || '',
+      count: files.length
     });
-    send({ type: 'file-offer', id, files: files.map((f) => ({ name: f.name, size: f.size })), total });
+    send({ type: 'file-offer', id, files: files.map((f) => ({ name: f.name, size: f.size })), total }, target);
     return { ok: true, id };
   }
 
@@ -131,7 +132,7 @@ function createFileTransfer({ send, recvDir, onUpdate }) {
             if (!bytesRead) break;
             pos += bytesRead;
             job.sent += bytesRead;
-            send({ type: 'file-chunk', id, data: buf.subarray(0, bytesRead).toString('base64') });
+            send({ type: 'file-chunk', id, data: buf.subarray(0, bytesRead).toString('base64') }, job.target);
             record(id, { done: job.sent, status: 'sending' });
             // 让出事件循环，避免长时间占住 WS（键鼠/剪贴板消息还要走同一条链路）
             await new Promise((r) => setTimeout(r, 0));
@@ -141,11 +142,11 @@ function createFileTransfer({ send, recvDir, onUpdate }) {
         }
         job.index += 1;
       }
-      send({ type: 'file-done', id });
+      send({ type: 'file-done', id }, job.target);
       record(id, { status: 'done', done: job.total });
     } catch (e) {
       if (job.canceled) {
-        send({ type: 'file-cancel', id, reason: 'sender-canceled' });
+        send({ type: 'file-cancel', id, reason: 'sender-canceled' }, job.target);
         record(id, { status: 'canceled' });
       } else {
         record(id, { status: 'failed', error: e.message });
@@ -185,10 +186,33 @@ function createFileTransfer({ send, recvDir, onUpdate }) {
 
   async function onOffer(msg, from) {
     const id = msg.id;
+    const files = msg.files || [];
+    const displayName = files.length === 1
+      ? files[0].name
+      : `${(files[0] && files[0].name) || '文件'} 等 ${files.length} 项`;
+
+    // 接收前询问（默认由界面弹确认，用户可在设置里改成自动接收）
+    if (typeof shouldAccept === 'function') {
+      let accept = false;
+      try {
+        accept = await shouldAccept({ id, from, files, total: msg.total || 0, name: displayName });
+      } catch {
+        accept = false;
+      }
+      if (!accept) {
+        record(id, {
+          id, dir: 'in', name: displayName, size: msg.total || 0,
+          done: 0, status: 'rejected', peer: from, count: files.length
+        });
+        send({ type: 'file-reject', id }, from);
+        return;
+      }
+    }
+
     try { await fsp.mkdir(recvDir(), { recursive: true }); } catch { /* ignore */ }
     incoming.set(id, {
       id, from,
-      files: msg.files || [],
+      files,
       index: 0,
       curWritten: 0,
       received: 0,
@@ -198,13 +222,20 @@ function createFileTransfer({ send, recvDir, onUpdate }) {
     record(id, {
       id,
       dir: 'in',
-      name: (msg.files && msg.files.length === 1) ? msg.files[0].name : `${(msg.files && msg.files[0] && msg.files[0].name) || '文件'} 等 ${(msg.files || []).length} 项`,
+      name: displayName,
       size: msg.total || 0,
       done: 0,
       status: 'receiving',
-      peer: from
+      peer: from,
+      count: files.length
     });
-    send({ type: 'file-accept', id });
+    send({ type: 'file-accept', id }, from);
+  }
+
+  /** 发送方收到对方拒绝 */
+  function onReject(msg) {
+    outgoing.delete(msg.id);
+    record(msg.id, { status: 'rejected' });
   }
 
   async function writeBuf(job, id, buf) {
@@ -295,6 +326,7 @@ function createFileTransfer({ send, recvDir, onUpdate }) {
       case 'file-accept': pump(msg.id); return true;
       case 'file-chunk': onChunk(msg); return true;
       case 'file-done': onDone(msg); return true;
+      case 'file-reject': onReject(msg); return true;
       case 'file-cancel': onCancel(msg); return true;
       default: return false;
     }
@@ -304,7 +336,7 @@ function createFileTransfer({ send, recvDir, onUpdate }) {
   function sendText(text, target) {
     if (!text) return { ok: false };
     const id = crypto.randomBytes(6).toString('hex');
-    send({ type: 'text-send', id, text });
+    send({ type: 'text-send', id, text }, target);
     record(id, { id, dir: 'out', name: `文本 · ${text.slice(0, 24)}${text.length > 24 ? '…' : ''}`, size: Buffer.byteLength(text), done: Buffer.byteLength(text), status: 'done', peer: target || '', text });
     return { ok: true, id };
   }

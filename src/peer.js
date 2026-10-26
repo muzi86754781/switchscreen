@@ -60,22 +60,53 @@ function createPeer(userConfig, hooks) {
   }
 
   // ---- 切换逻辑 ----
-  function applySwitch(target) {
+
+  /**
+   * 计算「切到 target 时，显示器应该去的接口」。
+   * 返回：字符串（所有显示器同一个接口）或 map（{ "0": "0x12", "1": "0x11" }）。
+   *
+   * 多显示器各接不同端口时，cfg.ui.perMonitor 里存了每台显示器各自的
+   * 本机/对端接口，这里按 index 展开成 map，交给 DDC 层逐台下发。
+   */
+  function inputForTarget(target) {
+    const role = target === myName ? 'local' : 'remote';
+    const per = (cfg.ui && cfg.ui.perMonitor) || {};
+    const keys = Object.keys(per);
+    if (keys.length) {
+      const map = {};
+      for (const k of keys) {
+        const v = per[k] && per[k][role];
+        // 空字符串 = 这台显示器在这个方向上「不切」
+        if (v) map[k.replace(/^ddc:/, '')] = v;
+      }
+      return map; // 可能是空对象：所有显示器都设成了「不切」
+    }
+    return target === myName ? cfg.selfInput : cfg.peers[target];
+  }
+
+  function labelForTarget(target) {
+    if (target === myName) return (cfg.ui && cfg.ui.localInputLabel) || cfg.selfInput || '';
+    return (cfg.ui && cfg.ui.remoteInputLabel) || cfg.peers[target] || '';
+  }
+
+  async function applySwitch(target) {
     const prev = activePeer;
     activePeer = target;
-    const input = target === myName ? cfg.selfInput : cfg.peers[target];
+    const raw = inputForTarget(target);
+    const isMap = raw && typeof raw === 'object';
+    const hasTarget = isMap ? Object.keys(raw).length > 0 : !!raw;
+    const input = raw;
+    const label = labelForTarget(target);
     let result = 'skipped';
+    let detail = null;
 
-    if (input) {
+    if (hasTarget) {
       // DDC 指令必须由「显示器当前正在显示的那台机器」发出。
       // 若当前画面在对端，就把指令转给它执行；否则本机执行。
       if (prev !== myName && prev !== target) {
-        const label = target === myName
-          ? (cfg.ui && cfg.ui.localInputLabel)
-          : (cfg.ui && cfg.ui.remoteInputLabel);
         if (sendTo(prev, { type: 'ddc', input, label })) {
           result = 'relayed';
-          console.log(`[peer] 已请求 ${prev} 执行 DDC 切换 -> ${input}`);
+          console.log(`[peer] 已请求 ${prev} 执行 DDC 切换 -> ${JSON.stringify(input)}`);
         } else {
           result = 'peers-gone';
         }
@@ -83,22 +114,28 @@ function createPeer(userConfig, hooks) {
       if (result === 'skipped') {
         result = 'sent';
         if (typeof h.onSwitchRequest === 'function') {
-          h.onSwitchRequest({
-            target,
-            input,
-            label: target === myName ? (cfg.ui && cfg.ui.localInputLabel) : (cfg.ui && cfg.ui.remoteInputLabel)
-          });
+          // 等 DDC 真正执行完，把结果回传给界面（否则界面永远停在「切换中」）
+          try {
+            detail = await h.onSwitchRequest({ target, input, label });
+          } catch (e) {
+            detail = { ok: false, error: e.message };
+            result = 'failed';
+          }
+          if (detail && detail.ok === false) result = 'failed';
         } else {
           switchSource({ platform, command: (cfg.monitor.command[platform]), input });
         }
       }
+    } else if (isMap) {
+      // 所有显示器都设成「不切」：只切键鼠焦点，不动屏幕
+      result = 'screen-kept';
     } else if (target !== myName) {
       result = 'no-input';
       console.warn(`[peer] 未配置对端 ${target} 的显示器输入源（config.peers[${target}]）`);
     }
     broadcast({ type: 'active', target });
     notifyActive();
-    if (typeof h.onSwitch === 'function') h.onSwitch({ target, input, result });
+    if (typeof h.onSwitch === 'function') h.onSwitch({ target, input, label, result, detail });
     console.log(`[peer] 已切换到: ${target} (${result})`);
     return result;
   }
@@ -131,7 +168,11 @@ function createPeer(userConfig, hooks) {
   // ---- 收到对端消息 ----
   function handleMessage(name, msg) {
     if (!msg || typeof msg !== 'object') return;
-    if (msg.type === 'text-send') { fileTransfer.onText(msg, name); return; }
+    if (msg.type === 'text-send') {
+      fileTransfer.onText(msg, name);
+      if (typeof h.onText === 'function') h.onText({ text: msg.text || '', from: name });
+      return;
+    }
     if (fileTransfer.handle(msg, name)) return;
     if (msg.type === 'clipboard') clipboard.onRemoteClipboard(msg.text);
     else if (msg.type === 'input') injectEvent(msg.ev);
@@ -143,7 +184,15 @@ function createPeer(userConfig, hooks) {
         switchSource({ platform, command: cfg.monitor.command[platform], input: msg.input });
       }
     }
-    else if (msg.type === 'active') console.log(`[peer] 对端 ${name} 报告激活: ${msg.target}`);
+    else if (msg.type === 'active') {
+      // 两端必须对「当前画面在哪台」保持一致，否则下一次切换会由错误的机器执行 DDC
+      const t = msg.target;
+      if (t && t !== activePeer && (t === myName || peers.has(t))) {
+        activePeer = t;
+        notifyActive();
+      }
+      console.log(`[peer] 对端 ${name} 报告激活: ${msg.target}`);
+    }
   }
 
   // ---- 剪贴板同步 ----
@@ -154,9 +203,17 @@ function createPeer(userConfig, hooks) {
 
   // ---- 文件/文本传输 ----
   const fileTransfer = createFileTransfer({
-    send: (m) => broadcast(m),
+    send: (m, target) => {
+      if (target && sendTo(target, m)) return;
+      broadcast(m);
+    },
     recvDir: () => (cfg.ui && cfg.ui.receiveDir) || path.join(os.homedir(), 'Desktop', 'SwitchScreen'),
-    onUpdate: (list) => { if (typeof h.onFileUpdate === 'function') h.onFileUpdate(list); }
+    onUpdate: (list) => { if (typeof h.onFileUpdate === 'function') h.onFileUpdate(list); },
+    shouldAccept: (payload) => {
+      if (cfg.ui && cfg.ui.autoAccept) return true;
+      if (typeof h.onAskIncoming === 'function') return h.onAskIncoming(payload);
+      return true;
+    }
   });
 
   // ---- 输入捕获的按需启停（界面切换模式时用）----

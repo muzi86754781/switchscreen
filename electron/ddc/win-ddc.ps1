@@ -1,7 +1,8 @@
 param(
   [string]$Action = "list",
   [int]$Index = 0,
-  [uint32]$Value = 0
+  [uint32]$Value = 0,
+  [string]$Plan = ""
 )
 
 # Read/write monitor VCP 0x60 (input source) through DXVA2 (dxva2.dll).
@@ -108,6 +109,41 @@ switch ($Action) {
     if (-not $ok) {
       $code = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
       Write-Output ("ERR=" + $code)
+    }
+  }
+  "setall" {
+    # Switch every physical monitor to the same input in a single process,
+    # so we only pay the Add-Type compile cost once.
+    $n = [SsDdc]::Count()
+    Write-Output ("COUNT=" + $n)
+    for ($i = 0; $i -lt $n; $i++) {
+      $ok = [SsDdc]::SetVcp($i, 0x60, $Value)
+      $code = 0
+      if (-not $ok) { $code = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+      Write-Output ("MON=" + $i + "|" + $ok + "|" + $code)
+    }
+  }
+  "setplan" {
+    # Per-monitor values in one process. Plan format: "0=17;1=18"
+    # (index=decimal VCP value). Used when each monitor sits on a different port.
+    $map = @{}
+    foreach ($pair in ($Plan -split ';')) {
+      if (-not $pair) { continue }
+      $kv = $pair -split '='
+      if ($kv.Length -ne 2) { continue }
+      $map[[int]$kv[0]] = [uint32]$kv[1]
+    }
+    $n = [SsDdc]::Count()
+    Write-Output ("COUNT=" + $n)
+    for ($i = 0; $i -lt $n; $i++) {
+      if (-not $map.ContainsKey($i)) {
+        Write-Output ("MON=" + $i + "|SKIP|0")
+        continue
+      }
+      $ok = [SsDdc]::SetVcp($i, 0x60, $map[$i])
+      $code = 0
+      if (-not $ok) { $code = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+      Write-Output ("MON=" + $i + "|" + $ok + "|" + $code)
     }
   }
   default { Write-Output "ERR=unknown-action" }
