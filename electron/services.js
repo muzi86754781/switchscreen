@@ -819,6 +819,26 @@ function portsMatch(a, b) {
 }
 
 /**
+ * 按型号名认领：稳定键、接口指纹都认不上时的兜底（比如对端还是旧版、
+ * 快照里没有接口指纹）。两边都得有真实型号名（「显示器 1」这种占位名不认），
+ * 且全机恰好只有一块对得上 —— 同型号双屏并列就不敢认，宁缺毋滥。
+ */
+function nameClaimMonitor(s) {
+  if (!s || !s.name || isGenericName(s.name)) return null;
+  if (!normName(s.name)) return null;
+  let best = null;
+  for (const m of monitorsCache) {
+    if (m.internal) continue;
+    if (!m.name || isGenericName(m.name) || !normName(m.name)) continue;
+    if (modelNameHit(s.name, m.name)) {
+      if (best) return null;
+      best = m;
+    }
+  }
+  return best;
+}
+
+/**
  * 快照里的一块屏 → 本机的哪块屏。先按稳定键；键对不上（另一台机器的命名 /
  * 序列号口径不同，比如一边是 EDID 序列号、一边是「显示器 1」占位名）就按
  * 接口指纹认领 —— 认领不上，对端发来的归属就永远落不到本机的屏上。
@@ -828,18 +848,21 @@ function localMonitorForEntry(s) {
   const byKey = monitorsCache.find((x) => !x.internal && screenKey(x) === s.key);
   if (byKey) return byKey;
   const fp = s.ports;
-  if (!fp || !Object.keys(fp).length) return null;
-  let best = null, bestScore = 0, tie = false;
-  for (const m of monitorsCache) {
-    if (m.internal) continue;
-    const score = portsMatch(fp, portsOfKey(portKey(m)));
-    if (score > bestScore) { best = m; bestScore = score; tie = false; }
-    else if (score > 0 && score === bestScore) tie = true; // 并列就不敢认，宁可不认
+  if (fp && Object.keys(fp).length) {
+    let best = null, bestScore = 0, tie = false;
+    for (const m of monitorsCache) {
+      if (m.internal) continue;
+      const score = portsMatch(fp, portsOfKey(portKey(m)));
+      if (score > bestScore) { best = m; bestScore = score; tie = false; }
+      else if (score > 0 && score === bestScore) tie = true; // 并列就不敢认，宁可不认
+    }
+    if (best && !tie) return best;
   }
-  return tie ? null : best;
+  // 键、指纹都认不上：按型号名认领（对端旧版快照没带指纹时唯一能靠的线索）
+  return nameClaimMonitor(s);
 }
 
-/** 本机这块屏在公认快照里的条目：先按稳定键，对不上再按接口指纹反查 */
+/** 本机这块屏在公认快照里的条目：先按稳定键，再按接口指纹反查，最后按型号名兜底 */
 function authorityEntryFor(m) {
   const a = cfg.ui.authority;
   if (!a || !Array.isArray(a.screens) || !m) return null;
@@ -847,15 +870,35 @@ function authorityEntryFor(m) {
   const byKey = a.screens.find((s) => s && s.key === k);
   if (byKey) return byKey;
   const mine = portsOfKey(portKey(m));
-  if (!Object.keys(mine).length) return null;
-  let best = null, bestScore = 0, tie = false;
-  for (const s of a.screens) {
-    if (!s || !s.ports) continue;
-    const score = portsMatch(mine, s.ports);
-    if (score > bestScore) { best = s; bestScore = score; tie = false; }
-    else if (score > 0 && score === bestScore) tie = true;
+  if (Object.keys(mine).length) {
+    let best = null, bestScore = 0, tie = false;
+    for (const s of a.screens) {
+      if (!s || !s.ports) continue;
+      const score = portsMatch(mine, s.ports);
+      if (score > bestScore) { best = s; bestScore = score; tie = false; }
+      else if (score > 0 && score === bestScore) tie = true;
+    }
+    if (best && !tie) return best;
   }
-  return tie ? null : best;
+  // 键、指纹都对不上：按型号名反查快照条目（对端旧版快照没带指纹时的兜底）
+  if (!m.name || isGenericName(m.name) || !normName(m.name)) return null;
+  let best = null;
+  for (const s of a.screens) {
+    if (!s || !s.name || isGenericName(s.name) || !normName(s.name)) continue;
+    if (modelNameHit(m.name, s.name)) {
+      if (best) return null; // 两条快照都对得上这块屏：不敢认
+      best = s;
+    }
+  }
+  // 这条快照的名字本机有两块屏都对得上（同型号双屏）：分不清谁是谁，不认
+  if (best) {
+    let hits = 0;
+    for (const x of monitorsCache) {
+      if (x.internal || !x.name || isGenericName(x.name) || !normName(x.name)) continue;
+      if (modelNameHit(best.name, x.name)) { hits += 1; if (hits > 1) return null; }
+    }
+  }
+  return best;
 }
 
 /** 记住见过的每块屏（含排列位置）：被切到别的电脑后，界面上还得画得出来 */
@@ -1520,6 +1563,79 @@ function detectMac() {
   });
 }
 
+/**
+ * 从 ioreg 的 EDID 裸块里解出「型号名（0xFC 描述符）+ 序列号（0xFF 描述符）」。
+ *
+ * system_profiler 对不少外接屏不吐序列号 —— 没有序列号，Mac 的稳定键就只能是
+ * 「nm:型号」口径，跟 Windows 的「sn:EDID 序列号」永远对不上，归属快照就认领
+ * 不到屏（界面停在切换前、屏还会重复补行）。EDID 里的序列号和 Windows WMI 的
+ * SerialNumberID 同源，两边读到的完全一样 —— 这才是跨机器键一致的正源。
+ */
+function parseEdidDisplays(ioregOut) {
+  const out = [];
+  const re = /"IODisplayEDID"\s*=\s*<([0-9a-fA-F]+)>/g;
+  let mm;
+  while ((mm = re.exec(String(ioregOut || '')))) {
+    const clean = mm[1];
+    const b = [];
+    for (let i = 0; i + 1 < clean.length; i += 2) b.push(parseInt(clean.substr(i, 2), 16));
+    if (b.length < 128 || b[0] !== 0x00 || b[1] !== 0xff) continue;
+    const info = { name: '', serial: '' };
+    for (const off of [54, 72, 90, 108]) {
+      if (b[off] !== 0x00 || b[off + 1] !== 0x00) continue;
+      const tag = b[off + 3];
+      let s = '';
+      for (let i = off + 5; i < off + 18; i++) {
+        const c = b[i];
+        if (c >= 0x20 && c < 0x7f) s += String.fromCharCode(c);
+      }
+      s = s.trim();
+      if (tag === 0xfc && !info.name) info.name = s;
+      if (tag === 0xff && !info.serial) info.serial = s;
+    }
+    if (info.name || info.serial) out.push(info);
+  }
+  return out;
+}
+
+/**
+ * 型号名能不能算「同一块屏」：整串归一后相等/互相包含算；
+ * 「显示器 U2414H」↔「DELL U2414H」这种互不包含的，取两边共有的
+ * 型号词（≥5 位字母数字，比如 u2414h）也算 —— 厂牌前缀（DELL，4 位）不会误伤。
+ */
+function modelNameHit(a, b) {
+  const na = normName(a);
+  const nb = normName(b);
+  if (!na || !nb) return false;
+  if (na === nb || na.includes(nb) || nb.includes(na)) return true;
+  const ta = String(a).toLowerCase().match(/[a-z0-9]{5,}/g) || [];
+  const tb = new Set(String(b).toLowerCase().match(/[a-z0-9]{5,}/g) || []);
+  return ta.some((t) => tb.has(t));
+}
+
+/** system_profiler 不吐序列号的屏，改从 EDID（ioreg）补 —— 两端的稳定键从此同源 */
+async function enrichMacEdid() {
+  if (!IS_MAC) return;
+  const need = monitorsCache.filter((m) => !m.internal && !m.serial);
+  if (!need.length) return;
+  const r = await tryExec('ioreg', ['-lw0'], { maxBuffer: 64 * 1024 * 1024 });
+  if (!r.ok || !r.stdout) return;
+  const infos = parseEdidDisplays(r.stdout).filter((e) => e.serial);
+  if (!infos.length) return;
+  for (const m of need) {
+    const mn = normName(m.name);
+    let hits = mn
+      ? infos.filter((e) => e.name && modelNameHit(e.name, m.name))
+      : [];
+    // 名字对不上（还挂着占位名）而全机只有一块缺序列号、一条带序列号的 EDID：一对一直接认
+    if (hits.length !== 1 && need.length === 1 && infos.length === 1) hits = infos;
+    const serials = new Set(hits.map((h) => h.serial));
+    if (serials.size !== 1) continue; // 同型号双屏认不出谁是谁，宁缺毋滥
+    m.serial = [...serials][0];
+    if (isGenericName(m.name) && hits[0] && hits[0].name) m.name = hits[0].name;
+  }
+}
+
 function detectWin() {
   return new Promise((resolve) => {
     const script = [
@@ -1611,6 +1727,9 @@ async function detectMonitors() {
   nextScan();
   // 按系统里的真实排列（左/右/上/下）排好，界面上的「显示器 A/B」才是眼前看到的顺序
   refreshScreenLayout();
+  // system_profiler 不吐序列号的屏再从 EDID 补一次：稳定键（sn:）和 Windows 对齐，
+  // 归属快照、备忘去重、probe 才认得出是同一块屏 —— 必须赶在键迁移/记备忘之前
+  await enrichMacEdid();
   if (!cfg.ui.monitorId || !list.some((m) => m.id === cfg.ui.monitorId)) {
     cfg.ui.monitorId = monitorsCache[0].id;
     cfg.ui.monitorName = monitorsCache[0].name;
@@ -1656,9 +1775,9 @@ function ensureMonitorHotkeys() {
 
 /* ---------------- DDC/CI 输入源切换 ---------------- */
 
-function tryExec(cmd, args) {
+function tryExec(cmd, args, opts) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: 8000 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { timeout: 8000, ...(opts || {}) }, (err, stdout, stderr) => {
       if (err) resolve({ ok: false, err: err.code === 'ENOENT' ? 'ENOENT' : (stderr || err.message) });
       else resolve({ ok: true, stdout: String(stdout || '') });
     });
