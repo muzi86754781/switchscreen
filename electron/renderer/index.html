@@ -30,18 +30,12 @@
       </div>
       <div class="conn-side">
         <div class="conn-peers" id="connPeers"></div>
-        <button class="conn-perm" id="connPerm" type="button" hidden>
-          <i class="cm-warn">!</i>
-          <span id="connPermText">Mac 辅助功能未授权</span>
-          <em>去授权</em>
-        </button>
-      </div>
+        </div>
     </div>
 
     <nav class="tabs" id="tabs">
       <button class="tab is-active" data-tab="switch">切换电脑</button>
       <button class="tab" data-tab="share">传输与剪贴板</button>
-      <button class="tab" data-tab="input">共用键鼠</button>
     </nav>
 
     <main class="content">
@@ -164,76 +158,6 @@
         </div>
       </section>
 
-      <!-- ============ 共用键鼠 ============ -->
-      <section class="panel" data-panel="input">
-        <h1 class="panel-title">一套键鼠，无缝流动</h1>
-        <p class="panel-sub">在两台电脑之间共用一套键盘鼠标，鼠标推到屏幕边缘就流到另一台。</p>
-
-        <div class="card">
-          <div class="card-label">键鼠模式</div>
-          <div class="seg seg-3" data-role="mode">
-            <button data-mode="separate">各用各的</button>
-            <button data-mode="local">共用本机键鼠</button>
-            <button data-mode="remote">共用对端键鼠</button>
-          </div>
-          <div class="hint" id="inputModeHint"></div>
-          <label class="check-row check-row-sm">
-            <input type="checkbox" id="edgeSwitch" />
-            <span class="box"></span>
-            <span class="check-text">鼠标推到屏幕边缘就切到另一台电脑</span>
-          </label>
-        </div>
-
-        <!-- 无缝移动的方向：左边是哪台、右边是哪台、键鼠此刻在哪台 -->
-        <div class="card">
-          <div class="card-label">
-            <span>往哪个方向找另一台</span>
-            <span class="card-note" id="cmpNote"></span>
-          </div>
-          <div class="compass" id="compass">
-            <button class="cmp-side" id="cmpLeft" type="button" title="点一下：直接把键鼠交给左边这台">
-              <span class="cmp-arrow">←</span>
-              <span class="cmp-name" id="cmpLeftName">没有设备</span>
-              <span class="cmp-go" id="cmpLeftGo">左边是墙</span>
-            </button>
-            <div class="cmp-here" id="cmpHere">
-              <span class="cmp-dot"></span>
-              <b id="cmpHereName">本机</b>
-              <em id="cmpHereNote">键鼠在这里</em>
-            </div>
-            <button class="cmp-side" id="cmpRight" type="button" title="点一下：直接把键鼠交给右边这台">
-              <span class="cmp-arrow">→</span>
-              <span class="cmp-name" id="cmpRightName">没有设备</span>
-              <span class="cmp-go" id="cmpRightGo">右边是墙</span>
-            </button>
-          </div>
-          <div class="row row-actions">
-            <button class="btn" id="homeBtn">键鼠收回本机</button>
-            <button class="btn" id="locateBtn">把鼠标亮出来</button>
-            <button class="btn btn-ghost" id="flipBtn">左右调换</button>
-          </div>
-          <div class="hint">
-            鼠标推到屏幕最左 / 最右边缘就流到那一侧的设备（切换后有约 1 秒冷却，别来回蹭）。
-            不知道鼠标跑到哪台去了：点「把鼠标亮出来」，对应屏幕上会有光标画圈；点「键鼠收回本机」立刻收回来。
-            方向反了就点「左右调换」。
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-label">按键兼容（Mac ⇄ Windows）</div>
-          <div class="seg seg-wide" id="modSeg">
-            <button data-mod="cmd-ctrl">⌘ ⇄ Ctrl</button>
-            <button data-mod="swap">严格互换</button>
-            <button data-mod="off">不映射</button>
-          </div>
-          <div class="hint" id="modHint"></div>
-          <label class="check-row check-row-sm">
-            <input type="checkbox" id="keyDebug" />
-            <span class="box"></span>
-            <span class="check-text">按键诊断<span class="sub-note">（按任意键在状态栏显示原始键码，排查问题用）</span></span>
-          </label>
-        </div>
-      </section>
     </main>
 
     <footer class="footer">
@@ -258,50 +182,7 @@
     </div>
   </div>
 
-  <!-- macOS 权限与启动排查弹窗 -->
-  <div class="modal" id="permModal" hidden>
-    <div class="modal-card perm-card">
-      <div class="modal-head">
-        <b>macOS 键鼠权限与捕获排查</b>
-        <button class="modal-x" id="pmClose" type="button" title="关闭">×</button>
-      </div>
-      <div class="modal-body perm-body">
-        <div class="perm-status-box" id="pmStatusBox">
-          <div class="perm-status-title">当前状态：<span id="pmStatusText">键鼠捕获未启动</span></div>
-          <div class="perm-status-desc" id="pmStatusDesc">macOS 需要同时开启「辅助功能」与「输入监控」两项系统权限。</div>
-        </div>
-        <div class="perm-steps">
-          <div class="perm-step-item">
-            <div class="psi-num">1</div>
-            <div class="psi-info">
-              <b>辅助功能权限（Accessibility）</b>
-              <p>允许 SwitchScreen 跨机模拟与注入键盘按键、鼠标点击。</p>
-            </div>
-            <button class="btn btn-sm btn-ghost" id="pmBtnAx" type="button">打开设置</button>
-          </div>
-          <div class="perm-step-item">
-            <div class="psi-num">2</div>
-            <div class="psi-info">
-              <b>输入监控权限（Input Monitoring）</b>
-              <p>允许 SwitchScreen 捕获物理键盘与鼠标事件（若缺失会导致「捕获未启动」）。</p>
-            </div>
-            <button class="btn btn-sm btn-ghost" id="pmBtnInput" type="button">打开设置</button>
-          </div>
-        </div>
-        <div class="perm-trouble-tip">
-          <b>💡 常见排查：系统设置中已勾选，为什么还是提示未启动？</b>
-          <ol>
-            <li><b>双重权限：</b>请确认系统设置中<b>「辅助功能」</b>与<b>「输入监控」</b>两项均已勾选 SwitchScreen。</li>
-            <li><b>缓存失效：</b>若更新过软件，系统会保留旧签名导致授权失效。请在系统设置中<b>先取消勾选再重新勾选</b>（或点击下方的 <b>-</b> 号移除后点 <b>+</b> 重新添加）。</li>
-            <li><b>即时重试：</b>授权后无需重启，直接点击下方「立即重试」即可检测并启动捕获。</li>
-          </ol>
-        </div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn btn-primary" id="pmRetry" type="button">立即重试</button>
-        <button class="btn btn-ghost" id="pmDone" type="button">完成</button>
-      </div>
-    </div>
+   </div>
   </div>
 
   <script src="app.js"></script>

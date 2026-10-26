@@ -70,12 +70,6 @@ function createWindow() {
   });
 
   win.on('closed', () => { win = null; });
-  win.on('focus', () => {
-    if (IS_MAC && services.captureError()) {
-      const res = services.retryCapture();
-      if (res && res.ok) broadcastState();
-    }
-  });
 }
 
 function showWindow() {
@@ -238,11 +232,21 @@ function onSwitchDone() {
   }
 }
 
-function confirmSwitchHint(delay) {
+/**
+ * 切换落地后重扫一次（DDC 需要一点时间生效），并以实测为准再广播一次归属。
+ * 注意：收到对端快照触发的重扫**不能**再广播 —— 否则两台机器会你来我往无限互推。
+ */
+function confirmSwitchHint(delay, opts) {
+  const publish = !!(opts && opts.publish);
   if (rescanTimer) clearTimeout(rescanTimer);
   rescanTimer = setTimeout(() => {
     rescanTimer = null;
-    services.detectMonitors().then(() => broadcastState()).catch(() => {});
+    services.detectMonitors().then(() => {
+      broadcastState();
+      if (publish && peer && typeof peer.sendAuthority === 'function') {
+        peer.sendAuthority(services.publishAuthority());
+      }
+    }).catch(() => {});
   }, typeof delay === 'number' ? delay : 1800);
 }
 
@@ -268,7 +272,7 @@ async function doSwitchAll(explicitTarget) {
   } finally {
     switching = false;
   }
-  if (result === 'sent' || result === 'relayed') { onSwitchDone(); confirmSwitchHint(); }
+  if (result === 'sent' || result === 'relayed') { onSwitchDone(); confirmSwitchHint(1800, { publish: true }); }
   broadcastState();
   // 有屏还没配目标电脑的接口：切完顺手认一次口（会闪几下屏，认到就永久记住，
   // 以后再切就是一次到位；认不出来也不影响，手动点接口配一次即可）
@@ -313,7 +317,7 @@ async function doSwitchMonitor(monitorId, explicitTarget) {
     index: plan.index
   });
   if (r && r.ok) onSwitchDone();
-  confirmSwitchHint();
+  confirmSwitchHint(1800, { publish: true });
   broadcastState();
   return { ok: !!(r && r.ok), error: (r && r.error) || '' };
 }
@@ -506,86 +510,7 @@ function registerIpc() {
     return services.getState();
   });
 
-  ipcMain.handle('input:mode', (_e, mode) => {
-    services.applyInputMode(mode);
-    const map = { separate: '各用各的键鼠', local: '共用本机键鼠', remote: '共用对端键鼠' };
-    services.pushStatus(`键鼠模式：${map[mode] || mode}`, 'ok');
-    if (mode !== 'separate' && !services.peers.length) {
-      services.pushStatus('还没有其它设备在线，鼠标暂时没有可以流动的目标', 'warn');
-    } else if (mode === 'local') {
-      const err = services.captureError();
-      if (err) services.pushStatus(`键鼠捕获未启动：${err}`, 'warn');
-      else services.pushStatus('鼠标推到屏幕左右边缘就会流到相邻设备', 'info');
-    }
-    return services.getState();
-  });
-
-  ipcMain.handle('input:edge', (_e, on) => {
-    services.cfg.ui.edgeSwitch = !!on;
-    services.persist();
-    services.pushStatus(on ? '已开启无缝移动：鼠标推到边上就换电脑' : '已关闭无缝移动', on ? 'ok' : 'info');
-    return services.getState();
-  });
-
-  /* 无缝移动的方向：左右顺序调一调 / 只把键鼠交过去 / 把鼠标亮出来 */
-  ipcMain.handle('input:arrange', (_e, { list, flip } = {}) => {
-    if (flip) services.flipArrange();
-    else services.setArrange(list);
-    services.pushStatus(flip ? '已左右调换：无缝移动的方向反过来了' : '已更新设备的左右顺序', 'ok');
-    return services.getState();
-  });
-
-  ipcMain.handle('input:hand', async (_e, { target, side } = {}) => {
-    const peer = services.peer;
-    if (!peer || typeof peer.handControl !== 'function') {
-      services.pushStatus('键鼠服务还没就绪，稍等一下再试', 'warn');
-      return services.getState();
-    }
-    const r = await peer.handControl(target || services.cfg.peerName, { side: side || 'center' });
-    if (r === 'skipped') services.pushStatus('键鼠本来就已经在这台设备上', 'info');
-    return services.getState();
-  });
-
-  ipcMain.handle('input:locate', async () => {
-    const peer = services.peer;
-    if (peer && typeof peer.locateCursor === 'function') {
-      await peer.locateCursor();
-      services.pushStatus('已让当前设备上的鼠标画个圈 —— 看哪块屏在动就是它', 'info');
-    }
-    return services.getState();
-  });
-
-  ipcMain.handle('input:mod-map', (_e, mode) => {
-    const ok = ['cmd-ctrl', 'swap', 'off'];
-    services.cfg.ui.modMap = ok.includes(mode) ? mode : 'cmd-ctrl';
-    services.persist();
-    services.pushStatus(`按键映射：${services.getState().input.modDesc}`, 'ok');
-    return services.getState();
-  });
-
-  ipcMain.handle('input:key-debug', (_e, on) => {
-    services.cfg.ui.keyDebug = !!on;
-    services.persist();
-    services.pushStatus(on ? '已开启按键诊断：按任意键会在下方显示原始键码' : '已关闭按键诊断', 'info');
-    return services.getState();
-  });
-
-  ipcMain.handle('perm:open', () => {
-    services.openAccessibilitySettings();
-    return services.getState();
-  });
-
-  ipcMain.handle('perm:open-input-monitoring', () => {
-    services.openInputMonitoringSettings();
-    return services.getState();
-  });
-
-  ipcMain.handle('perm:retry', () => {
-    services.retryCapture();
-    return services.getState();
-  });
-
-  ipcMain.handle('perm:status', () => services.getState());
+  /* 共用键鼠（键鼠模式 / 无缝移动 / 按键映射 / macOS 键鼠权限）已整体移除，相关 IPC 不再注册 */
 
   ipcMain.handle('app:help', () => {
     shell.openExternal('https://github.com/muzi86754781/switchscreen#readme');
@@ -852,31 +777,17 @@ app.whenReady().then(() => {
         write: (text) => clipboard.writeText(text)
       },
       onNotice: (msg) => { services.pushStatus(msg, 'warn'); broadcastState(); },
-      // 对端改了键鼠模式，本机跟着切到镜像角色
-      onInputMode: (mode) => {
-        services.persist();
-        const map = { separate: '各用各的键鼠', local: '共用本机键鼠', remote: '共用对端键鼠' };
-        services.pushStatus(`已跟随对端切换键鼠模式：${map[mode] || mode}`, 'ok');
-        if (mode === 'local') {
-          const err = services.captureError();
-          if (err) services.pushStatus(`键鼠捕获未启动：${err}`, 'warn');
-        }
-        broadcastState();
-      },
-      // 鼠标穿越边界自动切换
+      // 对端跑的是旧版本、还在发键鼠模式同步：忽略（共用键鼠已移除，恒为「各用各的」）
+      onInputMode: () => { services.persist(); broadcastState(); },
+      // 鼠标穿越边界自动切换（共用键鼠已移除，正常不会再触发）
       onEdgeSwitch: ({ to }) => {
         services.pushStatus(`鼠标越过屏幕边界，已切到 ${services.deviceInfo(to).name}`, 'ok');
         broadcastState();
       },
-      // 对端调了无缝移动的左右顺序：本机没手动调过就跟着改（改完落盘）
+      // 对端调了设备的左右顺序（共用键鼠已移除，仅保持配置同步）
       onArrange: () => {
         services.persist();
-        services.pushStatus('已跟随对端调整设备的左右顺序', 'info');
         broadcastState();
-      },
-      // 对端喊「把鼠标亮出来」：本机把指针抖一下，帮对方找到光标在哪
-      onLocate: () => {
-        if (peer && typeof peer.wiggleCursor === 'function') peer.wiggleCursor().catch(() => {});
       },
       // 按键诊断（排查跨平台键位时用）
       onInputDebug: (line) => {

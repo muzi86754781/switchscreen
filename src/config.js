@@ -12,7 +12,7 @@ const DEFAULTS = {
   peerName: os.hostname(),
   port: 47748,
   discover: true,
-  shareInput: true,        // 共用键鼠总开关
+  shareInput: false,       // 共用键鼠总开关（共用键鼠功能已移除，恒为 false）
   clipboardSync: true,     // 剪贴板同步开关
   isHost: true,            // 本机是否接物理键鼠（捕获端）
   switchHotkey: { keycode: 192, ctrl: true, alt: true, shift: false, meta: false },
@@ -39,7 +39,7 @@ const DEFAULTS = {
     hotkeyKey: 'F12',         // 兼容旧字段，等同于 hotkeys.global
     hotkeys: { global: 'F12', monitor: {} },
     launchAtLogin: false,
-    inputMode: 'separate',    // separate 各用各的 | local 共用本机键鼠 | remote 共用对端键鼠
+    inputMode: 'separate',    // 恒为 separate（各用各的）；共用本机 / 共用对端已移除
     mouseSpeed: 1,            // 0.5 ~ 2（相对位移的缩放系数）
     monitorId: '',
     monitorName: '',

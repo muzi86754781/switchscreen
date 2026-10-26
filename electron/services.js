@@ -17,7 +17,6 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { app, systemPreferences, shell, screen } = require('electron');
 const { loadConfig, saveConfig } = require('../src/config');
-const { describeModMap } = require('../src/keymap');
 const { setScreenRect } = require('../src/input');
 const ddc = require('./ddc');
 
@@ -95,7 +94,8 @@ function ensureDefaults() {
   const ui = cfg.ui;
   if (!ui.receiveDir) ui.receiveDir = defaultReceiveDir();
   if (typeof ui.mouseSpeed !== 'number') ui.mouseSpeed = 1;
-  if (!ui.inputMode) ui.inputMode = 'separate';
+  // 键鼠模式固定「各用各的」：共用键鼠功能已移除，旧配置里存过的 local / remote 一律归位
+  ui.inputMode = 'separate';
   if (!ui.displayName) ui.displayName = cfg.peerName;
 
   // 快捷键：global + 每块显示器一个
@@ -143,11 +143,10 @@ function ensureDefaults() {
   delete ui.usePassword;
   delete ui.password;
 
-  // shareInput / isHost 必须跟键鼠模式一致：旧配置里这两个值可能是 true，
-  // 会让「各用各的」也偷偷捕获键鼠、鼠标推到边上就换电脑
-  const mode = ui.inputMode || 'separate';
-  cfg.shareInput = mode !== 'separate';
-  cfg.isHost = mode !== 'remote';
+  // 键鼠模式固定「各用各的」：共用键鼠已移除，旧配置里残留的 shareInput=true 必须清掉，
+  // 否则「各用各的」也会偷偷捕获键鼠、鼠标推到屏幕边上就换电脑
+  cfg.shareInput = false;
+  cfg.isHost = true;
 
   saveConfig(cfg);
 }
@@ -157,25 +156,19 @@ function persist() {
 }
 
 /**
- * 切换键鼠模式。
- * 这个状态两端必须一致，所以改完要把模式广播出去，
- * 让对端切到镜像角色（我当主机 → 对端只接收；我共用对端 → 对端开始捕获）。
+ * 键鼠模式：固定「各用各的」。
+ * 共用键鼠（共用本机 / 共用对端）已整体移除 —— 不管谁传什么进来都只回落到 separate，
+ * 免得旧配置、对端的模式同步消息或残留 IPC 又把键鼠捕获打开。
  */
 function applyInputMode(mode, opts) {
-  cfg.ui.inputMode = mode;
-  if (mode === 'separate') {
-    cfg.shareInput = false;
-    cfg.isHost = true; // 捕获层存在但不转发
-  } else if (mode === 'local') {
-    cfg.shareInput = true;
-    cfg.isHost = true;   // 本机接物理键鼠，捕获并转发
-  } else if (mode === 'remote') {
-    cfg.shareInput = true;
-    cfg.isHost = false;  // 本机只接收注入，不捕获
-  }
+  void mode;
+  void opts;
+  cfg.ui.inputMode = 'separate';
+  cfg.shareInput = false;
+  cfg.isHost = true; // 捕获层存在但永不启动
   persist();
   if (peer && peer.refreshInputMode) peer.refreshInputMode();
-  if (!(opts && opts.silent) && peer && peer.announceInputMode) peer.announceInputMode(mode);
+  return false;
 }
 
 /* ---------------- 设备 ---------------- */
@@ -263,42 +256,6 @@ function setArrange(list) {
     persist();
   }
   return arrangeOrder();
-}
-
-function flipArrange() {
-  const flipped = arrangeOrder().slice().reverse();
-  if (peer && typeof peer.flipArrange === 'function') {
-    const next = peer.flipArrange();
-    cfg.ui.arrange = next;
-    cfg.ui.arrangeTouched = true;
-    persist();
-    return arrangeOrder();
-  }
-  return setArrange(flipped);
-}
-
-/** 键鼠此刻在哪台 + 左右各是哪台（界面画方向罗盘用） */
-function inputWhere() {
-  const order = arrangeOrder();
-  const me = peer && typeof peer.getActive === 'function' ? peer.getActive() : cfg.peerName;
-  const online = (id) => id === cfg.peerName || peersNow.some((p) => p.name === id);
-  const i = order.indexOf(me);
-  const pick = (dir) => {
-    if (i < 0) return '';
-    const step = dir === 'left' ? -1 : 1;
-    for (let j = i + step; j >= 0 && j < order.length; j += step) if (online(order[j])) return order[j];
-    return '';
-  };
-  const nameOf = (id) => (id ? deviceInfo(id).name : '');
-  return {
-    controlling: me,
-    controllingName: nameOf(me) || '本机',
-    local: me === cfg.peerName,
-    left: pick('left'),
-    right: pick('right'),
-    leftName: nameOf(pick('left')),
-    rightName: nameOf(pick('right'))
-  };
 }
 
 /* ---------------- 每块屏 × 每台设备的接口 ---------------- */
@@ -854,19 +811,27 @@ function publishAuthority() {
 }
 
 /**
- * 收到别的机器发来的快照：只接受更新的那一版（大者胜，平局时听对端的）。
- * 收下之后要把本机已经过期的 DDC 读数作废 —— 否则界面会一直拿旧读数说话，
- * 看上去就像「切换没同步过去」。
+ * 收到别的机器发来的快照。
+ *
+ * 版本号是**每台机器各自的**逻辑计数（每次事件 +1），所以两台机器的号不能直接比大小：
+ * 只跟「这台机器上次发给我的号」比 —— 同一个来源自己的号是单调的，更新的那份永远不会被丢掉。
+ * 早先拿全局最大号当门槛，结果谁发的次数多谁就「号大」，对端真正的新快照反而被当成旧的丢弃
+ * （Windows 点完切换，Mac 上还停在切换前的状态）。
  */
 function applyAuthority(a) {
   if (!a || !Array.isArray(a.screens) || !a.rev) return null;
-  const cur = cfg.ui.authority || { rev: 0 };
   const rev = Number(a.rev);
-  if (rev < Number(cur.rev || 0)) return null;
-  if (rev === Number(cur.rev || 0) && a.at === cfg.peerName) return null;
+  if (!Number.isFinite(rev) || rev <= 0) return null;
+  const origin = String(a.at || '').trim() || 'peer';
+  // 自己名下的快照不收（防止重名设备互相覆盖）
+  if (origin === cfg.peerName) return null;
+  if (!cfg.ui.authSeen || typeof cfg.ui.authSeen !== 'object') cfg.ui.authSeen = {};
+  if (rev <= Number(cfg.ui.authSeen[origin] || 0)) return null;
+  cfg.ui.authSeen[origin] = rev;
+  // 本机下一版要压在「见过的最大号」之上，否则别人会拿它自己的号把我们的新快照挡回去
   authSeq = Math.max(authSeq, rev);
   cfg.ui.authSeq = authSeq;
-  cfg.ui.authority = { rev, at: a.at || '', screens: a.screens };
+  cfg.ui.authority = { rev, at: origin, screens: a.screens };
 
   // 本机此刻的读数如果和公认归属矛盾，说明这份读数是切换之前留下的，已经过期。
   // 清掉它，归属就退回快照（下一步重扫会以 DDC 实测为准）。
@@ -1513,19 +1478,6 @@ function openInputMonitoringSettings() {
   return true;
 }
 
-function retryCapture() {
-  if (peer && typeof peer.retryCapture === 'function') {
-    const res = peer.retryCapture();
-    if (res.ok) {
-      pushStatus('键鼠捕获已成功启动', 'ok');
-    } else {
-      pushStatus(`键鼠捕获未启动：${res.error}`, 'warn');
-    }
-    return res;
-  }
-  return { ok: false, error: '未初始化' };
-}
-
 /* ---------------- 状态聚合 ---------------- */
 
 /** 当前选中的传输对象（多选）；不在线的自动剔除 */
@@ -1647,17 +1599,12 @@ function getState() {
       progress: clipProgress,
       percent: clipPercent
     },
-    inputMode: cfg.ui.inputMode,
+    inputMode: 'separate',
     input: {
-      mode: cfg.ui.inputMode,
-      capturing: !!(cfg.shareInput && cfg.isHost),
-      error: captureError(),
-      edgeSwitch: cfg.ui.edgeSwitch !== false,
-      modMap: cfg.ui.modMap || 'cmd-ctrl',
-      modDesc: describeModMap(cfg.ui.modMap || 'cmd-ctrl', process.platform, (peersNow[0] && peersNow[0].platform) || process.platform),
-      keyDebug: !!cfg.ui.keyDebug,
-      // 无缝移动的方向信息：键鼠此刻在哪台、左右各是哪台
-      where: inputWhere()
+      // 共用键鼠已移除：键鼠模式恒为「各用各的」，不再捕获、不再转发
+      mode: 'separate',
+      capturing: false,
+      error: ''
     },
     files: {
       transfers: fileTransfers,
@@ -1868,8 +1815,6 @@ module.exports = {
   applyInputMode,
   arrangeOrder,
   setArrange,
-  flipArrange,
-  inputWhere,
   deviceIds,
   deviceInfo,
   localLabel,
@@ -1902,8 +1847,6 @@ module.exports = {
   accessibilityGranted,
   openAccessibilitySettings,
   openInputMonitoringSettings,
-  retryCapture,
-  captureError,
   getState,
   onPeers,
   onActive,

@@ -25,18 +25,9 @@ contextBridge.exposeInMainWorld('api', {
   setHotkey: (enabled, kind, id, key) => ipcRenderer.invoke('hotkey:set', { enabled, kind, id, key }),
   setLaunchAtLogin: (open) => ipcRenderer.invoke('launch:set', open),
 
-  // 剪贴板 / 键鼠
+  // 剪贴板（共用键鼠已移除，键鼠模式恒为「各用各的」）
   setClipboardSync: (enabled) => ipcRenderer.invoke('clip:set', enabled),
   clipDir: (action) => ipcRenderer.invoke('clip:dir', action),
-  setInputMode: (mode) => ipcRenderer.invoke('input:mode', mode),
-  setEdgeSwitch: (on) => ipcRenderer.invoke('input:edge', on),
-  setModMap: (mode) => ipcRenderer.invoke('input:mod-map', mode),
-  setKeyDebug: (on) => ipcRenderer.invoke('input:key-debug', on),
-  // 无缝移动的方向：改左右顺序 / 只把键鼠交给某台 / 把鼠标亮出来
-  setArrange: (list) => ipcRenderer.invoke('input:arrange', { list }),
-  flipArrange: () => ipcRenderer.invoke('input:arrange', { flip: true }),
-  handControl: (target, side) => ipcRenderer.invoke('input:hand', { target, side }),
-  locateCursor: () => ipcRenderer.invoke('input:locate'),
 
   // 文件 / 文本：targets 是设备身份数组，支持一次发给多台
   pickFiles: (targets) => ipcRenderer.invoke('files:pick', targets),
@@ -53,11 +44,6 @@ contextBridge.exposeInMainWorld('api', {
   revealFile: (p) => ipcRenderer.invoke('files:reveal', p),
   copyText: (text) => ipcRenderer.invoke('clip:write', text),
   showText: (payload) => ipcRenderer.invoke('text:show', payload),
-
-  permissionStatus: () => ipcRenderer.invoke('perm:status'),
-  openAccessibility: () => ipcRenderer.invoke('perm:open'),
-  openInputMonitoring: () => ipcRenderer.invoke('perm:open-input-monitoring'),
-  retryCapture: () => ipcRenderer.invoke('perm:retry'),
 
   help: () => ipcRenderer.invoke('app:help'),
   minimize: () => ipcRenderer.invoke('window:minimize'),

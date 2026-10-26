@@ -259,84 +259,12 @@ function renderConn(s) {
   }
 }
 
-/* 当前键鼠模式：直接显示在顶部提示区 */
+/* 键鼠模式固定为「各用各的」（共用键鼠功能已移除），顶部只做展示 */
 function renderModeLine(s) {
-  const me = (s.me && s.me.name) || '本机';
-  const other = (s.connection && s.connection.peers[0] && (s.connection.peers[0].label || s.connection.peers[0].name)) || '其它电脑';
-  const modes = s.inputMode || 'separate';
   const value = $('#connModeText');
-  const label = modes === 'local' ? `共用 ${me} 的键鼠` : modes === 'remote' ? `共用 ${other} 的键鼠` : '各用各的键鼠';
-  value.textContent = label;
-  value.classList.toggle('is-separate', modes === 'separate');
-}
-
-/* 权限提醒：只在真的缺权限或捕获报错时出现 */
-function renderPerm(s) {
-  const btn = $('#connPerm');
-  const granted = !!(s.permission && s.permission.accessibility);
-  const st = s.input || {};
-  const need = s.isMac && (!granted || !!st.error);
-  btn.hidden = !need;
-  if (!need) {
-    if (!$('#permModal').hidden) closePermModal();
-    return;
-  }
-  $('#connPermText').textContent = st.error ? '键鼠捕获未启动' : 'Mac 键鼠权限待授权';
-  btn.title = st.error ? st.error : '点这里打开 macOS 权限设置与诊断排查';
-  if (!$('#permModal').hidden) updatePermModal(s);
-}
-
-function openPermModal() {
-  updatePermModal(S || {});
-  $('#permModal').hidden = false;
-  document.body.classList.add('modal-open');
-}
-
-function closePermModal() {
-  $('#permModal').hidden = true;
-  document.body.classList.remove('modal-open');
-}
-
-function updatePermModal(s) {
-  const granted = !!(s.permission && s.permission.accessibility);
-  const err = (s.input && s.input.error) || '';
-  const textEl = $('#pmStatusText');
-  const descEl = $('#pmStatusDesc');
-
-  if (granted && !err) {
-    textEl.textContent = '已正常启动';
-    textEl.style.color = '#34d399';
-    descEl.textContent = '辅助功能与输入监控权限均已就绪，键鼠可以正常跨设备共用。';
-  } else if (err) {
-    textEl.textContent = '键鼠捕获未启动';
-    textEl.style.color = '#f87171';
-    descEl.textContent = err.includes('权限') ? err : `捕获错误：${err}。通常是因为缺少输入监控权限或系统旧签名缓存。`;
-  } else {
-    textEl.textContent = '系统权限未就绪';
-    textEl.style.color = '#fbbf24';
-    descEl.textContent = 'macOS 需要开启「辅助功能」与「输入监控」权限才能捕获与转发物理键鼠。';
-  }
-}
-
-/* 键鼠模式按钮（共用键鼠页） */
-function renderModes(s) {
-  const me = (s.me && s.me.name) || '本机';
-  const other = (s.connection && s.connection.peers[0] && (s.connection.peers[0].label || s.connection.peers[0].name)) || '对端';
-  $$('[data-role="mode"] button').forEach((b) => {
-    b.classList.toggle('is-on', b.dataset.mode === s.inputMode);
-    b.textContent = b.dataset.mode === 'local'
-      ? `共用 ${me} 键鼠`
-      : b.dataset.mode === 'remote'
-        ? `共用 ${other} 键鼠`
-        : '各用各的';
-  });
-
-  const text = s.inputMode === 'separate'
-    ? '各设备用各自的键盘鼠标，互不干扰。'
-    : s.inputMode === 'local'
-      ? `用 ${me} 接的键盘鼠标控制所有设备；鼠标推到边缘就流到相邻设备。`
-      : `用 ${other} 接的键盘鼠标控制所有设备；本机只接收操作。`;
-  if ($('#inputModeHint')) $('#inputModeHint').textContent = text;
+  value.textContent = '各用各的键鼠';
+  value.classList.add('is-separate');
+  void s;
 }
 
 /* ---------------- 设备与显示器 ---------------- */
@@ -1027,56 +955,6 @@ function toast(text) {
   toastTimer = setTimeout(() => box.classList.remove('is-on'), 2600);
 }
 
-/* ---------------- 渲染：共用键鼠 ---------------- */
-
-function renderInput(s) {
-  const st = s.input || {};
-
-  $('#edgeSwitch').checked = st.edgeSwitch !== false;
-  $$('#modSeg button').forEach((b) => {
-    b.classList.toggle('is-on', b.dataset.mod === (st.modMap || 'cmd-ctrl'));
-  });
-  $('#modHint').textContent = st.modDesc || '';
-  $('#keyDebug').checked = !!st.keyDebug;
-
-  renderCompass(s);
-}
-
-/**
- * 方向罗盘：把「往左 / 往右是哪台」「键鼠此刻在哪台」直接画出来。
- * 共用键鼠最常卡住的地方就是不知道往哪推鼠标，所以这里给足信息 + 一键直达。
- */
-function renderCompass(s) {
-  const st = s.input || {};
-  const w = st.where || {};
-  const me = (s.me && s.me.name) || '本机';
-  const connected = !!(s.connection && s.connection.connected);
-
-  const here = $('#cmpHere');
-  const hereName = w.controllingName || me;
-  $('#cmpHereName').textContent = w.local === false ? hereName : `${hereName}（本机）`;
-  $('#cmpHereNote').textContent = w.local === false ? '键鼠正被这台拿着' : '键鼠在本机';
-  here.classList.toggle('is-remote', w.local === false);
-
-  const side = (btnId, nameId, goId, name, target) => {
-    const btn = $(btnId);
-    $(nameId).textContent = name || '没有设备';
-    $(goId).textContent = name ? '推边缘 / 点这里过去' : '这一侧没有设备';
-    btn.classList.toggle('is-empty', !name);
-    btn.disabled = !name;
-    btn.dataset.target = target || '';
-  };
-  side('#cmpLeft', '#cmpLeftName', '#cmpLeftGo', w.leftName, w.left);
-  side('#cmpRight', '#cmpRightName', '#cmpRightGo', w.rightName, w.right);
-
-  $('#cmpNote').textContent = connected
-    ? (w.leftName || w.rightName ? '左右顺序按设备列表顺序' : '暂时只有一台设备在线')
-    : '还没有其它设备在线';
-  $('#homeBtn').disabled = w.local !== false;
-  $('#locateBtn').disabled = false;
-  $('#flipBtn').disabled = (s.devices || []).length < 2;
-}
-
 /* ---------------- 状态行 ---------------- */
 
 function renderStatus(s) {
@@ -1100,12 +978,9 @@ function apply(s) {
 
   renderConn(s);
   renderModeLine(s);
-  renderPerm(s);
-  renderModes(s);
   buildWorkbench(s);
   buildHotkeys(s);
   renderShare(s);
-  renderInput(s);
   renderStatus(s);
 }
 
@@ -1192,7 +1067,6 @@ function bindSharePanel() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (!$('#textModal').hidden) closeTextModal();
-      if (!$('#permModal').hidden) closePermModal();
     }
   });
 
@@ -1232,59 +1106,14 @@ function bindSharePanel() {
   window.addEventListener('drop', (e) => e.preventDefault());
 }
 
-function bindInputPanel() {
-  $('#edgeSwitch').addEventListener('change', (e) => push(window.api.setEdgeSwitch(e.target.checked)));
-  $$('[data-role="mode"] button').forEach((b) => {
-    b.addEventListener('click', () => push(window.api.setInputMode(b.dataset.mode)));
-  });
-  $$('#modSeg button').forEach((b) => {
-    b.addEventListener('click', () => push(window.api.setModMap(b.dataset.mod)));
-  });
-  $('#keyDebug').addEventListener('change', (e) => push(window.api.setKeyDebug(e.target.checked)));
-
-  // 罗盘左右两侧：点一下直接把键鼠交过去（不动显示器）
-  ['#cmpLeft', '#cmpRight'].forEach((sel) => {
-    $(sel).addEventListener('click', () => {
-      const t = $(sel).dataset.target;
-      if (t) push(window.api.handControl(t, sel === '#cmpLeft' ? 'left' : 'right'));
-    });
-  });
-  $('#homeBtn').addEventListener('click', () => push(window.api.handControl('')));
-  $('#locateBtn').addEventListener('click', () => push(window.api.locateCursor()));
-  $('#flipBtn').addEventListener('click', () => push(window.api.flipArrange()));
-}
-
 function bindFooter() {
   $('#helpBtn').addEventListener('click', () => window.api.help());
 }
 
-/* 顶部提示区：权限提醒按钮 + 点键鼠模式跳去共用键鼠页 */
+/* 顶部提示区：键鼠模式固定「各用各的」，不再需要跳转 */
 function bindConnBar() {
-  $('#connPerm').addEventListener('click', openPermModal);
-  $('#pmClose').addEventListener('click', closePermModal);
-  $('#pmDone').addEventListener('click', closePermModal);
-  $('#pmBtnAx').addEventListener('click', () => window.api.openAccessibility());
-  $('#pmBtnInput').addEventListener('click', () => window.api.openInputMonitoring());
-  $('#pmRetry').addEventListener('click', async () => {
-    const retryBtn = $('#pmRetry');
-    retryBtn.disabled = true;
-    retryBtn.textContent = '检测中…';
-    try {
-      const state = await window.api.retryCapture();
-      if (state) apply(state);
-    } finally {
-      retryBtn.disabled = false;
-      retryBtn.textContent = '立即重试';
-    }
-  });
-  $('#permModal').addEventListener('click', (e) => {
-    if (e.target.id === 'permModal') closePermModal();
-  });
-
   const mode = $('#connMode');
-  mode.classList.add('is-clickable');
-  mode.title = '点这里去「共用键鼠」页切换模式';
-  mode.addEventListener('click', () => switchTab('input'));
+  mode.title = '各设备用各自的键盘鼠标';
 }
 
 /* ---------------- 启动 ---------------- */
@@ -1294,7 +1123,6 @@ function bindConnBar() {
   bindConnBar();
   bindSwitchPanel();
   bindSharePanel();
-  bindInputPanel();
   bindFooter();
 
   try {

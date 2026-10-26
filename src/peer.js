@@ -40,7 +40,9 @@ function createPeer(userConfig, hooks) {
   let phantom = null;            // 对端指针位置（host 侧跟踪）
   let busy = false;              // 正在执行一次切换，避免边界反复触发
   let autoLockUntil = 0;         // 手动切换后短暂关闭自动穿越（切换优先）
-  let authorityRev = 0;          // 已收到的「每块屏归谁」快照版本，旧的丢弃
+  // 「每块屏归谁」的快照版本，按来源分别记：每台机器自己的版本号才是单调可比的，
+  // 跨机器比大小会把对端真正的新快照当成旧的丢掉（界面于是停在切换前）
+  const authRevByOrigin = new Map();
 
   const BOOT_AT = Date.now() - Math.round((typeof process !== 'undefined' && process.uptime ? process.uptime() : 0) * 1000);
   const injector = createInjector();
@@ -124,11 +126,6 @@ function createPeer(userConfig, hooks) {
     broadcast({ type: 'arrange', list: clean });
     if (typeof h.onArrange === 'function') h.onArrange(clean);
     return clean;
-  }
-
-  /** 左右整体调换：用户试出「方向反了」时一键纠正 */
-  function flipArrange() {
-    return setArrange(arrangeOrder().slice().reverse());
   }
 
   /** 给界面用的方向信息：此刻键鼠在哪台、左右各是哪台 */
@@ -312,81 +309,12 @@ function createPeer(userConfig, hooks) {
     return result;
   }
 
-  /**
-   * 只把「键鼠控制权」交到某台设备，完全不动显示器。
-   * 共用键鼠时想直接跳到某台、或者在两台之间「找回鼠标」就用它 ——
-   * 显示器怎么分是用户在「设备与显示器」里定的，不应该被找鼠标这个动作改掉。
-   * @param {string} target
-   * @param {{side?:string}} [opts] side 为空则落在对端屏幕中间
-   */
-  async function handControl(target, opts) {
-    const o = opts || {};
-    if (!target) return 'missing';
-    if (!(target === myName || peers.has(target))) return 'missing';
-    if (target === activePeer) return 'skipped';
-
-    const prev = activePeer;
-    activePeer = target;
-    // 手动交出去后压一小会儿，免得鼠标正停在边缘、一动就又被自动穿越弹回来
-    autoLockUntil = Date.now() + 900;
-    resetInputState();
-    broadcast({ type: 'active', target: activePeer });
-
-    const side = o.side || 'center';
-    if (activePeer !== myName) {
-      const meta = peersMeta.get(activePeer);
-      const scr = (meta && meta.screen) || localScreenSize();
-      if (side === 'center') {
-        phantom = { x: Math.round(scr.width / 2), y: Math.round(scr.height / 2) };
-        sendTo(activePeer, { type: 'cursor-enter', edge: 'center', nx: 0.5, ny: 0.5 });
-      } else {
-        phantom = enterPoint(scr, side, 0.5, 0.5);
-        sendTo(activePeer, { type: 'cursor-enter', edge: side, nx: 0.5, ny: 0.5 });
-      }
-    } else {
-      phantom = null;
-    }
-
-    notifyActive();
-    if (typeof h.onSwitch === 'function') {
-      h.onSwitch({ target, label: '', result: 'control', detail: null, edge: null, missing: [] });
-    }
-    console.log(`[peer] 键鼠控制权交给: ${target}（显示器不动）`);
-    void prev;
-    return 'control';
-  }
-
-  /** 键鼠收回本机：鼠标跑到对端「找不到」时的一键归位 */
-  function bringHome() {
-    return handControl(myName);
-  }
-
   function enterPoint(scr, side, nx, ny) {
     if (side === 'right') return { x: 12, y: Math.round(ny * scr.height) };
     if (side === 'left') return { x: Math.max(12, scr.width - 14), y: Math.round(ny * scr.height) };
     if (side === 'bottom') return { x: Math.round(nx * scr.width), y: 12 };
     if (side === 'top') return { x: Math.round(nx * scr.width), y: Math.max(12, scr.height - 14) };
     return { x: Math.round(scr.width / 2), y: Math.round(scr.height / 2) };
-  }
-
-  /** 让本机指针在屏幕中间画个小圈：鼠标「跑丢了」时靠它把光标找回来 */
-  async function wiggleCursor() {
-    const s = localScreenSize();
-    const cx = Math.round(s.width / 2);
-    const cy = Math.round(s.height / 2);
-    for (let i = 0; i < 16; i += 1) {
-      const a = (i / 16) * Math.PI * 2;
-      moveLocalCursor(cx + Math.round(Math.cos(a) * 46), cy + Math.round(Math.sin(a) * 46));
-      await new Promise((r) => setTimeout(r, 16));
-    }
-    moveLocalCursor(cx, cy);
-  }
-
-  /** 让当前拿着键鼠的那台把光标抖一抖（本机就拿本机的，在对端就请对端抖） */
-  function locateCursor() {
-    if (activePeer === myName) return wiggleCursor();
-    if (sendTo(activePeer, { type: 'locate' })) return Promise.resolve(true);
-    return wiggleCursor();
   }
 
   /** 「这块屏现在显示的是你吗」的等待队列：自动识别接口时用它确认候选口 */
@@ -552,8 +480,11 @@ function createPeer(userConfig, hooks) {
       // 对端发来的「每块屏现在归谁」：新开的软件靠它对齐到局域网里已有的状态，
       // 任意一台切换之后也靠它让所有界面保持一致 —— 旧的直接丢，否则两端会来回覆盖
       // （版本号是逻辑计数，不比时钟；平局交给服务层判断）
-      if (!msg.rev || msg.rev < authorityRev) return;
-      authorityRev = Math.max(authorityRev, Number(msg.rev) || 0);
+      const from = String(msg.at || name || 'peer');
+      const rev = Number(msg.rev) || 0;
+      if (!rev) return;
+      if (rev <= Number(authRevByOrigin.get(from) || 0)) return; // 同一来源的旧版本才丢
+      authRevByOrigin.set(from, rev);
       if (typeof h.onAuthority === 'function') h.onAuthority(msg);
     }
     else if (msg.type === 'cursor-enter') {
@@ -615,10 +546,6 @@ function createPeer(userConfig, hooks) {
     else if (msg.type === 'probe-answer') {
       const w = probeWaiters.get(`${name}|${msg.key}`);
       if (w) w(msg.ans || 'unknown');
-    }
-    else if (msg.type === 'locate') {
-      // 对端喊「把鼠标亮出来」：本机把指针抖一下，帮用户在对端屏幕上找到它
-      if (typeof h.onLocate === 'function') h.onLocate(msg);
     }
   }
 
@@ -684,58 +611,43 @@ function createPeer(userConfig, hooks) {
     }
   });
 
-  /* ---------------- 键鼠模式同步 ----------------
-   * 「共用谁的键鼠」是个两端必须一致的状态：
-   *   本机 local（用我的键鼠）  ⇄  对端 remote（只接收操作）
-   *   本机 remote（用对端键鼠） ⇄  对端 local（对端捕获并转发）
-   * 以前只改本机配置，对端仍按自己的模式跑，于是「选了共用 A 的键鼠，
-   * 但没有一台在转发」，鼠标自然出不去。 */
+  /* ---------------- 键鼠模式 ----------------
+   * 共用键鼠（共用本机 / 共用对端）已整体移除，模式恒为「各用各的」。
+   * 对端如果还在发旧版的模式同步消息，一律忽略 —— 不能有任一端的键鼠被接管。 */
 
   function currentMode() {
-    return (cfg.ui && cfg.ui.inputMode) || 'separate';
+    return 'separate';
   }
 
-  // 本机当前模式是「用户在界面上选的」还是「跟着对端变的」
   let modeFromPeer = false;
 
   function setMode(next) {
     if (!cfg.ui) cfg.ui = {};
-    if (cfg.ui.inputMode === next) {
-      refreshInputMode();
-      return;
-    }
-    cfg.ui.inputMode = next;
-    cfg.shareInput = next !== 'separate';
-    cfg.isHost = next !== 'remote';
-    if (typeof h.onInputMode === 'function') h.onInputMode(next);
+    cfg.ui.inputMode = 'separate';
+    cfg.shareInput = false;
+    cfg.isHost = true;
+    void next;
     refreshInputMode();
   }
 
-  /** 把本机的键鼠模式广播出去，让对端切到镜像角色 */
-  function announceInputMode(mode) {
-    const m = mode || currentMode();
-    modeFromPeer = false; // 这是用户自己选的
-    broadcast({ type: 'input-mode', mode: m });
+  /** 共用键鼠已移除：不再对外广播键鼠模式 */
+  function announceInputMode() {
+    return false;
   }
 
-  /** 收到对端的模式：对端的角色是镜像；两边都想当主机时按名字决定谁让步 */
+  /** 收到对端的模式同步：一律回落到 separate，绝不允许对端把本机变成被控端 */
   function applyRemoteInputMode(mode, from) {
-    if (mode !== 'separate' && mode !== 'local' && mode !== 'remote') return;
-    const desired = mode === 'local' ? 'remote' : mode === 'remote' ? 'local' : 'separate';
-    const cur = currentMode();
-    if (cur === desired) { modeFromPeer = true; return; }
-    // 两边都想当同一个角色才是真冲突；只有本机是用户亲自选的才坚持，否则跟随对端
-    const conflict = cur === mode;
-    if (conflict && !modeFromPeer && myName < from) return;
-    setMode(desired);
-    modeFromPeer = true;
-    console.log(`[peer] 跟随 ${from} 的键鼠模式 → ${desired}`);
+    void mode;
+    void from;
+    modeFromPeer = false;
+    setMode('separate');
   }
 
   /* ---------------- 捕获启停 ---------------- */
 
   function refreshInputMode() {
-    const need = !!(cfg.shareInput && cfg.isHost);
+    // 共用键鼠已移除：永不捕获 / 转发本机键鼠
+    const need = false;
     if (need && !capture) {
       try {
         capture = createCapture({
@@ -757,16 +669,6 @@ function createPeer(userConfig, hooks) {
       try { capture.stop(); } catch { /* ignore */ }
       capture = null;
     }
-  }
-
-  function retryCapture() {
-    captureError = '';
-    if (capture) {
-      try { capture.stop(); } catch { /* ignore */ }
-      capture = null;
-    }
-    refreshInputMode();
-    return { ok: !captureError, error: captureError };
   }
 
   /* ---------------- 启动 ---------------- */
@@ -801,14 +703,8 @@ function createPeer(userConfig, hooks) {
     announceInputMode,
     listPeers,
     neighbors: neighborInfo,
-    /** 只交键鼠控制权、不动显示器 */
-    handControl,
-    bringHome,
-    locateCursor,
-    wiggleCursor,
     getArrange: arrangeOrder,
     setArrange,
-    flipArrange,
     offerFiles: (paths, target) => fileTransfer.offerFiles(paths, target),
     cancelTransfer: (id) => fileTransfer.cancel(id),
     removeTransfer: (id) => fileTransfer.remove(id),
@@ -817,7 +713,6 @@ function createPeer(userConfig, hooks) {
     listTransfers: () => fileTransfer.list(),
     getActive: () => activePeer,
     getCaptureError: () => captureError,
-    retryCapture,
     /** 让指定对端执行一次 DDC（单台显示器切换时用） */
     relayDdc: (target, payload) => sendTo(target, { type: 'ddc', ...payload }),
     /** 手动切换后暂停自动穿越：避免鼠标一动就把画面又弹回去（切换优先） */
@@ -830,7 +725,7 @@ function createPeer(userConfig, hooks) {
     /** 广播「每块屏现在归谁」：任意一台切换成功后，全局界面都跟着同步 */
     sendAuthority: (a) => {
       if (!a || !a.screens) return false;
-      authorityRev = Math.max(authorityRev, Number(a.rev) || 0);
+      if (a.rev) authRevByOrigin.set(String(a.at || myName), Number(a.rev) || 0);
       broadcast({ type: 'authority', ...a });
       return true;
     },
