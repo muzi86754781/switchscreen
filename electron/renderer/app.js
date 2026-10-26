@@ -798,7 +798,9 @@ function renderPeers(s) {
     const p = peers.find((x) => x.name === n);
     return p ? (p.label || p.name) : n;
   });
-  $('#dzPeer').textContent = names.length ? `发送到 ${names.join('、')}` : '未连接 · 等待其它设备';
+  $('#dzPeer').textContent = names.length
+    ? `当前接收方：${names.join('、')}（文件和文字都会发给他们）`
+    : '点上面的设备选一台（可多选）';
   $('#targetNote').textContent = names.length > 1 ? `已选 ${names.length} 台` : '';
 }
 
