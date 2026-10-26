@@ -131,6 +131,16 @@ function broadcastState() {
   refreshTray();
 }
 
+// 文件传输期间分块很密，界面刷新做个节流（~10fps）
+let stateTimer = null;
+function broadcastStateThrottled() {
+  if (stateTimer) return;
+  stateTimer = setTimeout(() => {
+    stateTimer = null;
+    broadcastState();
+  }, 100);
+}
+
 function registerIpc() {
   ipcMain.handle('state:get', () => services.getState());
   ipcMain.handle('state:refresh', async () => {
@@ -275,6 +285,69 @@ function registerIpc() {
     shell.openExternal('https://github.com/muzi86754781/switchscreen#readme');
   });
 
+  /* ---------- 文件传输 ---------- */
+
+  async function sendPaths(paths) {
+    if (!peer) { services.pushStatus('网络层未启动', 'warn'); return services.getState(); }
+    const conn = services.getState().connection;
+    if (!conn.count) { services.pushStatus('未连接另一台电脑，无法发送', 'warn'); return services.getState(); }
+    const res = await peer.offerFiles(paths, conn.peers[0].name);
+    if (!res || !res.ok) services.pushStatus((res && res.error) || '发送失败', 'warn');
+    else services.pushStatus(`已发送 ${paths.length} 项到 ${conn.peers[0].name}`, 'ok');
+    return services.getState();
+  }
+
+  ipcMain.handle('files:pick', async () => {
+    const r = await dialog.showOpenDialog(win, {
+      properties: ['openFile', 'multiSelections', 'openDirectory'],
+      title: '选择要发送的文件或文件夹'
+    });
+    if (r.canceled || !r.filePaths.length) return services.getState();
+    return sendPaths(r.filePaths);
+  });
+
+  ipcMain.handle('files:send-paths', (_e, paths) => sendPaths(paths || []));
+
+  ipcMain.handle('files:cancel', (_e, id) => {
+    if (peer) peer.cancelTransfer(id);
+    services.pushStatus('已取消传输', 'info');
+    return services.getState();
+  });
+
+  ipcMain.handle('files:text', (_e, text) => {
+    if (!peer) return services.getState();
+    const conn = services.getState().connection;
+    if (!conn.count) { services.pushStatus('未连接另一台电脑，无法发送', 'warn'); return services.getState(); }
+    peer.sendText(text, conn.peers[0].name);
+    services.pushStatus('已发送文本', 'ok');
+    return services.getState();
+  });
+
+  ipcMain.handle('files:open-dir', async () => {
+    const dir = services.cfg.ui.receiveDir || services.defaultReceiveDir();
+    try { fs.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
+    shell.openPath(dir);
+    return services.getState();
+  });
+
+  ipcMain.handle('files:set-dir', async () => {
+    const r = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory', 'createDirectory'],
+      defaultPath: services.cfg.ui.receiveDir || services.defaultReceiveDir()
+    });
+    if (!r.canceled && r.filePaths[0]) {
+      services.cfg.ui.receiveDir = r.filePaths[0];
+      services.persist();
+      services.pushStatus('接收目录已更新', 'ok');
+    }
+    return services.getState();
+  });
+
+  ipcMain.handle('files:reveal', (_e, p) => {
+    if (p) shell.showItemInFolder(p);
+    return services.getState();
+  });
+
   ipcMain.handle('window:minimize', () => win && win.minimize());
   ipcMain.handle('window:close', () => win && win.hide());
 }
@@ -306,7 +379,8 @@ app.whenReady().then(() => {
       onSwitch: (info) => { services.onSwitch(info); broadcastState(); },
       onSwitchRequest: (info) => {
         Promise.resolve(services.onSwitchRequest(info)).then(broadcastState).catch(() => {});
-      }
+      },
+      onFileUpdate: (list) => { services.onFileUpdate(list); broadcastStateThrottled(); }
     });
     services.setPeer(peer);
   } catch (e) {

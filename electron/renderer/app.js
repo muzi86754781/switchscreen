@@ -64,12 +64,37 @@ function renderSwitch(s) {
   $('#devRemoteRole').textContent = remote.connected ? remote.name : '另一台电脑';
   $('#devRemote').classList.toggle('is-on', remote.connected);
 
-  // 显示器
+  // 当前是哪台，就用颜色标注哪台
+  const localActive = s.active === 'local';
+  $('#devLocal').classList.toggle('is-active', localActive);
+  $('#devRemote').classList.toggle('is-active', !localActive);
+  $('#devLocalBadge').style.display = localActive ? '' : 'none';
+  $('#devRemoteBadge').style.display = localActive ? 'none' : '';
+
+  // 显示器：直接列出全部（不用下拉框）
+  const ml = $('#monitorList');
+  const sig = s.monitor.list.map((m) => `${m.id}|${m.name}|${m.currentInputLabel || ''}|${m.index}`).join(',');
+  if (ml.dataset.sig !== sig) {
+    ml.innerHTML = '';
+    for (const m of s.monitor.list) {
+      const item = document.createElement('div');
+      item.className = 'monitor-item';
+      item.innerHTML = '<span class="mon-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="1.6"/><path d="M9 20h6M12 16v4"/></svg></span><div class="mon-main"><b></b><em></em></div><span class="mon-tag"></span>';
+      item.querySelector('b').textContent = m.name;
+      item.querySelector('em').textContent = m.currentInputLabel ? `当前输入：${m.currentInputLabel}` : '当前输入：未知';
+      const tag = item.querySelector('.mon-tag');
+      const hasDdc = typeof m.index === 'number';
+      tag.className = `mon-tag ${hasDdc ? 'ok' : 'no'}`;
+      tag.textContent = hasDdc ? 'DDC' : '无 DDC';
+      ml.appendChild(item);
+    }
+    ml.dataset.sig = sig;
+  }
+
   const monItems = s.monitor.list.map((m) => ({
     value: m.id,
     label: m.serial ? `${m.name} · ${m.serial}` : m.name
   }));
-  setOptions($('#monitorSelect'), monItems, s.monitor.selectedId);
   setOptions($('#monitorSelect2'), monItems, s.monitor.selectedId);
 
   // 接口
@@ -188,6 +213,87 @@ function paintRange(v) {
   el.style.background = `linear-gradient(90deg, #5b8cf0 0%, #7aa5ff ${pct}%, rgba(255,255,255,0.14) ${pct}%)`;
 }
 
+function fmtSize(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return `${v} B`;
+  const u = ['KB', 'MB', 'GB', 'TB'];
+  let i = -1;
+  let x = v;
+  do { x /= 1024; i += 1; } while (x >= 1024 && i < u.length - 1);
+  return `${x >= 10 || i === 0 ? x.toFixed(0) : x.toFixed(1)} ${u[i]}`;
+}
+
+const STATUS_TEXT = {
+  waiting: '等待对方接收…',
+  sending: '发送中',
+  receiving: '接收中',
+  done: '已完成',
+  failed: '失败',
+  canceled: '已取消'
+};
+
+function renderFile(s) {
+  const f = s.files || { transfers: [], recvDir: '' };
+  const peers = (s.connection && s.connection.peers) || [];
+  $('#fileRecvDir').value = f.recvDir || '';
+  $('#dzPeer').textContent = peers.length
+    ? `发送到 ${peers[0].name}`
+    : '未连接 · 请让另一台电脑打开本软件并填入相同密码';
+
+  const list = $('#txList');
+  const transfers = f.transfers || [];
+  const summary = $('#txSummary');
+  summary.textContent = transfers.length ? `最近 ${transfers.length} 条` : '';
+
+  if (!transfers.length) {
+    if (!list.querySelector('.empty')) list.innerHTML = '<div class="empty">还没有传输记录</div>';
+    return;
+  }
+  const empty = list.querySelector('.empty');
+  if (empty) empty.remove();
+
+  const seen = new Set();
+  for (const t of transfers) {
+    seen.add(t.id);
+    let el = list.querySelector(`[data-id="${t.id}"]`);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'tx';
+      el.dataset.id = t.id;
+      el.innerHTML = '<div class="tx-head"><span class="tx-dir"></span><b></b><span class="tx-size"></span></div><div class="tx-bar"><i></i></div><div class="tx-foot"><span class="tx-state"></span><span class="tx-extra"></span></div>';
+      list.prepend(el);
+    }
+    const pct = t.size ? Math.min(100, Math.round((t.done / t.size) * 100)) : (t.status === 'done' ? 100 : 0);
+    el.classList.toggle('done', t.status === 'done');
+    el.classList.toggle('failed', t.status === 'failed');
+    el.querySelector('.tx-dir').textContent = t.dir === 'in' ? '接收' : '发送';
+    el.querySelector('b').textContent = t.name || '未命名';
+    el.querySelector('.tx-size').textContent = fmtSize(t.size);
+    el.querySelector('.tx-bar i').style.width = `${pct}%`;
+    el.querySelector('.tx-state').textContent = `${STATUS_TEXT[t.status] || t.status}${t.size ? ` · ${pct}%` : ''}`;
+
+    const extra = el.querySelector('.tx-extra');
+    if (t.status === 'sending' || t.status === 'receiving' || t.status === 'waiting') {
+      if (!extra.querySelector('button')) {
+        extra.innerHTML = '<button class="tx-act" data-cancel="1">取消</button>';
+        extra.querySelector('button').addEventListener('click', () => push(window.api.cancelTransfer(t.id)));
+      }
+    } else if (t.status === 'done' && t.dir === 'in') {
+      if (!extra.querySelector('button')) {
+        extra.innerHTML = '<button class="tx-act" data-reveal="1">在文件夹中显示</button>';
+        extra.querySelector('button').addEventListener('click', () => window.api.revealFile(t.path || f.recvDir));
+      }
+    } else {
+      extra.textContent = t.error || '';
+    }
+  }
+
+  Array.from(list.children).forEach((c) => {
+    const id = c.dataset && c.dataset.id;
+    if (id && !seen.has(id)) c.remove();
+  });
+}
+
 function apply(s) {
   S = s;
   document.body.classList.toggle('win', !s.isMac);
@@ -195,6 +301,7 @@ function apply(s) {
   renderSwitch(s);
   renderClip(s);
   renderInput(s);
+  renderFile(s);
 }
 
 /* ---------------- 事件 ---------------- */
@@ -218,7 +325,6 @@ async function push(promise) {
 }
 
 function bindSwitchPanel() {
-  $('#monitorSelect').addEventListener('change', (e) => push(window.api.selectMonitor(e.target.value)));
   $('#monitorSelect2').addEventListener('change', (e) => push(window.api.selectMonitor(e.target.value)));
   $('#redetectBtn').addEventListener('click', () => push(window.api.detectMonitor()));
   $('#redetectBtn2').addEventListener('click', () => push(window.api.detectMonitor()));
@@ -240,6 +346,45 @@ function bindSwitchPanel() {
     const r = await window.api.switchTo(role);
     if (r && r.state) apply(r.state);
   });
+
+  // 双击工作台里的电脑直接切过去
+  $('#devLocal').addEventListener('dblclick', () => push(window.api.switchTo('local')));
+  $('#devRemote').addEventListener('dblclick', () => push(window.api.switchTo('remote')));
+}
+
+function bindFilePanel() {
+  $('#pickFiles').addEventListener('click', (e) => {
+    e.stopPropagation();
+    push(window.api.pickFiles());
+  });
+  $('#fileRecvChoose').addEventListener('click', () => push(window.api.setRecvDir()));
+  $('#fileRecvOpen').addEventListener('click', () => push(window.api.openRecvDir()));
+
+  const sendTextNow = () => {
+    const el = $('#textInput');
+    const text = el.value.trim();
+    if (!text) return;
+    el.value = '';
+    push(window.api.sendText(text));
+  };
+  $('#sendTextBtn').addEventListener('click', sendTextNow);
+  $('#textInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendTextNow();
+  });
+
+  const dz = $('#dropzone');
+  const over = (v) => dz.classList.toggle('is-over', v);
+  ['dragenter', 'dragover'].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); over(true); }));
+  ['dragleave', 'dragend'].forEach((ev) => dz.addEventListener(ev, () => over(false)));
+  dz.addEventListener('drop', (e) => {
+    e.preventDefault();
+    over(false);
+    const paths = Array.from(e.dataTransfer.files || []).map((f) => f.path).filter(Boolean);
+    if (paths.length) push(window.api.sendPaths(paths));
+  });
+  // 防止把文件拖到别处时窗口直接打开它
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => e.preventDefault());
 }
 
 function bindClipPanel() {
@@ -301,6 +446,7 @@ function bindFooter() {
   bindSwitchPanel();
   bindClipPanel();
   bindInputPanel();
+  bindFilePanel();
   bindFooter();
 
   try {

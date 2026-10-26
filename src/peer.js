@@ -1,7 +1,10 @@
 'use strict';
 
+const os = require('os');
+const path = require('path');
 const { startDiscovery, connectPeer, startServer } = require('./net');
 const { createClipboardSync } = require('./clipboard');
+const { createFileTransfer } = require('./filetransfer');
 const { switchSource, getPlatform } = require('./monitor');
 const { startCapture, injectEvent } = require('./input');
 const { loadConfig } = require('./config');
@@ -128,6 +131,8 @@ function createPeer(userConfig, hooks) {
   // ---- 收到对端消息 ----
   function handleMessage(name, msg) {
     if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'text-send') { fileTransfer.onText(msg, name); return; }
+    if (fileTransfer.handle(msg, name)) return;
     if (msg.type === 'clipboard') clipboard.onRemoteClipboard(msg.text);
     else if (msg.type === 'input') injectEvent(msg.ev);
     else if (msg.type === 'ddc') {
@@ -145,6 +150,13 @@ function createPeer(userConfig, hooks) {
   const clipboard = createClipboardSync({
     send: (m) => broadcast(m),
     isEnabled: () => cfg.clipboardSync
+  });
+
+  // ---- 文件/文本传输 ----
+  const fileTransfer = createFileTransfer({
+    send: (m) => broadcast(m),
+    recvDir: () => (cfg.ui && cfg.ui.receiveDir) || path.join(os.homedir(), 'Desktop', 'SwitchScreen'),
+    onUpdate: (list) => { if (typeof h.onFileUpdate === 'function') h.onFileUpdate(list); }
   });
 
   // ---- 输入捕获的按需启停（界面切换模式时用）----
@@ -214,6 +226,10 @@ function createPeer(userConfig, hooks) {
     switchTo: applySwitch,
     refreshInputMode,
     listPeers,
+    offerFiles: (paths, target) => fileTransfer.offerFiles(paths, target),
+    cancelTransfer: (id) => fileTransfer.cancel(id),
+    sendText: (text, target) => fileTransfer.sendText(text, target),
+    listTransfers: () => fileTransfer.list(),
     getActive: () => activePeer,
     getCaptureError: () => captureError,
     stop: () => {

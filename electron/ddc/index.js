@@ -162,12 +162,22 @@ async function macSet(index, hexValue) {
   const tool = await macTool();
   if (!tool) return { ok: false, via: 'none', error: '未找到 m1ddc/ddcctl' };
   const base = path.basename(tool);
+  // ddcctl 的 -i 只接受 1-18 的十进制值，传 0x11 会被判为参数错误（打印 Usage）
   const decimal = String(parseInt(hexValue, 16));
   const r = base === 'm1ddc'
     ? await run(tool, ['display', String(index), 'set', 'input', decimal])
-    : await run(tool, ['-d', String(index), '-i', hexValue]);
+    : await run(tool, ['-d', String(index), '-i', decimal]);
+
+  const blob = `${r.out}\n${r.err}`;
+  if (/Usage:\s*ddcctl/i.test(blob)) {
+    return {
+      ok: false,
+      via: base,
+      error: `ddcctl 参数被拒绝（输入源必须是 1-18 的十进制，当前值 ${hexValue} → ${decimal}）`
+    };
+  }
   if (r.ok) return { ok: true, via: base };
-  return { ok: false, via: base, error: r.err || '切换失败' };
+  return { ok: false, via: base, error: (r.err || r.out || '切换失败').trim().slice(0, 200) };
 }
 
 /* ---------------- 对外接口 ---------------- */
@@ -184,4 +194,32 @@ async function setInput(index, hexValue) {
   return { ok: false, via: 'none', error: `不支持的平台：${process.platform}` };
 }
 
-module.exports = { listDisplays, setInput, labelOf, INPUT_LABELS, IS_WIN, IS_MAC };
+/**
+ * 把所有检测到的显示器一起切到同一个输入源。
+ * 顺序执行（并发读写 DDC 容易互相干扰），并统计成功/失败。
+ */
+async function setInputAll(hexValue) {
+  const l = await listDisplays();
+  const list = (l.displays || []).slice();
+  if (!list.length) {
+    return { ok: false, total: 0, success: 0, via: l.via, error: l.error || '未检测到显示器' };
+  }
+  const results = [];
+  for (const d of list) {
+    const r = await setInput(d.index, hexValue);
+    results.push({ index: d.index, name: d.name, ...r });
+  }
+  const okList = results.filter((r) => r.ok);
+  const failList = results.filter((r) => !r.ok);
+  return {
+    ok: okList.length > 0,
+    partial: okList.length > 0 && failList.length > 0,
+    total: results.length,
+    success: okList.length,
+    via: (okList[0] && okList[0].via) || l.via,
+    results,
+    error: failList.length ? failList[0].error : ''
+  };
+}
+
+module.exports = { listDisplays, setInput, setInputAll, labelOf, INPUT_LABELS, IS_WIN, IS_MAC };

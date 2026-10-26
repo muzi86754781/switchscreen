@@ -29,6 +29,14 @@ contextBridge.exposeInMainWorld('api', {
   setInputMode: (mode) => ipcRenderer.invoke('input:mode', mode),
   setMouseSpeed: (v) => ipcRenderer.invoke('input:speed', v),
 
+  pickFiles: () => ipcRenderer.invoke('files:pick'),
+  sendPaths: (paths) => ipcRenderer.invoke('files:send-paths', paths),
+  cancelTransfer: (id) => ipcRenderer.invoke('files:cancel', id),
+  sendText: (text) => ipcRenderer.invoke('files:text', text),
+  openRecvDir: () => ipcRenderer.invoke('files:open-dir'),
+  setRecvDir: () => ipcRenderer.invoke('files:set-dir'),
+  revealFile: (p) => ipcRenderer.invoke('files:reveal', p),
+
   permissionStatus: () => ipcRenderer.invoke('perm:status'),
   openAccessibility: () => ipcRenderer.invoke('perm:open'),
 

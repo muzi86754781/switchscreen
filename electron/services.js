@@ -34,6 +34,8 @@ let peersNow = [];
 let activeTarget = cfg.peerName;
 let monitorsCache = [];
 let ddcError = '';
+let fileTransfers = [];
+const fileStatusSeen = new Map();
 let clipProgress = 0;
 let clipPercent = 0;
 let statusLines = [];
@@ -151,8 +153,11 @@ async function detectMonitors() {
     if (r.ok && r.displays.length) {
       via = r.via;
       const friendly = IS_MAC ? await detectMac() : IS_WIN ? await detectWin() : [];
-      const aligned = friendly.length === r.displays.length;
-      list = r.displays.map((d, i) => {
+      // ddcctl 没有可靠的列表输出，探测数量可能多于实际，用系统枚举结果裁剪
+      let ddcList = r.displays;
+      if (friendly.length && friendly.length < ddcList.length) ddcList = ddcList.slice(0, friendly.length);
+      const aligned = friendly.length === ddcList.length;
+      list = ddcList.map((d, i) => {
         const f = aligned ? friendly[i] : null;
         return {
           id: `ddc:${d.index}`,
@@ -223,41 +228,40 @@ function tryExec(cmd, args) {
 }
 
 /**
- * 执行一次输入源切换。
+ * 执行一次输入源切换：把所有检测到的显示器一起切到指定输入源。
  * 1) 首选原生 DDC 层（Windows=dxva2，macOS=m1ddc/ddcctl），无需外部安装；
- * 2) 失败时按旧的命令行工具兜底（ControlMyMonitor / ddcutil）；
- * 3) 都不行则如实返回失败原因，供界面提示。
+ * 2) 全部失败时才用外部命令行工具兜底；
+ * 3) 都失败则如实返回原因，供界面提示。
  */
 async function switchMonitorInput(value, label) {
-  const target = monitorsCache.find((m) => m.id === cfg.ui.monitorId) || monitorsCache[0];
-  const index = target && typeof target.index === 'number' ? target.index : 0;
-
-  // 1) 原生 DDC
-  const native = await ddc.setInput(index, value);
+  const native = await ddc.setInputAll(value);
   if (native.ok) {
-    ddcError = '';
-    return { ok: true, via: native.via, label, index };
+    ddcError = native.partial ? (native.error || '部分显示器不支持 DDC') : '';
+    return {
+      ok: true,
+      partial: !!native.partial,
+      via: native.via,
+      label,
+      success: native.success,
+      total: native.total,
+      error: native.partial ? native.error : ''
+    };
   }
   ddcError = native.error || '';
 
-  // 2) 外部工具兜底
+  // 兜底：外部工具（仅 Windows）
   if (IS_WIN) {
     const tools = path.join(path.dirname(app.getPath('exe')), 'tools');
     const cmm = path.join(tools, 'ControlMyMonitor.exe');
     if (fs.existsSync(cmm)) {
-      const r = await tryExec(cmm, ['/SetValue', `\\\\.\\DISPLAY${index + 1}`, '60', value]);
-      if (r.ok) return { ok: true, via: 'ControlMyMonitor', label, index };
+      const r = await tryExec(cmm, ['/SetValue', 'Primary', '60', value]);
+      if (r.ok) return { ok: true, via: 'ControlMyMonitor', label, success: 1, total: 1 };
     }
     const r2 = await tryExec('ddcutil', ['setvcp', '60', value]);
-    if (r2.ok) return { ok: true, via: 'ddcutil', label, index };
-  } else if (IS_MAC) {
-    const r1 = await tryExec('m1ddc', ['display', String(index + 1), 'set', 'input', String(parseInt(value, 16))]);
-    if (r1.ok) return { ok: true, via: 'm1ddc', label, index };
-    const r2 = await tryExec('ddcctl', ['-d', String(index + 1), '-i', value]);
-    if (r2.ok) return { ok: true, via: 'ddcctl', label, index };
+    if (r2.ok) return { ok: true, via: 'ddcutil', label, success: 1, total: 1 };
   }
 
-  return { ok: false, label, index, error: native.error || '未找到可用的 DDC 通道' };
+  return { ok: false, label, success: 0, total: native.total || 0, error: native.error || '未找到可用的 DDC 通道' };
 }
 
 /* ---------------- 权限 ---------------- */
@@ -329,6 +333,10 @@ function getState() {
     mouseSpeed: cfg.ui.mouseSpeed,
     shareInput: !!cfg.shareInput,
     isHost: !!cfg.isHost,
+    files: {
+      transfers: fileTransfers,
+      recvDir: cfg.ui.receiveDir
+    },
     permission: { accessibility: accessibilityGranted() },
     active,
     activeTarget,
@@ -349,14 +357,31 @@ function onActive(target) {
   activeTarget = target;
 }
 
+/** 文件传输列表更新：只在状态变化时写状态栏，避免每个分块都刷屏 */
+function onFileUpdate(list) {
+  fileTransfers = list || [];
+  for (const t of fileTransfers) {
+    const prev = fileStatusSeen.get(t.id);
+    if (prev === t.status) continue;
+    fileStatusSeen.set(t.id, t.status);
+    if (t.status === 'done') {
+      pushStatus(t.dir === 'in' ? `已接收：${t.name}` : `已发送：${t.name}`, 'ok');
+    } else if (t.status === 'failed') {
+      pushStatus(`传输失败：${t.name}${t.error ? '（' + t.error + '）' : ''}`, 'warn');
+    }
+  }
+}
+
 /** peer 发起一次显示器输入源切换时调用：真正执行并如实回报结果 */
 async function onSwitchRequest({ input, label, from }) {
   const name = label || input;
   const r = await switchMonitorInput(input, name);
+  const scope = r.total > 1 ? `${r.success}/${r.total} 台显示器` : '显示器';
   if (r.ok) {
-    pushStatus(from ? `已由 ${from} 切换到 ${name}` : `已切换到 ${name}`, 'ok');
+    pushStatus(from ? `已由 ${from} 把${scope}切换到 ${name}` : `已将${scope}切换到 ${name}`, 'ok');
+    if (r.partial) pushStatus(`有显示器未响应：${r.error}`, 'warn');
     // 切换后刷新一次，让「当前输入」显示跟上
-    setTimeout(() => { detectMonitors().catch(() => {}); }, 1200);
+    setTimeout(() => { detectMonitors().catch(() => {}); }, 1500);
   } else {
     pushStatus(`切换到 ${name} 失败`, 'warn');
     pushStatus(r.error || '未知原因', 'warn');
@@ -396,6 +421,7 @@ module.exports = {
   getState,
   onPeers,
   onActive,
+  onFileUpdate,
   onSwitch,
   onSwitchRequest,
   pushStatus,
