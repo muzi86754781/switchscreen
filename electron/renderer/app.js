@@ -790,6 +790,43 @@ function renderInput(s) {
   });
   $('#modHint').textContent = st.modDesc || '';
   $('#keyDebug').checked = !!st.keyDebug;
+
+  renderCompass(s);
+}
+
+/**
+ * 方向罗盘：把「往左 / 往右是哪台」「键鼠此刻在哪台」直接画出来。
+ * 共用键鼠最常卡住的地方就是不知道往哪推鼠标，所以这里给足信息 + 一键直达。
+ */
+function renderCompass(s) {
+  const st = s.input || {};
+  const w = st.where || {};
+  const me = (s.me && s.me.name) || '本机';
+  const connected = !!(s.connection && s.connection.connected);
+
+  const here = $('#cmpHere');
+  const hereName = w.controllingName || me;
+  $('#cmpHereName').textContent = w.local === false ? hereName : `${hereName}（本机）`;
+  $('#cmpHereNote').textContent = w.local === false ? '键鼠正被这台拿着' : '键鼠在本机';
+  here.classList.toggle('is-remote', w.local === false);
+
+  const side = (btnId, nameId, goId, name, target) => {
+    const btn = $(btnId);
+    $(nameId).textContent = name || '没有设备';
+    $(goId).textContent = name ? '推边缘 / 点这里过去' : '这一侧没有设备';
+    btn.classList.toggle('is-empty', !name);
+    btn.disabled = !name;
+    btn.dataset.target = target || '';
+  };
+  side('#cmpLeft', '#cmpLeftName', '#cmpLeftGo', w.leftName, w.left);
+  side('#cmpRight', '#cmpRightName', '#cmpRightGo', w.rightName, w.right);
+
+  $('#cmpNote').textContent = connected
+    ? (w.leftName || w.rightName ? '左右顺序按设备列表顺序' : '暂时只有一台设备在线')
+    : '还没有其它设备在线';
+  $('#homeBtn').disabled = w.local !== false;
+  $('#locateBtn').disabled = false;
+  $('#flipBtn').disabled = (s.devices || []).length < 2;
 }
 
 /* ---------------- 状态行 ---------------- */
@@ -949,6 +986,17 @@ function bindInputPanel() {
     b.addEventListener('click', () => push(window.api.setModMap(b.dataset.mod)));
   });
   $('#keyDebug').addEventListener('change', (e) => push(window.api.setKeyDebug(e.target.checked)));
+
+  // 罗盘左右两侧：点一下直接把键鼠交过去（不动显示器）
+  ['#cmpLeft', '#cmpRight'].forEach((sel) => {
+    $(sel).addEventListener('click', () => {
+      const t = $(sel).dataset.target;
+      if (t) push(window.api.handControl(t, sel === '#cmpLeft' ? 'left' : 'right'));
+    });
+  });
+  $('#homeBtn').addEventListener('click', () => push(window.api.handControl('')));
+  $('#locateBtn').addEventListener('click', () => push(window.api.locateCursor()));
+  $('#flipBtn').addEventListener('click', () => push(window.api.flipArrange()));
 }
 
 function bindFooter() {

@@ -238,8 +238,60 @@ function deviceInfo(id) {
 function arrangeOrder() {
   if (!Array.isArray(cfg.ui.arrange)) cfg.ui.arrange = [];
   const arr = cfg.ui.arrange.slice();
-  for (const id of deviceIds()) if (!arr.includes(id)) arr.push(id);
-  return arr;
+  // 没排过队的按 id 字典序补在后面：两台机器各算各的也是同一个顺序，
+  // 界面上下顺序 = 无缝移动左右顺序，且不会因谁先上线而变
+  const extra = deviceIds().filter((id) => !arr.includes(id));
+  extra.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return arr.concat(extra);
+}
+
+/** 手动排顺序 / 左右翻转（用户试出方向反了时用），会同步给对端 */
+function setArrange(list) {
+  const next = peer && typeof peer.setArrange === 'function'
+    ? peer.setArrange(list)
+    : (Array.isArray(list) ? list.filter((x) => typeof x === 'string' && x) : []);
+  if (next && next.length) {
+    cfg.ui.arrange = next;
+    cfg.ui.arrangeTouched = true;
+    persist();
+  }
+  return arrangeOrder();
+}
+
+function flipArrange() {
+  const flipped = arrangeOrder().slice().reverse();
+  if (peer && typeof peer.flipArrange === 'function') {
+    const next = peer.flipArrange();
+    cfg.ui.arrange = next;
+    cfg.ui.arrangeTouched = true;
+    persist();
+    return arrangeOrder();
+  }
+  return setArrange(flipped);
+}
+
+/** 键鼠此刻在哪台 + 左右各是哪台（界面画方向罗盘用） */
+function inputWhere() {
+  const order = arrangeOrder();
+  const me = peer && typeof peer.getActive === 'function' ? peer.getActive() : cfg.peerName;
+  const online = (id) => id === cfg.peerName || peersNow.some((p) => p.name === id);
+  const i = order.indexOf(me);
+  const pick = (dir) => {
+    if (i < 0) return '';
+    const step = dir === 'left' ? -1 : 1;
+    for (let j = i + step; j >= 0 && j < order.length; j += step) if (online(order[j])) return order[j];
+    return '';
+  };
+  const nameOf = (id) => (id ? deviceInfo(id).name : '');
+  return {
+    controlling: me,
+    controllingName: nameOf(me) || '本机',
+    local: me === cfg.peerName,
+    left: pick('left'),
+    right: pick('right'),
+    leftName: nameOf(pick('left')),
+    rightName: nameOf(pick('right'))
+  };
 }
 
 /* ---------------- 每块屏 × 每台设备的接口 ---------------- */
@@ -1270,7 +1322,9 @@ function getState() {
       edgeSwitch: cfg.ui.edgeSwitch !== false,
       modMap: cfg.ui.modMap || 'cmd-ctrl',
       modDesc: describeModMap(cfg.ui.modMap || 'cmd-ctrl', process.platform, (peersNow[0] && peersNow[0].platform) || process.platform),
-      keyDebug: !!cfg.ui.keyDebug
+      keyDebug: !!cfg.ui.keyDebug,
+      // 无缝移动的方向信息：键鼠此刻在哪台、左右各是哪台
+      where: inputWhere()
     },
     files: {
       transfers: fileTransfers,
@@ -1424,6 +1478,11 @@ function onSwitch({ result, target, label, detail, missing }) {
     pushStatus(`已切到 ${name} 的键鼠焦点（显示器都设为「不切」）`, 'info');
   } else if (result === 'sent') {
     pushStatus(`已切换到 ${name}`, 'ok');
+  } else if (result === 'control') {
+    // 只交键鼠控制权、显示器没动
+    pushStatus(name ? `键鼠已交给 ${name}（显示器不变）` : '键鼠已交出去（显示器不变）', 'info');
+  } else if (result === 'missing') {
+    pushStatus('那台设备当前不在线，键鼠没法交过去', 'warn');
   }
 }
 
@@ -1466,6 +1525,9 @@ module.exports = {
   setPeer,
   applyInputMode,
   arrangeOrder,
+  setArrange,
+  flipArrange,
+  inputWhere,
   deviceIds,
   deviceInfo,
   localLabel,

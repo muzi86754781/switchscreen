@@ -481,6 +481,34 @@ function registerIpc() {
     return services.getState();
   });
 
+  /* 无缝移动的方向：左右顺序调一调 / 只把键鼠交过去 / 把鼠标亮出来 */
+  ipcMain.handle('input:arrange', (_e, { list, flip } = {}) => {
+    if (flip) services.flipArrange();
+    else services.setArrange(list);
+    services.pushStatus(flip ? '已左右调换：无缝移动的方向反过来了' : '已更新设备的左右顺序', 'ok');
+    return services.getState();
+  });
+
+  ipcMain.handle('input:hand', async (_e, { target, side } = {}) => {
+    const peer = services.peer;
+    if (!peer || typeof peer.handControl !== 'function') {
+      services.pushStatus('键鼠服务还没就绪，稍等一下再试', 'warn');
+      return services.getState();
+    }
+    const r = await peer.handControl(target || services.cfg.peerName, { side: side || 'center' });
+    if (r === 'skipped') services.pushStatus('键鼠本来就已经在这台设备上', 'info');
+    return services.getState();
+  });
+
+  ipcMain.handle('input:locate', async () => {
+    const peer = services.peer;
+    if (peer && typeof peer.locateCursor === 'function') {
+      await peer.locateCursor();
+      services.pushStatus('已让当前设备上的鼠标画个圈 —— 看哪块屏在动就是它', 'info');
+    }
+    return services.getState();
+  });
+
   ipcMain.handle('input:mod-map', (_e, mode) => {
     const ok = ['cmd-ctrl', 'swap', 'off'];
     services.cfg.ui.modMap = ok.includes(mode) ? mode : 'cmd-ctrl';
@@ -776,6 +804,16 @@ app.whenReady().then(() => {
       onEdgeSwitch: ({ to }) => {
         services.pushStatus(`鼠标越过屏幕边界，已切到 ${services.deviceInfo(to).name}`, 'ok');
         broadcastState();
+      },
+      // 对端调了无缝移动的左右顺序：本机没手动调过就跟着改（改完落盘）
+      onArrange: () => {
+        services.persist();
+        services.pushStatus('已跟随对端调整设备的左右顺序', 'info');
+        broadcastState();
+      },
+      // 对端喊「把鼠标亮出来」：本机把指针抖一下，帮对方找到光标在哪
+      onLocate: () => {
+        if (peer && typeof peer.wiggleCursor === 'function') peer.wiggleCursor().catch(() => {});
       },
       // 按键诊断（排查跨平台键位时用）
       onInputDebug: (line) => {

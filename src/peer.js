@@ -104,8 +104,55 @@ function createPeer(userConfig, hooks) {
   /** 排列里记录所有设备（含暂时离线的），位置不会因为掉线被忘掉 */
   function arrangeOrder() {
     const raw = Array.isArray(ui('arrange', [])) ? ui('arrange').slice() : [];
-    for (const id of [myName, ...peers.keys()]) if (!raw.includes(id)) raw.push(id);
-    return raw;
+    const seen = new Set(raw);
+    // 还没排过队的设备按 id 字典序补在后面 —— 两台机器各算各的也能算出同一个顺序，
+    // 「往左 / 往右是哪台」才不会两端打架（以前按上线先后补，先开的那台顺序和后开的不一样）
+    const extra = [myName, ...peers.keys(), ...Object.keys(ui('knownPeers', {}))]
+      .filter((id) => typeof id === 'string' && id && !seen.has(id));
+    extra.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    return raw.concat(extra);
+  }
+
+  /** 手动改排列：写进配置并同步给对端，两端方向才一致 */
+  function setArrange(list) {
+    const input = Array.isArray(list) ? list.filter((x) => typeof x === 'string' && x) : [];
+    if (!input.length) return arrangeOrder();
+    const clean = [...new Set(input)];
+    for (const id of arrangeOrder()) if (!clean.includes(id)) clean.push(id);
+    cfg.ui.arrange = clean;
+    cfg.ui.arrangeTouched = true;
+    broadcast({ type: 'arrange', list: clean });
+    if (typeof h.onArrange === 'function') h.onArrange(clean);
+    return clean;
+  }
+
+  /** 左右整体调换：用户试出「方向反了」时一键纠正 */
+  function flipArrange() {
+    return setArrange(arrangeOrder().slice().reverse());
+  }
+
+  /** 给界面用的方向信息：此刻键鼠在哪台、左右各是哪台 */
+  function neighborInfo() {
+    const list = arrangeOrder();
+    const me = activePeer;
+    const i = list.indexOf(me);
+    const pick = (dir) => {
+      if (i < 0) return '';
+      const step = dir === 'left' ? -1 : 1;
+      for (let j = i + step; j >= 0 && j < list.length; j += step) {
+        if (isOnline(list[j])) return list[j];
+      }
+      return '';
+    };
+    return {
+      order: list.slice(),
+      me,
+      self: myName,
+      controlling: me,
+      local: me === myName,
+      left: pick('left'),
+      right: pick('right')
+    };
   }
 
   function isOnline(id) {
@@ -261,12 +308,81 @@ function createPeer(userConfig, hooks) {
     return result;
   }
 
+  /**
+   * 只把「键鼠控制权」交到某台设备，完全不动显示器。
+   * 共用键鼠时想直接跳到某台、或者在两台之间「找回鼠标」就用它 ——
+   * 显示器怎么分是用户在「设备与显示器」里定的，不应该被找鼠标这个动作改掉。
+   * @param {string} target
+   * @param {{side?:string}} [opts] side 为空则落在对端屏幕中间
+   */
+  async function handControl(target, opts) {
+    const o = opts || {};
+    if (!target) return 'missing';
+    if (!(target === myName || peers.has(target))) return 'missing';
+    if (target === activePeer) return 'skipped';
+
+    const prev = activePeer;
+    activePeer = target;
+    // 手动交出去后压一小会儿，免得鼠标正停在边缘、一动就又被自动穿越弹回来
+    autoLockUntil = Date.now() + 900;
+    resetInputState();
+    broadcast({ type: 'active', target: activePeer });
+
+    const side = o.side || 'center';
+    if (activePeer !== myName) {
+      const meta = peersMeta.get(activePeer);
+      const scr = (meta && meta.screen) || localScreenSize();
+      if (side === 'center') {
+        phantom = { x: Math.round(scr.width / 2), y: Math.round(scr.height / 2) };
+        sendTo(activePeer, { type: 'cursor-enter', edge: 'center', nx: 0.5, ny: 0.5 });
+      } else {
+        phantom = enterPoint(scr, side, 0.5, 0.5);
+        sendTo(activePeer, { type: 'cursor-enter', edge: side, nx: 0.5, ny: 0.5 });
+      }
+    } else {
+      phantom = null;
+    }
+
+    notifyActive();
+    if (typeof h.onSwitch === 'function') {
+      h.onSwitch({ target, label: '', result: 'control', detail: null, edge: null, missing: [] });
+    }
+    console.log(`[peer] 键鼠控制权交给: ${target}（显示器不动）`);
+    void prev;
+    return 'control';
+  }
+
+  /** 键鼠收回本机：鼠标跑到对端「找不到」时的一键归位 */
+  function bringHome() {
+    return handControl(myName);
+  }
+
   function enterPoint(scr, side, nx, ny) {
     if (side === 'right') return { x: 1, y: Math.round(ny * scr.height) };
     if (side === 'left') return { x: scr.width - 2, y: Math.round(ny * scr.height) };
     if (side === 'bottom') return { x: Math.round(nx * scr.width), y: 1 };
     if (side === 'top') return { x: Math.round(nx * scr.width), y: scr.height - 2 };
     return { x: Math.round(scr.width / 2), y: Math.round(scr.height / 2) };
+  }
+
+  /** 让本机指针在屏幕中间画个小圈：鼠标「跑丢了」时靠它把光标找回来 */
+  async function wiggleCursor() {
+    const s = localScreenSize();
+    const cx = Math.round(s.width / 2);
+    const cy = Math.round(s.height / 2);
+    for (let i = 0; i < 16; i += 1) {
+      const a = (i / 16) * Math.PI * 2;
+      moveLocalCursor(cx + Math.round(Math.cos(a) * 46), cy + Math.round(Math.sin(a) * 46));
+      await new Promise((r) => setTimeout(r, 16));
+    }
+    moveLocalCursor(cx, cy);
+  }
+
+  /** 让当前拿着键鼠的那台把光标抖一抖（本机就拿本机的，在对端就请对端抖） */
+  function locateCursor() {
+    if (activePeer === myName) return wiggleCursor();
+    if (sendTo(activePeer, { type: 'locate' })) return Promise.resolve(true);
+    return wiggleCursor();
   }
 
   function triggerSwitch() {
@@ -459,6 +575,17 @@ function createPeer(userConfig, hooks) {
       }
       console.log(`[peer] 对端 ${name} 报告激活: ${msg.target}`);
     }
+    else if (msg.type === 'arrange') {
+      // 对端手动调过左右顺序：本机没手动调过就跟着改，保证「往左是哪台」两端一致
+      const list = Array.isArray(msg.list) ? msg.list.filter((x) => typeof x === 'string' && x) : [];
+      if (!list.length || ui('arrangeTouched', false)) return;
+      cfg.ui.arrange = list;
+      if (typeof h.onArrange === 'function') h.onArrange(arrangeOrder());
+    }
+    else if (msg.type === 'locate') {
+      // 对端喊「把鼠标亮出来」：本机把指针抖一下，帮用户在对端屏幕上找到它
+      if (typeof h.onLocate === 'function') h.onLocate(msg);
+    }
   }
 
   function track(ws, name, peerPlatform, label) {
@@ -628,6 +755,15 @@ function createPeer(userConfig, hooks) {
     refreshInputMode,
     announceInputMode,
     listPeers,
+    neighbors: neighborInfo,
+    /** 只交键鼠控制权、不动显示器 */
+    handControl,
+    bringHome,
+    locateCursor,
+    wiggleCursor,
+    getArrange: arrangeOrder,
+    setArrange,
+    flipArrange,
     offerFiles: (paths, target) => fileTransfer.offerFiles(paths, target),
     cancelTransfer: (id) => fileTransfer.cancel(id),
     removeTransfer: (id) => fileTransfer.remove(id),

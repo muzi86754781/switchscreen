@@ -178,6 +178,41 @@
           </label>
         </div>
 
+        <!-- 无缝移动的方向：左边是哪台、右边是哪台、键鼠此刻在哪台 -->
+        <div class="card">
+          <div class="card-label">
+            <span>往哪个方向找另一台</span>
+            <span class="card-note" id="cmpNote"></span>
+          </div>
+          <div class="compass" id="compass">
+            <button class="cmp-side" id="cmpLeft" type="button" title="点一下：直接把键鼠交给左边这台">
+              <span class="cmp-arrow">←</span>
+              <span class="cmp-name" id="cmpLeftName">没有设备</span>
+              <span class="cmp-go" id="cmpLeftGo">左边是墙</span>
+            </button>
+            <div class="cmp-here" id="cmpHere">
+              <span class="cmp-dot"></span>
+              <b id="cmpHereName">本机</b>
+              <em id="cmpHereNote">键鼠在这里</em>
+            </div>
+            <button class="cmp-side" id="cmpRight" type="button" title="点一下：直接把键鼠交给右边这台">
+              <span class="cmp-arrow">→</span>
+              <span class="cmp-name" id="cmpRightName">没有设备</span>
+              <span class="cmp-go" id="cmpRightGo">右边是墙</span>
+            </button>
+          </div>
+          <div class="row row-actions">
+            <button class="btn" id="homeBtn">键鼠收回本机</button>
+            <button class="btn" id="locateBtn">把鼠标亮出来</button>
+            <button class="btn btn-ghost" id="flipBtn">左右调换</button>
+          </div>
+          <div class="hint">
+            鼠标推到屏幕最左 / 最右边缘就流到那一侧的设备（切换后有约 1 秒冷却，别来回蹭）。
+            不知道鼠标跑到哪台去了：点「把鼠标亮出来」，对应屏幕上会有光标画圈；点「键鼠收回本机」立刻收回来。
+            方向反了就点「左右调换」。
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-label">按键兼容（Mac ⇄ Windows）</div>
           <div class="seg seg-wide" id="modSeg">
