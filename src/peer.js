@@ -11,14 +11,33 @@ const { loadConfig } = require('./config');
  *
  * 状态：activePeer = 当前显示器显示的机器（= 当前用键鼠控制的对象）。
  * 初始为本机。切换快捷键在 [本机, 对端...] 之间循环。
+ *
+ * hooks（可选，供 GUI 订阅）：
+ *   onPeers(names[])   —— 已连接对端变化
+ *   onActive(name)     —— 当前被控机器变化
+ *   onSwitch({target, input, result}) —— 一次切换动作的结果
  */
-function createPeer(userConfig) {
+function createPeer(userConfig, hooks) {
   const cfg = userConfig || loadConfig();
+  const h = hooks || {};
   const myName = cfg.peerName;
   const platform = getPlatform();
 
   const peers = new Map(); // name -> ws
+  const peersMeta = new Map(); // name -> { name, platform }
   let activePeer = myName;  // 当前被控制的机器
+  let captureHandle = null;
+  let captureError = '';
+
+  function notifyPeers() {
+    if (typeof h.onPeers === 'function') h.onPeers(listPeers());
+  }
+  function listPeers() {
+    return [...peers.keys()].map((n) => peersMeta.get(n) || { name: n, platform: 'unknown' });
+  }
+  function notifyActive() {
+    if (typeof h.onActive === 'function') h.onActive(activePeer);
+  }
 
   // 发送消息到当前激活的对端
   function send(msg) {
@@ -35,27 +54,38 @@ function createPeer(userConfig) {
   function applySwitch(target) {
     activePeer = target;
     const input = target === myName ? cfg.selfInput : cfg.peers[target];
+    let result = 'skipped';
     if (input) {
-      switchSource({ platform, command: (cfg.monitor.command[platform]), input });
+      result = 'sent';
+      // 优先交给上层（GUI 服务层）执行，便于按可用工具尝试并回报结果
+      if (typeof h.onSwitchRequest === 'function') {
+        h.onSwitchRequest({ target, input, label: target === myName ? cfg.ui && cfg.ui.localInputLabel : cfg.ui && cfg.ui.remoteInputLabel });
+      } else {
+        switchSource({ platform, command: (cfg.monitor.command[platform]), input });
+      }
     } else if (target !== myName) {
+      result = 'no-input';
       console.warn(`[peer] 未配置对端 ${target} 的显示器输入源（config.peers[${target}]）`);
     }
     broadcast({ type: 'active', target });
-    console.log(`[peer] 已切换到: ${target}`);
+    notifyActive();
+    if (typeof h.onSwitch === 'function') h.onSwitch({ target, input, result });
+    console.log(`[peer] 已切换到: ${target} (${result})`);
+    return result;
   }
 
   function triggerSwitch() {
     const order = [myName, ...[...peers.keys()]];
     const idx = order.indexOf(activePeer);
     const next = order[(idx + 1) % order.length];
-    applySwitch(next);
+    return applySwitch(next);
   }
 
   function checkHotkey(e) {
-    const h = cfg.switchHotkey;
-    if (e.keycode === h.keycode &&
-        !!e.ctrlKey === !!h.ctrl && !!e.altKey === !!h.alt &&
-        !!e.shiftKey === !!h.shift && !!e.metaKey === !!h.meta) {
+    const hk = cfg.switchHotkey;
+    if (e.keycode === hk.keycode &&
+        !!e.ctrlKey === !!hk.ctrl && !!e.altKey === !!hk.alt &&
+        !!e.shiftKey === !!hk.shift && !!e.metaKey === !!hk.meta) {
       triggerSwitch();
     }
   }
@@ -71,6 +101,7 @@ function createPeer(userConfig) {
 
   // ---- 收到对端消息 ----
   function handleMessage(name, msg) {
+    if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'clipboard') clipboard.onRemoteClipboard(msg.text);
     else if (msg.type === 'input') injectEvent(msg.ev);
     else if (msg.type === 'active') console.log(`[peer] 对端 ${name} 报告激活: ${msg.target}`);
@@ -82,38 +113,80 @@ function createPeer(userConfig) {
     isEnabled: () => cfg.clipboardSync
   });
 
+  // ---- 输入捕获的按需启停（界面切换模式时用）----
+  function refreshInputMode() {
+    const shouldCapture = !!(cfg.shareInput && cfg.isHost);
+    if (shouldCapture && !captureHandle) {
+      try {
+        captureHandle = startCapture({
+          onEvent: onInputEvent,
+          isActive: () => cfg.shareInput && activePeer !== myName
+        });
+        captureError = '';
+      } catch (e) {
+        captureError = e.message;
+        console.error('[peer] 键鼠捕获启动失败:', e.message);
+      }
+    } else if (!shouldCapture && captureHandle) {
+      try { captureHandle.stop(); } catch { /* ignore */ }
+      captureHandle = null;
+    }
+  }
+
   // ---- 启动 ----
-  const wss = startServer(cfg.port, (ws, name) => {
+  const wss = startServer(cfg.port, (ws, name, platform) => {
     peers.set(name, ws);
-    ws.on('message', (data) => handleMessage(name, JSON.parse(data)));
-    ws.on('close', () => peers.delete(name));
+    peersMeta.set(name, { name, platform: platform || 'unknown' });
+    notifyPeers();
+    ws.on('message', (data) => {
+      let msg = null;
+      try { msg = JSON.parse(data); } catch { return; }
+      handleMessage(name, msg);
+    });
+    ws.on('close', () => { peers.delete(name); peersMeta.delete(name); notifyPeers(); });
   });
 
   if (cfg.discover) {
     startDiscovery({
       port: cfg.port, peerName: myName,
-      onPeer: ({ name, address, port }) => {
+      onPeer: ({ name, address, port, platform }) => {
         if (peers.has(name)) return;
         // 字典序小的主动连，避免双向重复
         if (myName < name) {
           const ws = connectPeer(address, port, name);
-          ws.on('message', (data) => handleMessage(name, JSON.parse(data)));
-          ws.on('open', () => peers.set(name, ws));
-          ws.on('close', () => peers.delete(name));
+          ws.on('message', (data) => {
+            let msg = null;
+            try { msg = JSON.parse(data); } catch { return; }
+            handleMessage(name, msg);
+          });
+          ws.on('open', () => {
+            peers.set(name, ws);
+            peersMeta.set(name, { name, platform: platform || 'unknown' });
+            notifyPeers();
+          });
+          ws.on('error', () => {});
+          ws.on('close', () => { peers.delete(name); peersMeta.delete(name); notifyPeers(); });
         }
       }
     });
   }
 
   // 主机：捕获并转发键鼠
-  if (cfg.isHost) {
-    startCapture({ onEvent: onInputEvent, isActive: () => cfg.shareInput && activePeer !== myName });
-  }
+  refreshInputMode();
 
   console.log(`[peer] ${myName} 已启动，监听端口 ${cfg.port}，shareInput=${cfg.shareInput}，clipboardSync=${cfg.clipboardSync}`);
   return {
-    triggerSwitch, switchTo: applySwitch,
-    stop: () => { wss.close(); clipboard.stop(); }
+    triggerSwitch,
+    switchTo: applySwitch,
+    refreshInputMode,
+    listPeers,
+    getActive: () => activePeer,
+    getCaptureError: () => captureError,
+    stop: () => {
+      if (captureHandle) { try { captureHandle.stop(); } catch { /* ignore */ } captureHandle = null; }
+      wss.close();
+      clipboard.stop();
+    }
   };
 }
 

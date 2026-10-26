@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>电脑切换</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="titlebar">
+      <div class="brand">
+        <span class="brand-cn">电脑切换</span>
+        <span class="brand-en">SCREEN SWITCH</span>
+        <span class="brand-sep">/</span>
+        <span class="brand-ver">1.0</span>
+      </div>
+      <div class="head-right">
+        <span class="net-dot" id="netDot"></span>
+        <span class="net-text" id="netText">未配对</span>
+      </div>
+    </header>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab is-active" data-tab="switch">切换电脑</button>
+      <button class="tab" data-tab="clip">复制粘贴</button>
+      <button class="tab" data-tab="input">共用键鼠</button>
+    </nav>
+
+    <main class="content">
+      <!-- ============ 切换电脑 ============ -->
+      <section class="panel is-active" data-panel="switch">
+        <div class="card hero">
+          <div class="hero-head">
+            <span class="hero-title">双机工作台</span>
+            <span class="hero-sub">/ 一块屏幕，自如切换</span>
+          </div>
+          <div class="devices">
+            <div class="device" id="devLocal">
+              <div class="dev-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="4" y="5" width="16" height="10" rx="1.6" />
+                  <path d="M2 18h20" />
+                </svg>
+              </div>
+              <div class="dev-name" id="devLocalName">Mac</div>
+              <div class="dev-role">本机</div>
+            </div>
+
+            <div class="link-line">
+              <span class="line"></span>
+              <span class="swap">⇄</span>
+              <span class="line"></span>
+            </div>
+
+            <div class="device is-remote" id="devRemote">
+              <div class="dev-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="4" width="18" height="12" rx="1.6" />
+                  <path d="M9 20h6M12 16v4" />
+                </svg>
+              </div>
+              <div class="dev-name" id="devRemoteName">Windows</div>
+              <div class="dev-role" id="devRemoteRole">另一台电脑</div>
+            </div>
+          </div>
+          <div class="hero-tip">一个按键，换一台电脑。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">连接与目标</div>
+          <div class="row">
+            <select class="select grow" id="monitorSelect"></select>
+            <button class="btn" id="redetectBtn">重新检测</button>
+          </div>
+          <div class="row row-tight">
+            <span class="row-label" id="remoteInputLabel">Windows 所在接口</span>
+            <select class="select" id="remoteInputSelect"></select>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">快捷操作</div>
+          <label class="check-row">
+            <input type="checkbox" id="hotkeyEnabled" />
+            <span class="box"></span>
+            <span class="check-text">启用全局快捷键</span>
+            <select class="select select-sm" id="hotkeySelect"></select>
+          </label>
+          <div class="hint" id="hotkeyHint">已启用 F12 · 关闭窗口后仍有效。</div>
+
+          <label class="check-row">
+            <input type="checkbox" id="launchAtLogin" />
+            <span class="box"></span>
+            <span class="check-text">登录时启动（保存此应用的启动位置）</span>
+          </label>
+
+          <details class="compat">
+            <summary>兼容设置</summary>
+            <div class="compat-body">
+              <div class="row row-tight">
+                <span class="row-label">本机所在接口</span>
+                <select class="select" id="localInputSelect"></select>
+              </div>
+              <div class="hint">显示器不支持 DDC/CI 时可只切换鼠标焦点；接口值因显示器而异。</div>
+            </div>
+          </details>
+        </div>
+
+        <button class="primary-btn" id="switchBtn">切换到 Windows</button>
+        <div class="status-block" id="switchStatus"></div>
+      </section>
+
+      <!-- ============ 复制粘贴 ============ -->
+      <section class="panel" data-panel="clip">
+        <h1 class="panel-title">跨电脑复制粘贴</h1>
+
+        <label class="check-row check-row-lg">
+          <input type="checkbox" id="clipEnabled" />
+          <span class="box"></span>
+          <span class="check-text">开启同步</span>
+        </label>
+
+        <div class="banner" id="pairBanner">
+          <div class="banner-main"><span class="tick">✓</span><span id="pairTitle">配对成功 · 已连接</span></div>
+          <div class="banner-sub" id="pairSub">双向连接已验证，可以复制文字、截图、图片、文件和文件夹。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-label"><span class="num">01</span> 连接配对</div>
+          <label class="check-row check-row-sm">
+            <input type="checkbox" id="usePassword" />
+            <span class="box"></span>
+            <span class="check-text">使用连接密码</span>
+          </label>
+          <div class="row">
+            <input class="input password" id="passwordInput" maxlength="6" inputmode="numeric" autocomplete="off" />
+            <button class="btn" id="randomBtn">随机生成</button>
+          </div>
+          <div class="hint">两台填写相同的 6 位数字，在同一局域网自动连接。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-label"><span class="num">02</span> 接收目录</div>
+          <div class="row">
+            <input class="input grow" id="receiveDir" readonly />
+            <button class="btn" data-dir="choose">选择…</button>
+            <button class="btn" data-dir="open">打开目录</button>
+            <button class="btn" data-dir="reset">恢复默认</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-label"><span class="num">03</span> 传输进度</div>
+          <label class="check-row check-row-sm">
+            <input type="checkbox" id="askLarge" />
+            <span class="box"></span>
+            <span class="check-text">超过 1GB，发送前询问</span>
+          </label>
+          <div class="row btn-row">
+            <button class="btn btn-primary" id="saveConnect">保存并连接</button>
+            <button class="btn" id="cancelTransfer">取消传输</button>
+            <button class="btn" id="useRecent">使用最近接收</button>
+          </div>
+          <div class="progress">
+            <div class="progress-bar"><i id="progressFill"></i></div>
+            <span class="progress-num" id="progressNum">0%</span>
+          </div>
+          <div class="hint" id="clipHint">已放入剪贴板，可以 ⌘V 粘贴。文件请粘贴到 Finder 文件夹。</div>
+        </div>
+      </section>
+
+      <!-- ============ 共用键鼠 ============ -->
+      <section class="panel" data-panel="input">
+        <h1 class="panel-title">一套键鼠，双向控制</h1>
+        <p class="panel-sub">配对后任意一台选择，两边自动同步。选择不会切屏。</p>
+
+        <div class="mode-list" id="modeList">
+          <button class="mode" data-mode="separate">
+            <span class="mode-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                <rect x="2.5" y="7" width="19" height="10" rx="2" />
+                <path d="M6 11h.01M9 11h.01M12 11h.01M15 11h.01M18 11h.01M8 14h8" />
+              </svg>
+            </span>
+            <span class="mode-text">
+              <b>各用各的键鼠</b>
+              <em>两台电脑分别使用自己的键盘与鼠标</em>
+            </span>
+            <span class="radio"></span>
+          </button>
+
+          <button class="mode" data-mode="local">
+            <span class="mode-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4" y="5" width="16" height="10" rx="1.6" />
+                <path d="M2 18h20" />
+              </svg>
+            </span>
+            <span class="mode-text">
+              <b id="modeLocalTitle">共用 Mac 的键鼠</b>
+              <em id="modeLocalDesc">Mac 的键鼠跟随画面，控制当前电脑</em>
+            </span>
+            <span class="radio"></span>
+          </button>
+
+          <button class="mode" data-mode="remote">
+            <span class="mode-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="12" rx="1.6" />
+                <path d="M9 20h6M12 16v4" />
+              </svg>
+            </span>
+            <span class="mode-text">
+              <b id="modeRemoteTitle">共用 Windows 的键鼠</b>
+              <em id="modeRemoteDesc">Windows 的键鼠跟随画面，控制当前电脑</em>
+            </span>
+            <span class="radio"></span>
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-label">权限与当前状态</div>
+          <div class="perm-line">
+            <span class="tick" id="permMark">✓</span>
+            <span id="permText">Mac 辅助功能已授权</span>
+          </div>
+          <button class="btn" id="openPerm">打开辅助功能设置</button>
+          <div class="kv"><span>当前画面</span><b id="currentScreen">Mac</b></div>
+        </div>
+
+        <div class="card">
+          <div class="card-label" id="hostCardLabel">Mac 显示器与鼠标</div>
+          <div class="row">
+            <select class="select grow" id="monitorSelect2"></select>
+            <button class="btn" id="redetectBtn2">重新检测</button>
+          </div>
+          <div class="slider-row">
+            <span class="row-label">鼠标发送速度 · 0.5 ~ 2 倍</span>
+            <span class="speed-val" id="speedVal">1.0×</span>
+          </div>
+          <input type="range" class="range" id="speedRange" min="0.5" max="2" step="0.1" value="1" />
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <button class="link" id="helpBtn">使用说明 <span class="arrow">↗</span></button>
+      <span class="foot-ver" id="footVer"></span>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -31,6 +31,22 @@
 
 ---
 
+## 操作界面（GUI）
+
+启动后是一个常驻托盘的主窗口，三个标签页对应三大功能：
+
+| 标签 | 内容 |
+|------|------|
+| **切换电脑** | 双机工作台示意（本机 ↔ 另一台）、显示器检测与选择、对端所在接口（HDMI1/HDMI2/DP…）、全局快捷键开关与按键、登录时启动、大号「切换到 …」按钮，底部实时显示「设置已保存 / 已发送切换指令」 |
+| **复制粘贴** | 同步总开关、配对状态条（已连接 / 等待配对）、6 位连接密码与随机生成、接收目录（选择 / 打开 / 恢复默认）、传输进度条与「保存并连接 / 取消传输 / 使用最近接收」 |
+| **共用键鼠** | 三种模式（各用各的 / 共用本机键鼠 / 共用对端键鼠）、辅助功能授权状态与跳转按钮、当前画面指示、显示器选择、鼠标发送速度 0.5~2 倍滑杆 |
+
+实现位置：`electron/main.js`（窗口 + 托盘 + IPC）、`electron/preload.js`（安全桥）、`electron/services.js`（状态聚合与系统能力）、`electron/renderer/`（HTML/CSS/JS 界面）。
+
+界面上的开关都是**即时生效**的：配置写回 `~/.switchscreen/config.json`，`peer` 持有同一配置引用，不需要重启。
+
+---
+
 ## 安装（每台机器都要装）
 
 ```bash
@@ -150,11 +166,29 @@ npm run dist:mac                  # macOS dmg（CSC_IDENTITY_AUTO_DISCOVERY=fals
 
 ```
 src/
-  config.js     # 配置读写
-  net.js        # UDP 发现 + WebSocket 传输
-  clipboard.js  # 剪贴板跨机同步
-  monitor.js    # DDC/CI 切输入源
+  config.js     # 配置读写（含 UI 配置段）
+  net.js        # UDP 发现 + WebSocket 传输（携带平台标识）
+  clipboard.js  # 剪贴板跨机同步（CJS/ESM 双兼容）
+  monitor.js    # DDC/CI 切输入源（命令行兜底）
   input.js      # iohook 捕获 / robotjs 注入
-  peer.js       # 编排：状态机 + 串联各模块
-  cli.js        # 入口：start / record-hotkey / config
+  peer.js       # 编排：状态机 + 串联各模块（支持动态启停捕获）
+  cli.js        # 无界面入口：start / record-hotkey / config
+electron/
+  main.js       # 主进程：窗口、托盘、全局快捷键、IPC
+  services.js   # 状态聚合、显示器检测、DDC 切换、权限、登录启动
+  preload.js    # contextBridge 安全 API
+  renderer/     # index.html + style.css + app.js（三标签界面）
 ```
+
+---
+
+## macOS 兼容性
+
+- **构建目标**：`minimumSystemVersion = 11.0`（Big Sur）及以上；**macOS 13 Ventura（含 13.7.8）已覆盖**。
+- **双架构**：CI 分别产出 `switchscreen-mac-x64`（Intel）与 `switchscreen-mac-arm64`（Apple Silicon）。
+  在 Mac 上 `uname -m` 看是 `x86_64` 还是 `arm64`，下载对应包即可（下载错架构会提示「应用已损坏/无法打开」）。
+- **权限**：首次使用「共用键鼠」需在「系统设置 → 隐私与安全性 → 辅助功能」里勾选 SwitchScreen，
+  否则 `robotjs` 无法注入、`iohook` 无法捕获；界面「共用键鼠」页有「打开辅助功能设置」按钮直达。
+- **DDC 切换依赖**：macOS 走 DDC/CI 需要 `m1ddc` 或 `ddcctl`（`brew install m1ddc`）。没有安装时软件仍可运行，
+  界面会如实提示「已记录切换指令，未找到 DDC 工具」，不会假装切换成功。
+- **睡眠唤醒**：合盖/休眠后 WebSocket 会断开，唤醒后由 UDP 广播自动重新配对（数秒内）。

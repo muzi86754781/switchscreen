@@ -39,6 +39,12 @@ jobs:
           path: dist/*.exe
 
   macos:
+    # macOS 13 (Ventura) 既可能是 Intel 也可能是 Apple Silicon，两种架构都要出包；
+    # 原生模块(i hook/robotjs)必须按目标架构分别编译，所以用矩阵而不是一次编两个 arch。
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,12 +56,12 @@ jobs:
       - run: echo "npm_config_python=$(which python3)" >> "$GITHUB_ENV"
       - run: npm install --ignore-scripts
       - run: node node_modules/electron/install.js
-      - run: npx electron-rebuild --force
-      - run: npm run dist:mac
+      - run: npx electron-rebuild --force --arch ${{ matrix.arch }}
+      - run: npx electron-builder --mac dmg --${{ matrix.arch }} --publish=never
         env:
           # 无签名证书时允许 electron-builder 产出未签名 dmg（用户需手动绕过 Gatekeeper）
           CSC_IDENTITY_AUTO_DISCOVERY: false
       - uses: actions/upload-artifact@v4
         with:
-          name: switchscreen-mac
+          name: switchscreen-mac-${{ matrix.arch }}
           path: dist/*.dmg

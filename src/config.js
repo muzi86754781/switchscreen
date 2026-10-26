@@ -31,6 +31,25 @@ const DEFAULTS = {
   // 对端名 -> 显示器输入源值。切换时用目标机的 input 填到 monitor.command。
   peers: {
     // "MacBook-Pro": "0x12"
+  },
+  // 界面层配置（GUI 使用）
+  ui: {
+    activeTab: 'switch',      // switch | clip | input
+    hotkeyEnabled: true,
+    hotkeyKey: 'F12',         // 界面里展示的快捷键名，实际生效见 switchHotkey
+    launchAtLogin: false,
+    inputMode: 'separate',    // separate 各用各的 | local 共用本机键鼠 | remote 共用对端键鼠
+    mouseSpeed: 1,            // 0.5 ~ 2
+    monitorId: '',
+    monitorName: '',
+    localInput: '0x11',
+    localInputLabel: 'HDMI1',
+    remoteInput: '0x12',
+    remoteInputLabel: 'HDMI2',
+    usePassword: true,
+    password: '',             // 6 位数字，空则首次启动自动生成
+    receiveDir: '',           // 空则用 ~/Desktop/SwitchScreen/clipboard/received
+    askLarge: true
   }
 };
 

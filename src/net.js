@@ -1,6 +1,7 @@
 'use strict';
 
 const dgram = require('dgram');
+const os = require('os');
 const WebSocket = require('ws');
 
 /**
@@ -25,13 +26,15 @@ function startDiscovery({ port, peerName, onPeer }) {
     const key = `${pkt.name}@${rinfo.address}`;
     if (seen.has(key)) return;
     seen.add(key);
-    onPeer({ name: pkt.name, address: rinfo.address, port: pkt.port });
+    onPeer({ name: pkt.name, address: rinfo.address, port: pkt.port, platform: pkt.platform || 'unknown' });
   });
 
   socket.bind(port, () => {
     socket.setBroadcast(true);
     const beacon = () => {
-      const payload = Buffer.from(JSON.stringify({ magic: MAGIC, name: peerName, port }));
+      const payload = Buffer.from(JSON.stringify({
+        magic: MAGIC, name: peerName, port, platform: os.platform()
+      }));
       socket.send(payload, 0, payload.length, port, '255.255.255.255', () => {});
     };
     beacon();
@@ -46,7 +49,9 @@ function startDiscovery({ port, peerName, onPeer }) {
  * @returns WebSocket
  */
 function connectPeer(address, port, name) {
-  const ws = new WebSocket(`ws://${address}:${port}`);
+  const ws = new WebSocket(`ws://${address}:${port}`, {
+    headers: { 'x-peer-name': name, 'x-peer-platform': os.platform() }
+  });
   ws.on('open', () => console.log(`[net] 已连到对端 ${name} (${address}:${port})`));
   ws.on('error', (e) => console.error(`[net] 连接 ${name} 失败:`, e.message));
   return ws;
@@ -60,8 +65,9 @@ function startServer(port, onConnection) {
   const wss = new WebSocket.Server({ port });
   wss.on('connection', (ws, req) => {
     const name = (req.headers['x-peer-name'] || 'unknown');
-    console.log(`[net] 对端连入: ${name} (${req.socket.remoteAddress})`);
-    onConnection(ws, name);
+    const platform = (req.headers['x-peer-platform'] || 'unknown');
+    console.log(`[net] 对端连入: ${name} / ${platform} (${req.socket.remoteAddress})`);
+    onConnection(ws, name, platform);
   });
   return wss;
 }
