@@ -11,8 +11,8 @@
     "start": "node src/cli.js start",
     "record-hotkey": "node src/cli.js record-hotkey",
     "config": "node src/cli.js config",
-    "dist:win": "electron-builder --win nsis",
-    "dist:mac": "electron-builder --mac dmg",
+    "dist:win": "electron-builder --win nsis --publish=never",
+    "dist:mac": "electron-builder --mac dmg --publish=never",
     "postinstall": "node -e \"console.log('[switchscreen] CI 会从源码编译 iohook/robotjs；本地若需编译请先装好 MSVC(X64)/Xcode 与 Python，再跑: npx electron-rebuild --force')\""
   },
   "engines": {
