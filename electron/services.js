@@ -24,15 +24,20 @@ const ddc = require('./ddc');
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 
-// 常见 DDC/CI 输入源值（因显示器而异）
+// 常见 DDC/CI 输入源值（因显示器而异）。
+// VGA / DVI 一定要有：不少 Dell 之类读回来是 0x03，旧版没这个预设时
+// 界面上就会显示成一个「0x3」的对不上号的值，怎么配都判不出归属。
 const INPUT_PRESETS = [
+  { value: '0x01', label: 'VGA' },
+  { value: '0x03', label: 'DVI' },
+  { value: '0x04', label: 'DVI2' },
   { value: '0x11', label: 'HDMI1' },
   { value: '0x12', label: 'HDMI2' },
   { value: '0x13', label: 'HDMI3' },
   { value: '0x0f', label: 'DP1' },
   { value: '0x10', label: 'DP2' },
-  { value: '0x1b', label: 'USB-C' },
-  { value: '0x1a', label: 'USB-C2' }
+  { value: '0x1a', label: 'USB-C' },
+  { value: '0x1b', label: 'USB-C2' }
 ];
 
 // 快捷键候选（显示器 A/B/C/D 的默认值放在前四个）
@@ -98,6 +103,8 @@ function ensureDefaults() {
   if (!ui.modMap) ui.modMap = 'cmd-ctrl';
   if (typeof ui.keyDebug !== 'boolean') ui.keyDebug = false;
   if (!ui.portMap || typeof ui.portMap !== 'object') ui.portMap = {};
+  // 每块屏「上次确认过归谁」——DDC 读不到当前输入源时靠它着色（很多显示器/Mac 读不到）
+  if (!ui.ownerMap || typeof ui.ownerMap !== 'object') ui.ownerMap = {};
   // 记下每台设备最近一次上报的显示名，离线时也能显示正确的名字
   if (!ui.peerLabels || typeof ui.peerLabels !== 'object') ui.peerLabels = {};
   if (!ui.knownPeers || typeof ui.knownPeers !== 'object') ui.knownPeers = {};
@@ -218,18 +225,33 @@ function setArrange(list) {
 
 /* ---------------- 每块屏 × 每台设备的接口 ---------------- */
 
+/** 把各种写法的接口值归一成 0x11 这种形式（macOS 侧读到的是十进制 17） */
+function normInput(value) {
+  const s = String(value === undefined || value === null ? '' : value).trim().toLowerCase();
+  if (!s) return '';
+  const n = s.startsWith('0x') ? parseInt(s.slice(2), 16) : parseInt(s, 10);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return '0x' + n.toString(16).padStart(2, '0');
+}
+
+/** 两个接口值是不是同一个口（17 / 0x11 / 0X011 都算同一个） */
+function sameInput(a, b) {
+  const x = normInput(a);
+  return !!x && x === normInput(b);
+}
+
 function labelForInput(value) {
-  const p = INPUT_PRESETS.find((x) => x.value === value);
-  return p ? p.label : String(value || '');
+  const v = normInput(value) || String(value || '');
+  const p = INPUT_PRESETS.find((x) => x.value === v);
+  return p ? p.label : v;
 }
 
 /** 某块显示器上，某台设备接的是哪个口；空字符串 = 不接 / 不切 */
 function portFor(monitorId, deviceId) {
   const t = (cfg.ui.portMap && cfg.ui.portMap[monitorId]) || {};
-  if (Object.prototype.hasOwnProperty.call(t, deviceId)) return t[deviceId] || '';
-  if (deviceId === cfg.peerName) return cfg.ui.localInput || cfg.selfInput || '';
-  if (peersNow[0] && peersNow[0].name === deviceId) return cfg.ui.remoteInput || '';
-  return '';
+  // 只认「这块屏上这台设备」自己的配置。曾经退回全局 localInput / remoteInput，
+  // 结果没配过的屏也显示 HDMI1/HDMI2 —— 界面上看着配好了、实际一直切错、判归属也全错。
+  return Object.prototype.hasOwnProperty.call(t, deviceId) ? normInput(t[deviceId]) : '';
 }
 
 /**
@@ -257,11 +279,15 @@ function ensurePortDefaults() {
 function setPort(monitorId, deviceId, value) {
   if (!monitorId || !deviceId) return false;
   if (!cfg.ui.portMap) cfg.ui.portMap = {};
+  if (!cfg.ui.ownerMap) cfg.ui.ownerMap = {};
   const t = cfg.ui.portMap[monitorId] || {};
-  const v = value || '';
+  const v = normInput(value);
   t[deviceId] = v;
   cfg.ui.portMap[monitorId] = t;
-  // 本机 / 首个对端的值同步到全局默认，作为新显示器、新设备的兜底
+  // 手配完顺手校准归属：如果这块屏此刻的输入源正好就是这个口，那现在就是这台在用
+  const m = monitorsCache.find((x) => x.id === monitorId);
+  if (v && m && sameInput(m.currentInput, v)) cfg.ui.ownerMap[monitorId] = deviceId;
+  // 本机 / 首个对端的值同步到全局默认，仅用于「新显示器」的初始提示，不再覆盖每块屏
   if (v) {
     if (deviceId === cfg.peerName) {
       cfg.ui.localInput = v;
@@ -287,7 +313,7 @@ function exportPorts() {
     if (m.internal) continue;
     const t = (cfg.ui.portMap && cfg.ui.portMap[m.id]) || {};
     const ports = {};
-    for (const k of Object.keys(t)) if (t[k]) ports[k] = t[k];
+    for (const k of Object.keys(t)) { const v = normInput(t[k]); if (v) ports[k] = v; }
     if (Object.keys(ports).length) out.push({ name: m.name, ports });
   }
   return out;
@@ -306,8 +332,18 @@ function importPorts(list) {
     if (!cfg.ui.portMap) cfg.ui.portMap = {};
     const t = cfg.ui.portMap[m.id] || {};
     for (const dev of Object.keys(it.ports)) {
-      const v = it.ports[dev];
+      const v = normInput(it.ports[dev]);
       if (!v || t[dev]) continue;
+      // 冲突保护：同一个口不可能同时属于两台设备。
+      // 如果本地那条是本次「猜」的，就让位给对端（对端的配置是它自己屏幕上的事实）；
+      // 不是猜的就保持本地优先，谁也不覆盖谁 —— 否则两端会互相「确认」着错下去。
+      const clash = Object.keys(t).find((k) => k !== dev && sameInput(t[k], v));
+      if (clash) {
+        if (!guessedPorts.has(`${m.id}|${clash}`)) continue;
+        delete t[clash];
+        if (cfg.ui.ownerMap && cfg.ui.ownerMap[m.id] === clash) delete cfg.ui.ownerMap[m.id];
+        guessedPorts.delete(`${m.id}|${clash}`);
+      }
       t[dev] = v;
       n += 1;
     }
@@ -318,37 +354,110 @@ function importPorts(list) {
 }
 
 /**
- * 自动补齐接口：一块屏此刻显示的是哪台机器，它当前的输入源就一定是那台机器接的口。
- * 所以「画面正在这台机器上、而这台机器还没给这块屏配接口」时，直接把当前输入源记下来。
- * 这样绝大多数场景根本不用手动配接口，点一下就能切。
+ * 自动补齐接口。
+ *
+ * 能证明「这块屏此刻显示的是谁」的时候才学：
+ *   1) 这块屏当前的输入源已经等于某台设备配过的口 —— 归属自证；
+ *   2) 上次我们亲手把这块屏切给某台设备并成功了（ownerMap）。
+ * 都没有时，按「屏幕正显示最后切到的那台」记一条**猜测**，好让第一次安装就能用；
+ * 猜测会被对端同步过来的真实配置推翻（importPorts 里的冲突处理），不会将错就错。
  */
+/**
+ * 本次启动里「猜」出来的接口（`显示器id|设备名`）。
+ * 猜的东西不许固执：对端把真实配置同步过来、且跟猜测冲突时，直接撤掉猜测。
+ */
+const guessedPorts = new Set();
+
 function learnPorts() {
-  const active = activeTarget;
-  if (!active || !monitorsCache.length) return 0;
+  if (!monitorsCache.length) return 0;
   if (!cfg.ui.portMap) cfg.ui.portMap = {};
+  if (!cfg.ui.ownerMap) cfg.ui.ownerMap = {};
+  const ids = deviceIds();
   let n = 0;
   for (const m of monitorsCache) {
     if (m.internal || !m.currentInput) continue;
+    const cur = normInput(m.currentInput);
+    if (!cur) continue;
     const t = cfg.ui.portMap[m.id] || {};
-    if (t[active]) continue; // 已经配过就不猜
-    const known = deviceIds().some((id) => t[id] && t[id] === m.currentInput);
-    if (known) continue;     // 这个口已经有主了
-    t[active] = m.currentInput;
-    cfg.ui.portMap[m.id] = t;
-    n += 1;
+
+    // 1) 这个口已经有主：顺手确认归属（这块屏现在就是这台在用）
+    const claimed = ids.find((id) => t[id] && sameInput(t[id], cur));
+    if (claimed) {
+      if (cfg.ui.ownerMap[m.id] !== claimed) { cfg.ui.ownerMap[m.id] = claimed; n += 1; }
+      continue;
+    }
+
+    // 2) 归属已确认过、只是这台设备在这块屏上还没填口 → 现在读到的就是它的口
+    const own = cfg.ui.ownerMap[m.id];
+    if (own && ids.includes(own) && !t[own]) {
+      t[own] = cur;
+      cfg.ui.portMap[m.id] = t;
+      n += 1;
+      continue;
+    }
+
+    // 3) 谁都没认领：先按「屏幕正显示的是最后切到的那台」记一条**猜测**。
+    //    之所以敢猜：绝大多数人都是在「正看着这台机器」的时候第一次打开软件。
+    //    猜错也不怕 —— 对端会把它的真实配置同步过来，冲突时这条猜测会被撤掉（见 importPorts）。
+    if (activeTarget && !t[activeTarget]) {
+      t[activeTarget] = cur;
+      cfg.ui.portMap[m.id] = t;
+      cfg.ui.ownerMap[m.id] = activeTarget;
+      guessedPorts.add(`${m.id}|${activeTarget}`);
+      n += 1;
+    }
   }
   if (n) persist();
   return n;
 }
 
-/** 这块屏此刻正显示哪台设备（读不到当前输入时返回空字符串） */
+/**
+ * 这块屏此刻正显示哪台设备。
+ * 先看 DDC 读回来的当前输入源（最真实），读不到再退回「上次确认过的归属」——
+ * 很多显示器读 0x60 会失败，Mac 上尤其常见，不能因此就整块屏不着色。
+ */
 function ownerOf(m) {
-  if (!m || !m.currentInput) return '';
-  for (const id of deviceIds()) {
-    const v = portFor(m.id, id);
-    if (v && v === m.currentInput) return id;
+  if (!m) return '';
+  if (m.currentInput) {
+    for (const id of deviceIds()) {
+      if (sameInput(portFor(m.id, id), m.currentInput)) return id;
+    }
+    return ''; // 读到了，但对不上任何一台已配的口 —— 说明还没配过，别瞎猜
   }
-  return '';
+  const saved = (cfg.ui.ownerMap && cfg.ui.ownerMap[m.id]) || '';
+  if (saved && deviceIds().includes(saved)) return saved;
+  // 最后兜底：读不到当前输入源、也没有历史归属时，按「你正看着这台机器」处理。
+  // 比整块屏一片灰要好 —— 而且一旦真的切过一次，这里就会被 ownerMap 覆盖成事实。
+  return cfg.peerName;
+}
+
+/**
+ * 刚切成功：直接把缓存里的「当前输入源」改成写进去的值。
+ * 不用等下一次重扫（1~1.5 秒），界面立刻就是对的；重扫时再以 DDC 实测为准。
+ */
+function applySwitched(targetId, m, value) {
+  const v = normInput(value);
+  if (!m || !v) return;
+  m.currentInput = v;
+  m.currentInputLabel = labelForInput(v);
+  if (targetId) {
+    if (!cfg.ui.ownerMap) cfg.ui.ownerMap = {};
+    cfg.ui.ownerMap[m.id] = targetId;
+  }
+}
+
+/** 记下「这块屏现在归谁」——只该在真的切成功、或自证匹配之后调用 */
+function markOwners(targetId, inputValue) {
+  if (!targetId) return 0;
+  if (!cfg.ui.ownerMap) cfg.ui.ownerMap = {};
+  let n = 0;
+  for (const m of monitorsCache) {
+    if (m.internal) continue;
+    if (inputValue !== undefined && inputValue !== '' && !sameInput(portFor(m.id, targetId), inputValue)) continue;
+    if (cfg.ui.ownerMap[m.id] !== targetId) { cfg.ui.ownerMap[m.id] = targetId; n += 1; }
+  }
+  if (n) persist();
+  return n;
 }
 
 function monitorRows() {
@@ -911,6 +1020,9 @@ function getState() {
     name: m.name,
     internal: m.internal,
     hasDdc: m.hasDdc,
+    // DDC 读回来的「此刻在用哪个口」—— 界面用它显示「当前画面」，也用来顶一个一键配置
+    currentInput: m.currentInput || '',
+    currentInputLabel: m.currentInputLabel || '',
     ownerId: m.ownerId,
     ownerLabel: m.ownerLabel,
     ports: m.ports,
@@ -1034,12 +1146,25 @@ function onFileUpdate(list) {
  * `input` 是「本机自己的」计划：字符串（所有屏同口）或 { index: 值 }。
  * 不再需要跨机器换 index / 名字 —— 每台机器都只切自己接线能碰到的屏。
  */
-async function onSwitchRequest({ input, label, from, index }) {
+async function onSwitchRequest({ input, label, from, index, target }) {
   // 指定了 index = 只切这一台显示器
   if (typeof index === 'number') {
-    const name = label || (typeof input === 'string' ? labelForInput(input) : '目标接口');
-    const r = await ddc.setInput(index, typeof input === 'string' ? input : Object.values(input || {})[0]);
+    const value = typeof input === 'string' ? input : Object.values(input || {})[0];
+    const name = label || labelForInput(value);
+    const r = await ddc.setInput(index, value);
     if (r.ok) {
+      // 亲手切成功 → 这块屏现在归它了（下次读不到当前输入源也能着色）
+      const m = monitorsCache.find((x) => x.index === index);
+      if (m) applySwitched(target, m, value);
+      if (target && m) {
+        if (!cfg.ui.ownerMap) cfg.ui.ownerMap = {};
+        cfg.ui.ownerMap[m.id] = target;
+        if (!portFor(m.id, target) && normInput(value)) {
+          if (!cfg.ui.portMap) cfg.ui.portMap = {};
+          cfg.ui.portMap[m.id] = { ...(cfg.ui.portMap[m.id] || {}), [target]: normInput(value) };
+        }
+        persist();
+      }
       pushStatus(from ? `已由 ${from} 切换 1 台显示器到 ${name}` : `已把这台显示器切换到 ${name}`, 'ok');
       setTimeout(() => { detectMonitors().catch(() => {}); }, 1200);
     } else {
@@ -1052,6 +1177,27 @@ async function onSwitchRequest({ input, label, from, index }) {
   const r = await switchMonitorInput(input, name);
   const scope = r.total > 1 ? `${r.success}/${r.total} 台显示器` : '显示器';
   if (r.ok) {
+    // 亲手切成功 → 把这些屏的归属记下来（读不到当前输入源的屏也能着对色）
+    if (target) {
+      if (typeof input === 'string') {
+        if (!r.partial) {
+          for (const m of monitorsCache) {
+            if (!m.internal && sameInput(portFor(m.id, target), input)) applySwitched(target, m, input);
+          }
+        }
+      } else {
+        for (const [idx, v] of Object.entries(input || {})) {
+          const m = monitorsCache.find((x) => x.index === Number(idx));
+          if (!m) continue;
+          applySwitched(target, m, v);
+          if (!portFor(m.id, target) && normInput(v)) {
+            if (!cfg.ui.portMap) cfg.ui.portMap = {};
+            cfg.ui.portMap[m.id] = { ...(cfg.ui.portMap[m.id] || {}), [target]: normInput(v) };
+          }
+        }
+      }
+      persist();
+    }
     pushStatus(from ? `已由 ${from} 把${scope}切换到 ${name}` : `已将${scope}切换到 ${name}`, 'ok');
     if (r.partial) pushStatus(`有显示器未响应：${r.error}`, 'warn');
     setTimeout(() => { detectMonitors().catch(() => {}); }, 1500);

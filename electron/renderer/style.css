@@ -936,6 +936,17 @@ body.win .brand { padding-left: 0; }
 .pp-title b { color: #e4ecfb; font-weight: 600; }
 .pp-title em { font-style: normal; color: #9db4dc; }
 
+/* 「当前画面」那一行：把这块屏此刻在用的口顶到最上面 */
+.pp-live {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 9px; padding: 7px 9px;
+  border: 1px solid rgba(91, 155, 255, 0.28);
+  border-radius: 8px;
+  background: rgba(91, 155, 255, 0.1);
+}
+.pp-live-t { font-size: 11px; color: #bdd4f5; flex: 1 1 auto; white-space: nowrap; }
+.chip-live { flex: 0 0 auto; border-color: rgba(91, 155, 255, 0.45); }
+
 .wb-tip {
   margin-top: 11px;
   padding-top: 10px;

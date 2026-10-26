@@ -18,6 +18,7 @@ const IS_WIN = process.platform === 'win32';
 const IS_MAC = process.platform === 'darwin';
 
 const INPUT_LABELS = {
+  0x01: 'VGA', 0x03: 'DVI', 0x04: 'DVI2',
   0x0f: 'DP1', 0x10: 'DP2',
   0x11: 'HDMI1', 0x12: 'HDMI2', 0x13: 'HDMI3',
   0x1b: 'USB-C', 0x1a: 'USB-C2'
@@ -209,6 +210,35 @@ async function macTool() {
   return await which('ddcctl');
 }
 
+/**
+ * macOS 上读「当前输入源」（VCP 0x60）。
+ * 之前这里直接把 currentInput 写死成空字符串 —— 结果 Mac 端永远判不出
+ * 「这块屏现在在显示谁」，界面上任何电脑、任何显示器都不会被选中。
+ * m1ddc 支持 `display <n> get input`；ddcctl 没有读接口，读不到就老实返回空。
+ */
+async function macReadInput(tool, index) {
+  if (path.basename(tool) !== 'm1ddc') return '';
+  try {
+    const r = await run(tool, ['display', String(index), 'get', 'input'], 5000);
+    if (!r.ok) return '';
+    const blob = `${r.out || ''}\n${r.err || ''}`;
+    // 参数不被支持时 m1ddc 会打印用法，别把用法里的数字当输入源
+    if (/usage|error|invalid|unknown/i.test(blob)) return '';
+    const hex = blob.match(/0x([0-9a-f]{1,4})/i);
+    if (hex) {
+      const n = parseInt(hex[1], 16);
+      if (n > 0) return '0x' + n.toString(16).padStart(2, '0');
+    }
+    // 有的版本直接打印十进制（17 = HDMI1）
+    const dec = blob.match(/(?:^|\s)(\d{1,3})(?:\s|$)/);
+    if (dec) {
+      const n = parseInt(dec[1], 10);
+      if (n > 0) return '0x' + n.toString(16).padStart(2, '0');
+    }
+  } catch { /* 读不到就算了，绝不能因此拖慢启动 */ }
+  return '';
+}
+
 async function macList() {
   const tool = await macTool();
   if (!tool) {
@@ -219,11 +249,14 @@ async function macList() {
     const r = await run(tool, ['display', 'list']);
     if (r.ok) {
       const lines = r.out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-      const displays = lines.map((line, i) => ({
-        index: i + 1,
-        name: line.replace(/^\d+[.:)]\s*/, '') || `显示器 ${i + 1}`,
-        currentInput: '',
-        currentInputLabel: ''
+      const displays = await Promise.all(lines.map(async (line, i) => {
+        const hex = await macReadInput(tool, i + 1);
+        return {
+          index: i + 1,
+          name: line.replace(/^\d+[.:)]\s*/, '') || `显示器 ${i + 1}`,
+          currentInput: hex,
+          currentInputLabel: hex ? labelOf(hex) : ''
+        };
       }));
       if (displays.length) return { ok: true, via: 'm1ddc', displays };
     }

@@ -439,6 +439,23 @@ function openPortMenu(anchor, monitorId, deviceId) {
   title.innerHTML = `<b>${m ? m.name : '显示器'}</b> <em>·</em> ${deviceName(deviceId)} 接哪个口？`;
   pop.appendChild(title);
 
+  // 这块屏「此刻正在用」的口直接顶在最上面：多数情况下点一下就对，
+  // 不用去猜自己的线插在 HDMI1 还是 DVI 上（有的显示器读回来是 0x03 这类非常见值）
+  const live = m && m.currentInput ? m.currentInput : '';
+  if (live) {
+    const row = el('div', 'pp-live');
+    row.appendChild(el('span', 'pp-live-t', `当前画面 ${m.currentInputLabel || hexLabel(live)}`));
+    const use = el('button', 'chip chip-live', '就用这个口');
+    use.type = 'button';
+    use.title = '这块屏现在就在用这个口 —— 记成这台电脑接的口';
+    use.addEventListener('click', async () => {
+      closePortMenu();
+      await push(window.api.setPort(monitorId, deviceId, live));
+    });
+    row.appendChild(use);
+    pop.appendChild(row);
+  }
+
   const chips = el('div', 'chips');
   for (const it of chipItems([cur])) {
     const b = el('button', 'chip', it.label);
