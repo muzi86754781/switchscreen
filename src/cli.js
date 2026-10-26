@@ -9,10 +9,10 @@ function cmdStart() {
 }
 
 function cmdRecordHotkey() {
-  const iohook = require('iohook');
+  const { uIOhook } = require('uiohook-napi');
   console.log('按下你想设为「切换电脑」的快捷键组合（含修饰键）…');
   let done = false;
-  iohook.on('keydown', (e) => {
+  uIOhook.on('keydown', (e) => {
     if (done) return;
     done = true;
     const cfg = loadConfig();
@@ -22,10 +22,10 @@ function cmdRecordHotkey() {
     };
     saveConfig(cfg);
     console.log('已保存快捷键:', JSON.stringify(cfg.switchHotkey));
-    iohook.stop();
+    uIOhook.stop();
     process.exit(0);
   });
-  iohook.start(false);
+  uIOhook.start();
 }
 
 function cmdConfig(args) {

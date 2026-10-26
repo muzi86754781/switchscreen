@@ -19,16 +19,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      # 把 MSVC 开发环境注入 PATH，让 node-gyp 能找到 Visual Studio（编译 robotjs/iohook 必需）
+      # 把 MSVC 开发环境注入 PATH，让 node-gyp 能找到 Visual Studio（编译 robotjs 必需）
       - uses: ilammy/msvc-dev-cmd@v1
       # windows runner 的 Python 3.12 同样缺 distutils，node-gyp 需要它
       - run: python -m pip install --upgrade "setuptools<81" wheel
       - run: echo "npm_config_python=$(which python)" >> "$GITHUB_ENV"
-      # iohook/robotjs 0.9.x 没有 Node20/arm64 的预编译，必须从源码编译；
-      # 故跳过会 404 的 install.js，再手动拉 Electron 二进制并 rebuild。
+      # 键鼠捕获用 uiohook-napi（N-API + npm 包里自带预编译 .node，无需编译）；
+      # 只有注入用的 robotjs 需要从源码编（它的 install.js 会去 GitHub 拉不存在的预编译包，故跳过）。
       - run: npm install --ignore-scripts
       - run: node node_modules/electron/install.js
-      - run: npx electron-rebuild --force
+      # 只编 robotjs：uiohook-napi 用包内 N-API 预编译，重编它既慢又可能失败；
+      # 打包阶段 electron-builder 的自动 rebuild 也已关闭（npmRebuild: false）。
+      - run: npx electron-rebuild --force --only robotjs
       - run: npm run dist:win
         env:
           # 无签名证书时关闭自动签名，避免 electron-builder 索取 GH_TOKEN
@@ -56,7 +58,7 @@ jobs:
       - run: echo "npm_config_python=$(which python3)" >> "$GITHUB_ENV"
       - run: npm install --ignore-scripts
       - run: node node_modules/electron/install.js
-      - run: npx electron-rebuild --force --arch ${{ matrix.arch }}
+      - run: npx electron-rebuild --force --arch ${{ matrix.arch }} --only robotjs
       # 内置 DDC 工具：Apple Silicon 用 m1ddc，Intel 用 ddcctl（交叉编译 x86_64）。
       # 失败不阻塞出包，运行时会回退到 PATH 里的同名工具并给出提示。
       - name: Build bundled DDC helper

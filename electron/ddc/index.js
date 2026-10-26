@@ -28,7 +28,18 @@ function labelOf(hex) {
   return INPUT_LABELS[n] || String(hex);
 }
 
-function run(cmd, args, timeout = 12000) {
+/** Win32 错误码 → 人能看懂的话（直接甩「错误码 203」等于没说） */
+function winErrText(code) {
+  const c = Number(code);
+  if (c === 31) return '显示器拒绝了 DDC 指令（请在显示器菜单里开启 DDC/CI）';
+  if (c === 5) return '系统拒绝访问显示器（可能被安全软件拦截）';
+  if (c === 6) return '显示器句柄已失效（切换过程中系统重排了显示拓扑）';
+  if (c === 87) return '接口参数不被显示器接受';
+  if (c === 1168) return '找不到这块显示器';
+  return `设置失败${c ? `，错误码 ${c}` : ''}`;
+}
+
+function run(cmd, args, timeout = 20000) {
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout, windowsHide: true }, (err, stdout, stderr) => {
       resolve({
@@ -49,14 +60,16 @@ function psScriptPath() {
   return p.includes(`app.asar${path.sep}`) ? p.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`) : p;
 }
 
+function psArgs(script, extra) {
+  return ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script].concat(extra);
+}
+
 async function winList() {
   const script = psScriptPath();
   if (!fs.existsSync(script)) {
     return { ok: false, via: 'dxva2', displays: [], error: 'DDC 脚本缺失' };
   }
-  const r = await run('powershell.exe', [
-    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Action', 'list'
-  ]);
+  const r = await run('powershell.exe', psArgs(script, ['-Action', 'list']));
   if (!r.ok) return { ok: false, via: 'dxva2', displays: [], error: r.err };
 
   const displays = [];
@@ -77,54 +90,73 @@ async function winList() {
   return { ok: true, via: 'dxva2', displays };
 }
 
-async function winSet(index, hexValue) {
-  const script = psScriptPath();
-  const r = await run('powershell.exe', [
-    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
-    '-Action', 'set', '-Index', String(index), '-Value', String(parseInt(hexValue, 16))
-  ]);
-  const m = r.out.match(/SET=(True|False)/i);
-  const ok = !!m && m[1].toLowerCase() === 'true';
-  const errCode = (r.out.match(/ERR=(\d+)/) || [])[1];
-  if (ok) return { ok: true, via: 'dxva2' };
-  return {
-    ok: false,
-    via: 'dxva2',
-    error: errCode === '31'
-      ? '显示器拒绝了 DDC 指令（请在显示器菜单里开启 DDC/CI）'
-      : (r.err || `设置失败${errCode ? `，错误码 ${errCode}` : ''}`)
-  };
-}
-
 /**
- * Windows：一次 PowerShell 进程内按计划切换（每台显示器可以指向不同接口）。
- * plan: [{ index, value }]，value 为 "0x11" 形式的字符串。
+ * Windows：在同一个 PowerShell 进程里按计划切换。
+ *
+ * plan 是字符串：
+ *   "*=17"          所有当前枚举到的显示器（不依赖 index，最稳）
+ *   "0=17;1=18"     按 index 指定接口（各屏接的端口不同时用）
+ *
+ * 脚本内部会「同时下发 → 校验 → 用新句柄重试」，因为第一块屏切走后
+ * Windows 立刻重排显示拓扑，串行写会让后面几块屏静默失败。
  */
-async function winSetPlan(plan) {
+async function winApply(planStr) {
   const script = psScriptPath();
-  const str = plan
-    .filter((p) => typeof p.index === 'number')
-    .map((p) => `${p.index}=${parseInt(p.value, 16)}`)
-    .join(';');
-  const r = await run('powershell.exe', [
-    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
-    '-Action', 'setplan', '-Plan', str
-  ]);
+  const r = await run('powershell.exe', psArgs(script, ['-Action', 'setplan', '-Plan', planStr]));
   const results = [];
+  let count = 0;
   for (const line of r.out.split(/\r?\n/)) {
-    const m = line.trim().match(/^MON=(\d+)\|(True|False|SKIP)\|(\d+)$/i);
+    const t = line.trim();
+    const c = t.match(/^COUNT=(\d+)$/);
+    if (c) { count = Number(c[1]); continue; }
+    const m = t.match(/^MON=(\d+)\|(True|False|SKIP|GONE)\|(\d+)$/i);
     if (!m) continue;
     const verdict = m[2].toUpperCase();
     if (verdict === 'SKIP') continue;
+    if (verdict === 'GONE') {
+      results.push({ index: Number(m[1]), ok: false, via: 'dxva2', error: '这块显示器已经不在本机（可能已切走）' });
+      continue;
+    }
     const ok = verdict === 'TRUE';
-    results.push({
-      index: Number(m[1]),
-      ok,
-      via: 'dxva2',
-      error: ok ? '' : (m[3] === '31' ? '显示器拒绝了 DDC 指令（请在显示器菜单里开启 DDC/CI）' : `设置失败，错误码 ${m[3]}`)
-    });
+    results.push({ index: Number(m[1]), ok, via: 'dxva2', error: ok ? '' : winErrText(m[3]) });
   }
-  return summarize(results, 'dxva2', r.err);
+  const sum = summarize(results, 'dxva2', r.err);
+  sum.enumerated = count;
+  return sum;
+}
+
+/** 单块显示器切换（index 来自 listDisplays 的枚举顺序） */
+async function winSet(index, hexValue) {
+  return winApply(`${index}=${parseInt(hexValue, 16)}`);
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 所有显示器切到同一接口。
+ *
+ * 内部已经「同时下发 + 校验 + 重试」；这里再补一层外部重试：
+ * 切完之后系统还会重排一次显示拓扑，隔一会儿再发一遍 "*"，
+ * 此时枚举到的正好是「还没切走的那几块屏」，等于对着失败的那几块重试。
+ */
+async function winApplyAll(hexValue) {
+  const plan = `*=${parseInt(hexValue, 16)}`;
+  let r = await winApply(plan);
+  for (let i = 0; i < 2 && (!r.ok || r.partial); i += 1) {
+    await sleep(700);
+    const again = await winApply(plan);
+    if (again.ok && !again.partial) {
+      // 第二次把剩下的都切走了：总数按两次里最大的算（第一次已经切走的不再枚举）
+      const total = Math.max(r.total, again.total);
+      return { ...again, ok: true, partial: false, total, success: total, error: '' };
+    }
+    if (again.ok) {
+      r = { ...again, total: Math.max(r.total, again.total), partial: true, error: again.error || r.error };
+    } else if (!r.ok) {
+      r = { ...r, error: r.error || again.error };
+    }
+  }
+  return r;
 }
 
 function summarize(results, via, fallbackError) {
@@ -225,6 +257,54 @@ async function macSet(index, hexValue) {
   return { ok: false, via: base, error: (r.err || r.out || '切换失败').trim().slice(0, 200) };
 }
 
+function sameName(a, b) {
+  const x = String(a || '').toLowerCase().replace(/[\s\-_()（）]/g, '');
+  const y = String(b || '').toLowerCase().replace(/[\s\-_()（）]/g, '');
+  if (!x || !y) return false;
+  return x === y || x.includes(y) || y.includes(x);
+}
+
+/**
+ * macOS 上「切走一台后序号整体前移」，所以每次都重新枚举、按名字定位；
+ * 写失败或写完还在列表里（没走）就再试一轮。
+ */
+async function macSetAll(plan, names) {
+  const label = (p) => (names && names[p.index]) || p.name || '';
+  let queue = plan.map((p) => ({ value: p.value, name: label(p), index: p.index }));
+  const results = [];
+  const seen = new Set();
+
+  for (let round = 0; round < 3 && queue.length; round++) {
+    if (round) await new Promise((r) => setTimeout(r, 500));
+    const next = [];
+    for (const item of queue) {
+      let idx = null;
+      try {
+        const fresh = await macList();
+        const list = fresh.displays || [];
+        const hit = list.find((d) => sameName(d.name, item.name));
+        if (hit) idx = hit.index;
+      } catch { /* ignore */ }
+      if (idx === null) {
+        // 名字匹配不到：退回原来的序号
+        idx = item.index;
+      }
+      const r = await macSet(idx, item.value);
+      if (r.ok) {
+        if (!seen.has(item.name)) { seen.add(item.name); results.push({ index: idx, name: item.name, ...r }); }
+      } else if (round === 2 || item.name === '') {
+        if (!seen.has(item.name)) { seen.add(item.name); results.push({ index: idx, name: item.name, ...r }); }
+      } else {
+        next.push({ ...item, index: idx }); // 再试一次
+      }
+    }
+    queue = next;
+  }
+
+  const tool = await macTool();
+  return summarize(results, tool ? path.basename(tool) : 'none', '');
+}
+
 /* ---------------- 对外接口 ---------------- */
 
 async function listDisplays() {
@@ -243,23 +323,34 @@ async function setInput(index, hexValue) {
  * 把所有检测到的显示器一起切到目标输入源。
  *
  * target 可以是：
- *   - "0x11" 字符串：所有显示器切到同一个接口；
+ *   - "0x11" 字符串：所有显示器切到同一个接口（Windows 用 "*"，不依赖 index）；
  *   - { "0": "0x11", "1": "0x12" } 对象：按显示器 index 分别指定接口
  *     （多显示器各接不同端口时用，key 也接受 "ddc:0" 形式）。
  *
- * 顺序执行（并发读写 DDC 容易互相干扰），并统计成功/失败。
+ * opts.names: { index: 显示器名 }，macOS 上用来在序号错位后重新定位。
  */
 async function setInputAll(target, opts) {
   const o = opts || {};
+  const isMap = target && typeof target === 'object';
+
+  // Windows 的统一接口不需要先枚举：直接告诉脚本「所有屏」，这样
+  // 中途有显示器增减也不会切错屏，还省掉一次 PowerShell 启动
+  if (IS_WIN && !isMap && target) {
+    const all = await winApplyAll(target);
+    if (all.total > 0) return all;
+  }
+
   const l = await listDisplays();
   const list = (l.displays || []).slice();
+
   if (!list.length) {
     return { ok: false, total: 0, success: 0, via: l.via, error: l.error || '未检测到显示器' };
   }
 
-  const isMap = target && typeof target === 'object';
   const plan = [];
   for (const d of list) {
+    // Mac 自带屏没有 DDC，跟着一起切只会每次都报「部分失败」
+    if (IS_MAC && !isMap && /built-?in|内建|color lcd/i.test(d.name || '')) continue;
     let v = isMap ? (target[d.index] || target[`ddc:${d.index}`]) : target;
     if (!v) continue;
     plan.push({ index: d.index, name: d.name, value: v });
@@ -268,35 +359,23 @@ async function setInputAll(target, opts) {
     return { ok: false, total: list.length, success: 0, via: l.via, error: '没有可用的接口配置' };
   }
 
-  // Windows：一次性切完（单个 PowerShell 进程里只枚举一次，index 不会中途错位）
   if (IS_WIN) {
-    const all = await winSetPlan(plan);
+    const str = plan.map((p) => `${p.index}=${parseInt(p.value, 16)}`).join(';');
+    const all = await winApply(str);
     if (all.total > 0) return all;
+  }
+
+  if (IS_MAC) {
+    const r = await macSetAll(plan, o.names || {});
+    if (r.total > 0) return r;
   }
 
   const results = [];
   for (const p of plan) {
-    let idx = p.index;
-    // macOS 的 index 是一次性的：切走一台后系统会把它从列表里摘掉，
-    // 后面的序号整体前移，所以每切一台都按名字重新定位。
-    if (IS_MAC && o.names && o.names[p.index]) {
-      try {
-        const fresh = await listDisplays();
-        const hit = (fresh.displays || []).find((d) => sameName(d.name, o.names[p.index]));
-        if (hit) idx = hit.index;
-      } catch { /* ignore */ }
-    }
-    const r = await setInput(idx, p.value);
-    results.push({ index: idx, name: p.name, ...r });
+    const r = await setInput(p.index, p.value);
+    results.push({ index: p.index, name: p.name, ...r });
   }
   return summarize(results, l.via, '');
-}
-
-function sameName(a, b) {
-  const x = String(a || '').toLowerCase().replace(/[\s\-_()（）]/g, '');
-  const y = String(b || '').toLowerCase().replace(/[\s\-_()（）]/g, '');
-  if (!x || !y) return false;
-  return x === y || x.includes(y) || y.includes(x);
 }
 
 module.exports = { listDisplays, setInput, setInputAll, labelOf, INPUT_LABELS, IS_WIN, IS_MAC };

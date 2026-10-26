@@ -51,6 +51,13 @@ const SPECIAL = {
   alt: 'alt',
   meta: 'command'
 };
+for (let i = 0; i <= 9; i += 1) SPECIAL[`numpad_${i}`] = `numpad_${i}`;
+SPECIAL['numpad_+'] = 'numpad_+';
+SPECIAL['numpad_-'] = 'numpad_-';
+SPECIAL['numpad_*'] = 'numpad_*';
+SPECIAL['numpad_/'] = 'numpad_/';
+SPECIAL['numpad_.'] = 'numpad_.';
+SPECIAL.numpad_lock = 'numpad_lock';
 for (let i = 1; i <= 12; i += 1) SPECIAL[`f${i}`] = `f${i}`;
 
 /**
@@ -90,7 +97,18 @@ const VC = {
   0x0e1d: 'control', 0x0e38: 'alt', 0x0e5b: 'meta', 0x0e5c: 'meta',
   0x0e47: 'home', 0x0e4f: 'end', 0x0e49: 'pageup', 0x0e51: 'pagedown',
   0x0e48: 'up', 0x0e4b: 'left', 0x0e4d: 'right', 0x0e50: 'down',
-  0x0e52: 'insert', 0x0e53: 'delete', 0x0e37: 'printscreen'
+  0x0e52: 'insert', 0x0e53: 'delete', 0x0e37: 'printscreen',
+  0x0e5d: 'menu',
+
+  // 小键盘：必须显式列出，否则会落进下面的 ASCII 兜底
+  // （0x004C 是 76 → 被当成字母 L，按小键盘 5 就打出一个 l）
+  0x0045: 'numpad_lock', 0x0046: 'scrolllock',
+  0x0037: 'numpad_*', 0x004a: 'numpad_-', 0x004e: 'numpad_+',
+  0x0053: 'numpad_.', 0x0e35: 'numpad_/',
+  0x004f: 'numpad_1', 0x0050: 'numpad_2', 0x0051: 'numpad_3',
+  0x004b: 'numpad_4', 0x004c: 'numpad_5', 0x004d: 'numpad_6',
+  0x0047: 'numpad_7', 0x0048: 'numpad_8', 0x0049: 'numpad_9',
+  0x0052: 'numpad_0', 0x0e1c: 'enter'
 };
 
 /**

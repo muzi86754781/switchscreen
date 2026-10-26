@@ -650,9 +650,29 @@ function registerIpc() {
 
 /* ---------------- 启动 ---------------- */
 
+/**
+ * 原生模块自检。
+ * 缺文件时在界面第一屏就说清楚，而不是等用户第一次推鼠标才发现「什么都没发生」。
+ */
+function checkNativeModules() {
+  let input;
+  try { input = require('../src/input'); } catch { return; }
+  try {
+    input.ensureIoHook();
+  } catch (e) {
+    services.pushStatus(`键鼠捕获模块不可用：${e.message}`, 'warn');
+  }
+  try {
+    input.ensureRobot();
+  } catch (e) {
+    services.pushStatus(`键鼠注入模块不可用：${e.message}`, 'warn');
+  }
+}
+
 app.whenReady().then(() => {
   services.ensureDefaults();
   registerIpc();
+  checkNativeModules();
 
   const iconPath = path.join(__dirname, '..', 'build', 'icon.png');
   try {

@@ -13,7 +13,7 @@
 ```
         ┌──────────────┐        DDC/CI        ┌─────────────────┐
    PC-A │ 主机(接键鼠) │ ─── 切输入源 ───────▶ │                 │
-   (Win)│ iohook捕获   │ ─── WS 转发键鼠 ───▶  │   显示器 HDMI1  │
+   (Win)│ uiohook 捕获 │ ─── WS 转发键鼠 ───▶  │   显示器 HDMI1  │
         │ robotjs注入  │ ◀── WS 回传剪贴板 ──  │                 │
         └──────────────┘                      │   HDMI2 ← PC-B  │
         ┌──────────────┐                      └─────────────────┘
@@ -22,7 +22,7 @@
         └──────────────┘
 ```
 
-- **主机（host）**：接了物理键鼠的那台，负责 `iohook` 捕获输入。
+- **主机（host）**：接了物理键鼠的那台，负责 `uiohook-napi`（libuiohook 的 N-API 封装）捕获输入。
 - **客户端（client）**：接收转发来的输入并用 `robotjs` 注入。
 - **切换**：快捷键触发 → 用 DDC/CI 把显示器切到目标机的输入口 → 主机转发目标改为该机。
 - **共用键鼠开关关掉时**：主机不再捕获/转发，各自用各自本机的键鼠（此时显示哪台由显示器决定）。
@@ -52,14 +52,15 @@
 ## 安装（每台机器都要装）
 
 ```bash
-npm install        # 会编译 iohook / robotjs 原生模块，需要对应平台编译工具链
+npm install        # uiohook-napi 自带 N-API 预编译；只有 robotjs 需要本地编译
 ```
 
 - Windows：需安装 [Windows Build Tools](https://github.com/Microsoft/nodejs-guidance)（`npm install --global windows-build-tools` 或 Visual Studio 生成工具 + Python）。
 - macOS：需 Xcode Command Line Tools；首次运行要在「系统设置 → 隐私与安全性 → 辅助功能 / 输入监控」里授权终端/Node。
 - Linux：需 `libudev`、`libx11`、`libxtst` 等开发包；DDC 用 `ddcutil`。
 
-> 注意：`iohook` / `robotjs` 是原生模块，**必须在目标机器上本地编译**，本仓库不包含预编译二进制。
+> 注意：键鼠捕获用 `uiohook-napi`，它是 **N-API** 并且 npm 包里就带着各平台预编译的 `.node`，
+> 换 Electron 版本、换机器都不用重编；只有注入用的 `robotjs` 需要在目标机器上编译。
 
 ---
 
@@ -119,17 +120,17 @@ npm start
 ## 当前状态 / 待实测项
 
 - ✅ 传输与发现、剪贴板同步、快捷键匹配、状态机、无缝移动、键位映射：纯 JS，逻辑完整，已有单元测试覆盖。
-- ✅ 键位映射（`src/keymap.js`）：VC 虚拟键码 + VK/ASCII 两套约定，可打印字符走 `keychar`；
+- ✅ 键位映射（`src/keymap.js`）：以 libuiohook 的 VC 虚拟键码为主、VK/ASCII 兜底，小键盘单独成表；
   ⌘ ⇄ Ctrl 语义映射三档可选。个别按键不对时可用「按键诊断」看原始键码。
 - ⚠️ 真机手感需要在你的 Mac + Windows 组合上各跑一次（鼠标速度、边界方向、修饰键映射档位）。
-- ⚠️ iohook 不能拦截本机输入，共用期间按键本机也会收到（见「无缝移动」一节的已知限制）。
+- ⚠️ libuiohook 不能拦截本机输入，共用期间按键本机也会收到（见「无缝移动」一节的已知限制）。
 
 ---
 
 ## 打包成安装包（.exe / .dmg）
 
-用 electron-builder 打包成带系统托盘的真实安装包。由于 `iohook`/`robotjs` 是停止维护的
-原生模块（没有 Node20/arm64 的预编译），构建时必须**从源码编译**——仓库已用
+用 electron-builder 打包成带系统托盘的真实安装包。`uiohook-napi` 用包内预编译，只有注入用的
+`robotjs` 是停止维护的原生模块（没有 Node20/arm64 的预编译），构建时必须**从源码编译**——仓库已用
 `.github/workflows/build.yml`（GitHub Actions）把整套工具链固化好，**推到 `main` 即自动出双包**。
 
 ### 双平台一键出包（推荐，已验证通过 ✅）
@@ -147,7 +148,7 @@ git push origin main        # 推送即触发 CI，去 Actions 页面下载 exe 
 https://github.com/muzi86754781/switchscreen/actions/runs/40280911541
 
 > 构建要点（已固化在 CI，无需你管）：`--ignore-scripts` 装依赖 → 手动拉 Electron 二进制 →
-> `@electron/rebuild --force` 从源码编译 iohook/robotjs → 有效 512×512 图标 → `--publish=never`
+> `@electron/rebuild --force` 从源码编译 robotjs → 有效 512×512 图标 → `--publish=never`
 > 仅产出 Artifact（不发布 Release）。Windows runner 用 `windows-2022`+`ilammy/msvc-dev-cmd`，
 > 两平台都补 `setuptools<81`（node-gyp 需要 distutils）。
 
@@ -262,7 +263,7 @@ electron/
   算出整个虚拟桌面的范围（副屏在主屏左边时 x 为负数也一样），避免鼠标在副屏上乱跳。
 - **相对位移**：鼠标只发 `dx/dy`，对端自己累加成绝对坐标注入。两台分辨率、缩放不同，
   速度与手感仍然一致，不会出现「一跳半个屏幕」。
-- **锚点回拉**：iohook 的 `mousemove` 只有绝对坐标，指针顶到屏幕边缘后位移会变成 0，远端指针就卡住了。
+- **锚点回拉**：libuiohook 的 `mousemove` 只有绝对坐标，指针顶到屏幕边缘后位移会变成 0，远端指针就卡住了。
   所以转发期间把本机指针不断拉回**当前所在那块屏**的中心，保证始终能取到真实位移。
 - **幻影指针**：host 侧自己维护「对端指针在哪」的坐标，一旦越过对端屏幕的另一侧，
   就发 DDC 把画面切回来，并把本机指针放到对应的边上 —— 这就是「无缝」的来源。
@@ -271,7 +272,7 @@ electron/
 - **屏幕尺寸交换**：连上后双方互发 `meta`（平台 + 屏幕尺寸），跨分辨率时按比例落位。
 - **按键复位**：每次切换都广播 `input-reset`，两端释放所有按住的修饰键，避免「一直按着 ⌘」。
 
-> 已知限制：iohook 无法拦截本机输入（它的 `start()` 参数是 keycode 模式，不是抑制）。
+> 已知限制：libuiohook 无法拦截本机输入（它只能监听，不能吞掉事件）。
 > 所以共用期间按键除了发给对端，本机也会收到一份。建议把本机当前应用切到一个无输入焦点的地方。
 
 ### ⌘ Command 与 Ctrl 的跨平台兼容
@@ -288,8 +289,8 @@ electron/
 两端是同一种系统时自动不做任何映射。
 
 另外两层容错：
-- **可打印字符走 `keychar`**：绕开 iohook 在不同版本/平台上「VC 虚拟键码 vs ASCII/VK 码」的差异，
-  同时天然处理了键盘布局差异。
+- **以 VC 虚拟键码为准**：`uiohook-napi` 只给 VC 键码（跨平台一致），VK/ASCII 仅作兜底；
+  小键盘、方向键这类码位重叠的键单独成表，避免误判成字母。
 - **按键诊断开关**（`ui.keyDebug`）：打开后在状态栏打印 `keycode / keychar → token → 映射后`，
   个别键不对时把它打开按一下，就能看到到底是哪一层出的问题。
 
@@ -329,6 +330,35 @@ electron/
 ---
 
 ## 更新日志
+
+### v0.8.1
+
+- **修：键鼠捕获根本起不来（`Cannot find module ...\iohook\builds\electron-v125-win32-x64\...iohook.node`）**
+  Windows 安装版里 `iohook` 一直是坏的：它的二进制是**按 Electron 版本预编译**下载的，
+  官方只出到很老的 Electron ABI；包里又没有 `binding.gyp`，`electron-rebuild` 连认都认不出来
+  （CI 日志里只有 `Building modules: robotjs`）。所以打包后必然缺 `.node`，键鼠捕获永远失败，
+  「共用键鼠」整个功能不可用。现在捕获层**换成 `uiohook-napi`**：
+  - **N-API + 包内自带预编译**（win32-x64 / darwin-arm64 / darwin-x64 都在 tarball 里），
+    不依赖 ABI、不需要编译、Electron 升级也不用重编；
+  - 已实测：预编译 `.node` 在本机能加载、`start()/stop()` 正常；
+  - 打包时把 `node_modules/uiohook-napi/prebuilds/**` 和 robotjs 的 `.node` 一并放进
+    `asarUnpack`，避免「asar 里的原生模块加载不到」；
+  - 捕获器启停状态拆成 `bound`（监听器已挂）/ `running`（hook 已启动），
+    哪个环节失败都不会再变成「再也起不来」的僵尸状态；macOS 没授权时会直接告诉你去哪里勾。
+- **修：「全部切到这台」只切一块屏 / 单块切换报「错误码 203」**
+  - 根因一：**串行写 DDC 必然漏屏**。第一块屏切走之后 Windows 立刻重排显示拓扑，
+    剩下几块屏的 handle 当场失效，第二次 `SetVCPFeature` 就失败。
+    现在 C# 里**多线程同时下发**（同一瞬间发出所有写指令），再**重新枚举校验**：
+    切走的屏会从枚举里消失（= 成功），还在列表里的用**新 handle 重试**（最多 4 轮）。
+  - 根因二：「全部切到这台」原来按 `index` 下发，索引一旦漂移就切错/漏切。
+    现在所有屏同一接口时直接下发 `*=值`（**枚举到几块就切几块**），完全不依赖 index；
+    外层再补一次重试，第二次 `*` 正好只命中还没切走的那几块。
+  - 根因三：「错误码 203」是假的。旧脚本要先 `Write-Output` 再 `GetLastWin32Error()`，
+    控制台写入会把 last-error 冲掉，于是报出来一个无意义的 203。
+    现在错误码在 C# 里**紧接着调用取**，并翻译成人话（31=显示器没开 DDC/CI、5=系统拒绝访问、
+    6=句柄失效、GONE=这块屏已经不在本机）。
+  - macOS 侧同样加了「每次枚举后按名字重新定位 + 失败重试」，跳过自带屏（它没有 DDC，
+    跟着切只会每次都报部分失败）。
 
 ### v0.8.0
 
@@ -412,7 +442,7 @@ electron/
   - 每次切换广播 `input-reset`，两端释放所有按住的修饰键，不再出现「一直按着 ⌘」。
 - **⌘ Command 与 Ctrl 跨平台兼容**（`src/keymap.js`）
   - 新增 `cmd-ctrl`（默认，⌘/⌃ → Ctrl，Ctrl/Win → ⌘）、`swap`（严格互换）、`off` 三档。
-  - 键码解码改为「`keychar` 优先 + VC/VK 双表兜底」，绕开 iohook 不同版本的键码差异。
+  - 键码解码改为「VC 表为主 + VK/ASCII 兜底」，绕开不同版本捕获库的键码差异。
   - 新增「按键诊断」开关，按任意键在状态栏显示 `keycode / keychar → token → 映射后`。
 - 传输页去掉密码卡片，连接状态条改为「局域网自动发现」提示。
 

@@ -3,12 +3,25 @@
 const { decodeKey, mapModifier, toRobot, MODS } = require('./keymap');
 
 // 原生模块延迟加载：没有编译环境的机器上也能把界面打开
-let iohook = null;
+//
+// 捕获层用 uiohook-napi（libuiohook 的 N-API 封装），不用 iohook：
+// iohook 0.9.x 的二进制是按「Node ABI + Electron 版本」下载的预编译包，
+// 没有 Electron 31(ABI 125) 的版本，且包里根本没有 binding.gyp，无法本地编译，
+// 打包后必然报 Cannot find module .../iohook.node。
+// uiohook-napi 是 N-API（ABI 稳定）且把预编译 .node 直接放在 npm 包里，
+// Electron 升级也不用重编，换机器也不会缺文件。
+let hook = null;
 let robot = null;
 
 function ensureIoHook() {
-  if (!iohook) iohook = require('iohook');
-  return iohook;
+  if (!hook) {
+    const mod = require('uiohook-napi');
+    hook = mod.uIOhook || mod;
+    if (hook && typeof hook.start !== 'function') {
+      throw new Error('uiohook-napi 结构异常（缺少 start）');
+    }
+  }
+  return hook;
 }
 
 function ensureRobot() {
@@ -23,7 +36,7 @@ function ensureRobot() {
 /* ================= 捕获端（接物理键鼠的那台） ================= */
 
 /* ---- 桌面实际范围（多显示器必须知道，否则边缘判断全错） ----
- * robotjs 的 getScreenSize() 只给主屏尺寸，而 iohook 报的是整个虚拟桌面的坐标。
+ * robotjs 的 getScreenSize() 只给主屏尺寸，而 libuiohook 报的是整个虚拟桌面的坐标。
  * 主机接了两块屏时，鼠标在副屏上「x 超过主屏宽度」就会被误判成顶到右边缘，
  * 于是不停往对端跳。这里由主进程用 Electron 的 screen 模块算好真实范围塞进来。 */
 const SCREEN = { rects: [], bounds: null };
@@ -55,12 +68,15 @@ function rectAt(x, y) {
 }
 
 /* ---- 捕获器在进程内只绑定一次 ----
- * iohook 是全局单例，反复 start/stop 很容易把监听器叠成多份（一次按键发 N 次）。
- * 所以这里绑定一次，启停只改 active 标志。 */
+ * libuiohook 是全局单例，反复 start/stop 很容易把监听器叠成多份（一次按键发 N 次）。
+ * 所以这里监听器只挂一次、hook 只启动一次，启停只改 active 标志。
+ * 注意 bound / running 必须分开记：模块缺失或权限不足时 bound 不能置真，
+ * 否则修好之后再也不会重试（这也是上一版「键鼠永远起不来」的原因之一）。 */
 const CAP = {
   opts: null,
   active: false,
-  bound: false,
+  bound: false,     // 监听器是否已挂上
+  running: false,   // hook 是否真的在跑
   last: null,       // 上一次的绝对坐标
   anchor: null,     // 屏幕中心（转发时把指针拉回来）
   edgeLockAt: 0     // 边缘触发的冷却时间
@@ -85,7 +101,6 @@ function capWarp(x, y) {
 
 function bindCaptureOnce() {
   if (CAP.bound) return;
-  CAP.bound = true;
   const ih = ensureIoHook();
   const on = (name, fn) => { try { ih.on(name, fn); } catch { /* 某些版本没有该事件 */ } };
   // 取当前有效的回调（CAP.opts 会在复用时被替换）
@@ -105,7 +120,7 @@ function bindCaptureOnce() {
     const mapped = mapModifier(token, cfg.selfPlatform, cfg.peerPlatform, cfg.modMap);
     if (typeof o.onKey === 'function') o.onKey({ token: mapped, raw: token, up });
     if (cfg.keyDebug && typeof o.onDebug === 'function' && !up) {
-      o.onDebug(`按键 keycode=${e.keycode} keychar=${JSON.stringify(e.keychar || '')} → ${token}${mapped !== token ? ` → ${mapped}` : ''}`);
+      o.onDebug(`按键 keycode=${e.keycode} → ${token}${mapped !== token ? ` → ${mapped}` : ''}`);
     }
   };
   on('keydown', handleKey(false));
@@ -174,16 +189,36 @@ function bindCaptureOnce() {
 
   const wheel = (e) => {
     if (!forwarding()) return;
-    const step = (e.amount && e.amount > 1 ? e.amount : 1) * (e.rotation < 0 ? -1 : 1);
-    const horizontal = e.direction === 4;
+    const n = Number(e.clicks) || Number(e.amount) || 1;
+    const step = (n > 1 ? n : 1) * (Number(e.rotation) < 0 ? -1 : 1);
+    const horizontal = Number(e.direction) === 4;
     const o = O();
     if (typeof o.onWheel === 'function') o.onWheel(horizontal ? step : 0, horizontal ? 0 : step);
   };
   on('wheel', wheel);
   on('mousewheel', wheel); // 老版本事件名
 
-  // iohook 的 start 参数是「是否用 rawcode」，不是抑制本地输入
-  ih.start(false);
+  CAP.bound = true;
+}
+
+/**
+ * 真正启动 libuiohook。失败时抛出可读原因（macOS 未授权辅助功能就是这样）。
+ * 允许重复调用：上次失败（比如用户刚补上权限）后还能再试。
+ */
+function startHook() {
+  if (CAP.running) return;
+  const ih = ensureIoHook();
+  try {
+    ih.start();
+    CAP.running = true;
+  } catch (e) {
+    CAP.running = false;
+    const msg = String((e && e.message) || e || '');
+    if (/AXAPI|Accessibility|辅助功能/i.test(msg)) {
+      throw new Error('需要辅助功能权限：系统设置 → 隐私与安全性 → 辅助功能 + 输入监控，勾选 SwitchScreen 后重启应用');
+    }
+    throw new Error(`键鼠捕获未启动：${msg}`);
+  }
 }
 
 /**
@@ -192,13 +227,13 @@ function bindCaptureOnce() {
  * @returns {{stop:()=>void}}
  */
 function createCapture(opts) {
-  ensureIoHook();
   CAP.opts = Object.assign({ getOptions: () => ({}) }, opts || {});
+  bindCaptureOnce();  // 原生模块缺失时在这里抛，界面能显示真正的原因
+  startHook();        // 需要辅助功能权限时在这里抛
   CAP.active = true;
   CAP.last = null;
   CAP.anchor = null;
   CAP.edgeLockAt = 0;
-  bindCaptureOnce();
   return {
     stop() {
       CAP.active = false;

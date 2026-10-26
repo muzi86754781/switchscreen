@@ -1,6 +1,6 @@
 {
   "name": "switchscreen",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "跨平台软件 KVM：单显示器共用键鼠 + 快捷键切换 + 剪贴板跨机同步",
   "main": "electron/main.js",
   "bin": {
@@ -13,15 +13,15 @@
     "config": "node src/cli.js config",
     "dist:win": "electron-builder --win nsis --publish=never",
     "dist:mac": "electron-builder --mac dmg --x64 --arm64 --publish=never",
-    "postinstall": "node -e \"console.log('[switchscreen] CI 会从源码编译 iohook/robotjs；本地若需编译请先装好 MSVC(X64)/Xcode 与 Python，再跑: npx electron-rebuild --force')\""
+    "postinstall": "node -e \"console.log('[switchscreen] uiohook-napi 自带预编译；只有 robotjs 需要本地编译（MSVC/Xcode + Python）')\""
   },
   "engines": {
     "node": ">=16"
   },
   "dependencies": {
     "clipboardy": "^2.3.0",
-    "iohook": "^0.9.3",
     "robotjs": "^0.6.0",
+    "uiohook-napi": "^1.5.5",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -33,6 +33,7 @@
     "appId": "com.switchscreen.app",
     "productName": "SwitchScreen",
     "copyright": "Copyright © 2026 switchscreen",
+    "npmRebuild": false,
     "files": [
       "src/**/*",
       "electron/**/*",
@@ -40,7 +41,9 @@
       "package.json"
     ],
     "asarUnpack": [
-      "electron/ddc/**"
+      "electron/ddc/**",
+      "node_modules/uiohook-napi/prebuilds/**",
+      "node_modules/robotjs/build/Release/*.node"
     ],
     "extraResources": [
       {
@@ -71,7 +74,8 @@
       "darkModeSupport": true,
       "extendInfo": {
         "NSAppleEventsUsageDescription": "SwitchScreen 需要通过系统事件控制显示输入切换。",
-        "NSAccessibilityUsageDescription": "SwitchScreen 需要辅助功能权限来共用键盘与鼠标。"
+        "NSAccessibilityUsageDescription": "SwitchScreen 需要辅助功能权限来共用键盘与鼠标。",
+        "NSInputMonitoringUsageDescription": "SwitchScreen 需要输入监控权限来捕获键盘与鼠标事件。"
       }
     },
     "nsis": {
