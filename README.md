@@ -97,25 +97,52 @@ npm start
 
 ## 打包成安装包（.exe / .dmg）
 
-用 electron-builder 打包成带系统托盘的真实安装包：
+用 electron-builder 打包成带系统托盘的真实安装包。由于 `iohook`/`robotjs` 是停止维护的
+原生模块（没有 Node20/arm64 的预编译），构建时必须**从源码编译**——仓库已用
+`.github/workflows/build.yml`（GitHub Actions）把整套工具链固化好，**推到 `main` 即自动出双包**。
+
+### 双平台一键出包（推荐，已验证通过 ✅）
+
+只要把代码推到 `main`，GitHub Actions 会：
+- 在 **Windows runner** 编译出 `SwitchScreen Setup *.exe`（NSIS，约 75 MB）；
+- 在 **macOS runner** 编译出 `SwitchScreen *.dmg`（约 92 MB）；
+- 两个产物作为 **Artifact** 附在 Actions 运行页面，可直接下载（私有仓库仅协作者可见，默认 90 天过期）。
 
 ```bash
-npm install          # 安装依赖并执行 postinstall 重建 iohook/robotjs（针对 Electron ABI）
-npm run dist:win     # 产出 Windows 安装包 dist/SwitchScreen Setup *.exe (NSIS)
-npm run dist:mac     # 产出 macOS 安装包 dist/SwitchScreen *.dmg（需在 Mac 上运行）
+git push origin main        # 推送即触发 CI，去 Actions 页面下载 exe / dmg
+```
+
+最新一次成功构建：
+https://github.com/muzi86754781/switchscreen/actions/runs/40280911541
+
+> 构建要点（已固化在 CI，无需你管）：`--ignore-scripts` 装依赖 → 手动拉 Electron 二进制 →
+> `@electron/rebuild --force` 从源码编译 iohook/robotjs → 有效 512×512 图标 → `--publish=never`
+> 仅产出 Artifact（不发布 Release）。Windows runner 用 `windows-2022`+`ilammy/msvc-dev-cmd`，
+> 两平台都补 `setuptools<81`（node-gyp 需要 distutils）。
+
+### 在本机自己打包（可选）
+
+```bash
+npm install --ignore-scripts
+node node_modules/electron/install.js
+npx @electron/rebuild --force     # 需本机有 MSVC(X64) / Xcode CLT + Python3(setuptools<81)
+npm run dist:win                  # Windows 安装包
+# 或 macOS 上：
+npm run dist:mac                  # macOS dmg（CSC_IDENTITY_AUTO_DISCOVERY=false 关闭自动签名）
 ```
 
 打包后 `main` 指向 `electron/main.js`：启动即常驻系统托盘，菜单里可实时开关
 「共用键鼠 / 剪贴板同步」、一键切换电脑、退出。安装时会请求辅助功能/输入监控权限（macOS）
 或运行安装的程序（iohook 需要），按提示授权即可。
 
-> **图标**：当前 `build/icon.png` 是占位 1×1 图，发布前换成自己的 256×256+ PNG 即可。
+### 未签名安装包的注意事项（当前状态）
 
-### 双平台一键出包（推荐）
-
-本仓库含 `.github/workflows/build.yml`：在 GitHub 打 `v*` 标签或手动触发 Actions，
-会分别在 Windows / macOS  runner 上构建，产物（`.exe` 与 `.dmg`）作为 Artifact 下载。
-**因为 dmg 只能在 macOS 环境生成，这台 Windows 开发机无法直接打出 dmg**，用 CI 是最省事的方式。
+- **Windows (.exe)**：无代码签名，SmartScreen 会报“Windows 已保护你的电脑”。
+  点「更多信息 → 仍要运行」即可；或右键 exe → 属性 → 解除锁定。
+- **macOS (.dmg)**：无 Apple 开发者签名，Gatekeeper 会拦截。
+  右键 dmg → 打开；或终端 `xattr -cr SwitchScreen-*.dmg` 后双击；或系统设置 → 隐私与安全性 → 仍要打开。
+- 若要消除告警，需购买代码签名证书（Windows：~$100/年；macOS：Apple Developer $99/年）并接入 notarization，
+  后续可加进 CI（设 `CSC_LINK` / `CSC_KEY_PASSWORD` 等密钥）。
 
 ---
 
