@@ -251,9 +251,16 @@ async function macList() {
       const lines = r.out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
       const displays = await Promise.all(lines.map(async (line, i) => {
         const hex = await macReadInput(tool, i + 1);
+        // m1ddc 的输出形如「[1] DELL U2414H (XXXXXXXX)」：序号和括号尾巴都要剥掉，
+        // 只留下真实型号名 —— 它是跨机器认屏（稳定键 / 接口同步）的依据
+        const name = line
+          .replace(/^\[\d+\]\s*/, '')
+          .replace(/^\d+[.:)]\s*/, '')
+          .replace(/\s*\([^)]*\)\s*$/, '')
+          .trim();
         return {
           index: i + 1,
-          name: line.replace(/^\d+[.:)]\s*/, '') || `显示器 ${i + 1}`,
+          name: name || `显示器 ${i + 1}`,
           currentInput: hex,
           currentInputLabel: hex ? labelOf(hex) : ''
         };

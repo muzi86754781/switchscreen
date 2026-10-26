@@ -765,7 +765,7 @@ app.whenReady().then(() => {
         if (services.importPorts(list)) broadcastState();
       },
       // 对端自动识别接口时问「这块屏显示的是我吗」——按本机证据回答
-      onProbe: (key) => services.probeAnswer(key),
+      onProbe: (key, ports) => services.probeAnswer(key, ports),
       // 「每块屏现在归谁」：新开的机器对齐到局域网已有状态，切换后全局界面一致
       getAuthority: () => services.publishAuthority(),
       onAuthority: (msg) => {

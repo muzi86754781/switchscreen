@@ -320,7 +320,7 @@ function createPeer(userConfig, hooks) {
   /** 「这块屏现在显示的是你吗」的等待队列：自动识别接口时用它确认候选口 */
   const probeWaiters = new Map();
 
-  function askProbe(target, key, timeout) {
+  function askProbe(target, key, timeout, ports) {
     const k = `${target}|${key}`;
     return new Promise((resolve) => {
       let done = false;
@@ -333,7 +333,8 @@ function createPeer(userConfig, hooks) {
       };
       const timer = setTimeout(() => finish('unknown'), Number(timeout) > 0 ? Number(timeout) : 1800);
       probeWaiters.set(k, finish);
-      if (!sendTo(target, { type: 'probe-ask', key })) finish('unknown');
+      // 带上这块屏的接口指纹：对端键的口径可能跟本机不一样（占位名 vs EDID 序列号）
+      if (!sendTo(target, { type: 'probe-ask', key, ports: ports || undefined })) finish('unknown');
     });
   }
 
@@ -540,7 +541,7 @@ function createPeer(userConfig, hooks) {
     }
     else if (msg.type === 'probe-ask') {
       // 对端在自动识别接口：问「这块屏现在显示的是我吗」，按本机证据回答
-      const ans = typeof h.onProbe === 'function' ? h.onProbe(msg.key) : 'unknown';
+      const ans = typeof h.onProbe === 'function' ? h.onProbe(msg.key, msg.ports) : 'unknown';
       sendTo(name, { type: 'probe-answer', key: msg.key, ans });
     }
     else if (msg.type === 'probe-answer') {
@@ -735,7 +736,7 @@ function createPeer(userConfig, hooks) {
      * 问某台设备「这块屏现在显示的是你吗」（自动识别接口时用）。
      * 对端答不上来（读不到输入源）就当 unknown，等超时。
      */
-    askProbe: (target, key, timeout) => askProbe(target, key, timeout),
+    askProbe: (target, key, timeout, ports) => askProbe(target, key, timeout, ports),
     getPhantom: () => phantom,
     stop: () => {
       if (capture) { try { capture.stop(); } catch { /* ignore */ } capture = null; }

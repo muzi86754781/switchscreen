@@ -369,6 +369,37 @@ function migratePortKeys() {
   moveMap(cfg.ui.portMap);
   moveMap(cfg.ui.portSrc);
   moveOwner();
+
+  // 占位键升级：以前 DDC 层给不出名字，屏被记成「显示器 1」这类占位键；
+  // 现在拿到了真实型号名 / 序列号，同一条编号登记过的旧配置跟着搬过去，
+  // 用户手配的接口和归属不丢（别名记录的是「这个编号当时是那块屏」）
+  const isPlaceholderKey = (k) => /^nm:(显示器\d*|genericpnpmonitor.*)$/.test(String(k || ''));
+  const upgradeKey = (table, isObj) => {
+    if (!table || typeof table !== 'object') return;
+    for (const m of monitorsCache) {
+      if (m.internal) continue;
+      const legacy = m.id;
+      const k = portKey(m);
+      if (!k || k === legacy) continue;
+      const prev = alias[legacy];
+      if (!prev || prev === k || !isPlaceholderKey(prev)) continue;
+      const old = table[prev];
+      if (old === undefined) continue;
+      if (isObj) {
+        const t = table[k] || {};
+        for (const d of Object.keys(old)) if (old[d] !== undefined && t[d] === undefined) t[d] = old[d];
+        table[k] = t;
+      } else if (!table[k]) {
+        table[k] = old;
+      }
+      delete table[prev];
+      n += 1;
+    }
+  };
+  upgradeKey(cfg.ui.portMap, true);
+  upgradeKey(cfg.ui.portSrc, true);
+  upgradeKey(cfg.ui.ownerMap, false);
+
   if (n) persist();
   return n;
 }
@@ -413,7 +444,9 @@ function markPortSrc(monitorId, deviceId, src) {
   const t = cfg.ui.portSrc[k] || {};
   if (src) t[deviceId] = src;
   else delete t[deviceId];
-  cfg.ui.portSrc[monitorId] = t;
+  // 必须写回稳定键：写成 monitorId 会让来源标记在键迁移后丢失，
+  // 手配（manual）的条目就可能被自动清理误删
+  cfg.ui.portSrc[k] = t;
 }
 
 function setPort(monitorId, deviceId, value) {
@@ -703,12 +736,9 @@ function ownerOf(m) {
   }
 
   // 3) 本机看不到这块屏（或读到的口谁都对不上）→ 用局域网公认的归属
-  const a = cfg.ui.authority;
-  if (a && Array.isArray(a.screens)) {
-    const k = m.key || screenKey(m);
-    const hit = a.screens.find((s) => s.key === k);
-    if (hit && hit.owner && deviceIds().includes(hit.owner)) return hit.owner;
-  }
+  //    （键的口径可能和对端不一样，按键找不到再按接口指纹找）
+  const hit = authorityEntryFor(m);
+  if (hit && hit.owner && deviceIds().includes(hit.owner)) return hit.owner;
 
   // 4) 本机上一次确认过的归属
   const saved = (cfg.ui.ownerMap && cfg.ui.ownerMap[portKey(m)]) || '';
@@ -760,6 +790,72 @@ function screenKey(m) {
   const sn = String((m && m.serial) || '').trim();
   if (sn.length > 2) return 'sn:' + sn.toLowerCase();
   return 'nm:' + normName(m && m.name);
+}
+
+/** 这块屏（按稳定键）的接口表快照：{ 设备: 口 } —— 跨机器认领同一块屏的「指纹」 */
+function portsOfKey(k) {
+  const t = (cfg.ui.portMap && cfg.ui.portMap[k]) || {};
+  const out = {};
+  for (const d of Object.keys(t)) {
+    const v = normInput(t[d]);
+    if (v) out[d] = v;
+  }
+  return out;
+}
+
+/**
+ * 两份接口指纹的吻合度：一致的条目数；有任何一条冲突（同一台设备记了两个口）就是 0。
+ * 「哪台电脑接这块屏的哪个口」是物理事实，两台机器各配各的也不会互相矛盾。
+ */
+function portsMatch(a, b) {
+  if (!a || !b) return 0;
+  let agree = 0;
+  for (const d of Object.keys(a)) {
+    if (!b[d]) continue;
+    if (sameInput(a[d], b[d])) agree += 1;
+    else return 0;
+  }
+  return agree;
+}
+
+/**
+ * 快照里的一块屏 → 本机的哪块屏。先按稳定键；键对不上（另一台机器的命名 /
+ * 序列号口径不同，比如一边是 EDID 序列号、一边是「显示器 1」占位名）就按
+ * 接口指纹认领 —— 认领不上，对端发来的归属就永远落不到本机的屏上。
+ */
+function localMonitorForEntry(s) {
+  if (!s) return null;
+  const byKey = monitorsCache.find((x) => !x.internal && screenKey(x) === s.key);
+  if (byKey) return byKey;
+  const fp = s.ports;
+  if (!fp || !Object.keys(fp).length) return null;
+  let best = null, bestScore = 0, tie = false;
+  for (const m of monitorsCache) {
+    if (m.internal) continue;
+    const score = portsMatch(fp, portsOfKey(portKey(m)));
+    if (score > bestScore) { best = m; bestScore = score; tie = false; }
+    else if (score > 0 && score === bestScore) tie = true; // 并列就不敢认，宁可不认
+  }
+  return tie ? null : best;
+}
+
+/** 本机这块屏在公认快照里的条目：先按稳定键，对不上再按接口指纹反查 */
+function authorityEntryFor(m) {
+  const a = cfg.ui.authority;
+  if (!a || !Array.isArray(a.screens) || !m) return null;
+  const k = m.key || screenKey(m);
+  const byKey = a.screens.find((s) => s && s.key === k);
+  if (byKey) return byKey;
+  const mine = portsOfKey(portKey(m));
+  if (!Object.keys(mine).length) return null;
+  let best = null, bestScore = 0, tie = false;
+  for (const s of a.screens) {
+    if (!s || !s.ports) continue;
+    const score = portsMatch(mine, s.ports);
+    if (score > bestScore) { best = s; bestScore = score; tie = false; }
+    else if (score > 0 && score === bestScore) tie = true;
+  }
+  return tie ? null : best;
 }
 
 /** 记住见过的每块屏（含排列位置）：被切到别的电脑后，界面上还得画得出来 */
@@ -877,12 +973,8 @@ function ownViewOf(m) {
   }
   // 本机没有证据（读不到 / 读数刚被判为不可信）→ 用局域网公认的归属，
   // 否则会把过期结论广播出去，把对端刚同步好的界面又带回去
-  const a = cfg.ui.authority;
-  if (a && Array.isArray(a.screens)) {
-    const k = m.key || screenKey(m);
-    const hit = a.screens.find((s) => s.key === k);
-    if (hit && hit.owner && deviceIds().includes(hit.owner)) return hit.owner;
-  }
+  const hit = authorityEntryFor(m);
+  if (hit && hit.owner && deviceIds().includes(hit.owner)) return hit.owner;
   const saved = (cfg.ui.ownerMap && cfg.ui.ownerMap[portKey(m)]) || '';
   return saved && deviceIds().includes(saved) ? saved : '';
 }
@@ -895,10 +987,13 @@ function buildAuthority() {
     if (m.internal) continue;
     const k = screenKey(m);
     const old = byKey.get(k) || {};
+    const ps = portsOfKey(portKey(m));
     byKey.set(k, {
       key: k,
       name: m.name || old.name || '',
-      owner: ownViewOf(m) || old.owner || ''
+      owner: ownViewOf(m) || old.owner || '',
+      // 接口指纹：对端键的口径跟本机不一样时，靠它认领同一块屏
+      ports: Object.keys(ps).length ? ps : (old.ports || {})
     });
   }
   return { rev: Date.now(), at: cfg.peerName, screens: [...byKey.values()] };
@@ -955,7 +1050,12 @@ function applyAuthority(a) {
   for (const s of a.screens) {
     if (!s || !s.owner) continue;
     pinned.push({ key: s.key, owner: s.owner });
-    const m = monitorsCache.find((x) => !x.internal && screenKey(x) === s.key);
+    // 键的口径跟对端不一样时按接口指纹认领本机的屏；认领到了连本机的键一起钉
+    const m = localMonitorForEntry(s);
+    if (m) {
+      const lk = portKey(m);
+      if (lk && lk !== s.key) pinned.push({ key: lk, owner: s.owner });
+    }
     if (!m || !m.currentInput) continue;
     const byInput = deviceIds().find((id) => sameInput(portFor(m.id, id), m.currentInput));
     if (byInput && byInput !== s.owner) {
@@ -981,6 +1081,8 @@ function offlineRows() {
   const out = [];
   for (const s of a.screens) {
     if (!s.key || have.has(s.key)) continue;
+    // 键对不上、但接口指纹认得出是本机的屏：不是离线屏，别补成重复的一行
+    if (localMonitorForEntry(s)) continue;
     // 只补「本机真的接过线、见过的屏」（screenMemo 里有记录）。
     // 对端接了、但本机从没见过的屏不属于本机这行 —— 画出来只会把排列搅乱。
     const memo = (cfg.ui.screenMemo && cfg.ui.screenMemo[s.key]) || {};
@@ -1042,7 +1144,14 @@ function monitorRows() {
 
 let screenRects = [];
 
+/** 最近一次系统枚举（system_profiler / WMI）拿到的友好信息，扫描后给通用名补型号/序列号用 */
+let lastFriendly = [];
+
 const INTERNAL_LABEL = /built-?in|内建|内置|internal display|colou?r lcd/i;
+
+/** 「显示器 1」「Generic PnP Monitor」这类占位名：不含任何能认屏的信息 */
+const GENERIC_LABEL = /^(显示器\s*\d*|monitor\s*\d*|display\s*\d*|generic\b.*)?$/i;
+const isGenericName = (s) => GENERIC_LABEL.test(String(s || '').trim());
 
 /** 内建屏（笔记本自带）的伪显示器 id —— 不参与切换，只用来画排列图 */
 const INTERNAL_ID = (rid) => `int:${rid}`;
@@ -1141,6 +1250,20 @@ function sortMonitorsByLayout() {
     if (p.r) p.m.displayId = p.r.id;
     return p.m;
   });
+
+  // DDC 层给不出名字时（ddcctl 只会编「显示器 1/2」这类占位名），拿系统屏幕标签
+  // 补上真实型号名；名字对上了再顺手补序列号 —— 两端的「稳定键」一致了，
+  // 归属快照（authority）和接口配置才认得出是同一块屏
+  for (const p of pairs) {
+    const m = p.m;
+    if (isGenericName(m.name) && p.r && !isGenericName(p.r.label)) m.name = p.r.label;
+    if (!m.serial && !isGenericName(m.name)) {
+      const mk = normName(m.name);
+      const f = lastFriendly.find((x) => x.serial && normName(x.name) && (
+        normName(x.name) === mk || normName(x.name).includes(mk) || mk.includes(normName(x.name))));
+      if (f) { m.serial = f.serial; if (!m.size && f.size) m.size = f.size; }
+    }
+  }
 
   // 3) 内建屏作为「只显示不切换」的条目并进列表，排列图里才和系统设置一一对应
   for (const r of inner) {
@@ -1287,8 +1410,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * Windows：枚举得到 = 正在显示本机（切走后系统里就没它了）。
  * Mac：系统枚举不区分，只有 DDC 读回的输入源对得上自己的口才算。
  */
-function probeAnswer(key) {
-  const m = monitorsCache.find((x) => !x.internal && screenKey(x) === key);
+function probeAnswer(key, ports) {
+  // 先按稳定键找；键的口径和提问方不一样时，按对方带来的接口指纹认领
+  let m = monitorsCache.find((x) => !x.internal && screenKey(x) === key);
+  if (!m && ports) m = localMonitorForEntry({ key, ports });
   if (!m) return 'no';
   if (IS_WIN) return 'yes';
   const cur = normInput(m.currentInput);
@@ -1339,7 +1464,7 @@ async function probePort(monitorId, deviceId, opts) {
     const w = await ddc.setInput(m.index, v);
     if (w && w.ok === false) continue;
     await sleep(typeof o.wait === 'number' ? o.wait : 1100);
-    const ans = await peer.askProbe(deviceId, mk, 1800);
+    const ans = await peer.askProbe(deviceId, mk, 1800, portsOfKey(mk));
     const lost = !(await stillHere(m));
     const hit = ans === 'yes' || (ans === 'unknown' && two && lost);
     if (hit) {
@@ -1381,7 +1506,13 @@ function detectMac() {
         for (const d of (gpu.spdisplays_ndrvs || [])) {
           const name = d._name || '显示器';
           const serial = String(d._spdisplays_displaySerialNumber || '').trim();
-          out.push({ id: serial || name, name, serial, size: d._spdisplays_resolution || '' });
+          const dtype = String(d['spdisplays_display-type'] || d.spdisplays_display_type || '');
+          // 内建屏没有 DDC，必须摘出来 —— 不然它会把「友好名 ↔ DDC 屏」的数量对齐搞乱，
+          // 外接屏的真实型号名和序列号就一个都安不上（全变成「显示器 1/2」）
+          const internal = d.spdisplays_builtin === 'spdisplays_yes'
+            || /internal|built-?in/i.test(dtype)
+            || INTERNAL_LABEL.test(name);
+          out.push({ id: serial || name, name, serial, size: d._spdisplays_resolution || '', internal });
         }
       }
       resolve(out);
@@ -1422,7 +1553,11 @@ async function detectMonitors() {
     const r = await ddc.listDisplays();
     if (r.ok && r.displays.length) {
       via = r.via;
-      const friendly = IS_MAC ? await detectMac() : IS_WIN ? await detectWin() : [];
+      const friendlyAll = IS_MAC ? await detectMac() : IS_WIN ? await detectWin() : [];
+      lastFriendly = friendlyAll;
+      // Mac 的系统枚举把内建屏一起算进来，DDC 只数外接屏 —— 先把内建屏摘出去再对齐，
+      // 否则数量永远差一个，型号名和序列号全都安不上（屏就变成「显示器 1/2」，跨机器对不上号）
+      const friendly = IS_MAC ? friendlyAll.filter((f) => !f.internal) : friendlyAll;
       // ddcctl 没有可靠的列表输出，探测数量可能多于实际，用系统枚举结果裁剪
       let ddcList = r.displays;
       if (friendly.length && friendly.length < ddcList.length) ddcList = ddcList.slice(0, friendly.length);
