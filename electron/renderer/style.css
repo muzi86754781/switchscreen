@@ -532,13 +532,6 @@ body.win .brand { padding-left: 0; }
 }
 .share-card .check-row + .check-row { margin-top: 6px; }
 .share-card .row { margin-top: 12px; }
-@media (max-width: 880px) {
-  .share-grid { grid-template-columns: 1fr; }
-}
-@media (max-width: 900px) {
-  .wb-row { grid-template-columns: 1fr; align-items: start; }
-  .wb-actions { padding-left: 36px; }
-}
 
 .tx-list { display: flex; flex-direction: column; gap: 9px; }
 .tx {
@@ -703,34 +696,38 @@ body.win .brand { padding-left: 0; }
 }
 .toast.is-on { opacity: 1; transform: translate(-50%, 0); }
 
-/* ============ 设备与显示器（一行一台，左信息 / 右排列） ============ */
+/* ============ 设备与显示器（一行一台，左信息 / 右真实排列） ============ */
 .wb-list { display: flex; flex-direction: column; gap: 10px; }
 
 .wb-row {
   display: grid;
   grid-template-columns: minmax(210px, 0.78fr) minmax(0, 1.6fr);
-  gap: 12px;
+  gap: 14px;
   align-items: center;
   padding: 12px 14px;
   border-radius: 14px;
   background: rgba(15, 20, 32, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.07);
-  transition: background 0.16s, border-color 0.16s, box-shadow 0.16s;
+  transition: background 0.16s, border-color 0.16s;
 }
 .wb-row:hover { background: rgba(22, 29, 45, 0.8); border-color: rgba(255, 255, 255, 0.12); }
-.wb-row.is-active {
-  background: linear-gradient(100deg, rgba(94, 146, 240, 0.24), rgba(70, 110, 200, 0.1));
-  border-color: rgba(150, 185, 255, 0.45);
-  box-shadow: 0 10px 24px rgba(40, 80, 180, 0.18);
-}
 .wb-row.is-off { opacity: 0.62; }
 
-/* 左列：电脑信息 */
-.wb-left { min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+/* 左列：电脑信息。不再整行着色，只在「正在用」时给电脑本身一个颜色 */
+.wb-left {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-left: 10px;
+  border-left: 3px solid transparent;
+  transition: border-color 0.16s;
+}
+.wb-row.is-inuse .wb-left { border-left-color: var(--dev); }
 .wb-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.wb-ico { flex: 0 0 auto; width: 26px; height: 26px; color: #c3d0ea; }
+.wb-ico { flex: 0 0 auto; width: 26px; height: 26px; color: #c3d0ea; transition: color 0.16s; }
 .wb-ico svg { width: 100%; height: 100%; }
-.wb-row.is-active .wb-ico { color: #9dc0ff; }
+.wb-row.is-inuse .wb-ico { color: var(--dev); }
 
 .wb-id { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .wb-name { display: flex; align-items: center; gap: 7px; min-width: 0; }
@@ -768,7 +765,6 @@ body.win .brand { padding-left: 0; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.wb-chip.off { color: var(--warn); border-color: rgba(240, 180, 91, 0.28); }
 .wb-chip {
   flex: 0 0 auto;
   font-size: 10px;
@@ -779,16 +775,23 @@ body.win .brand { padding-left: 0; }
   border-radius: 5px;
   padding: 1px 6px;
 }
+.wb-chip.off { color: var(--warn); border-color: rgba(240, 180, 91, 0.28); }
+
 .wb-actions { display: flex; align-items: center; gap: 8px; padding-left: 36px; }
 .wb-flag {
   font-size: 10.5px;
   letter-spacing: 0.06em;
-  color: #a8c6ff;
-  background: rgba(91, 140, 240, 0.22);
-  border: 1px solid rgba(150, 185, 255, 0.4);
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
   padding: 2px 7px;
   white-space: nowrap;
+}
+.wb-row.is-inuse .wb-flag {
+  color: var(--dev);
+  background: var(--dev-soft);
+  border-color: var(--dev-line);
 }
 .wb-go {
   appearance: none;
@@ -810,127 +813,110 @@ body.win .brand { padding-left: 0; }
 }
 .wb-go:disabled { opacity: 0.45; cursor: default; }
 
-/* 右列：这台电脑与各块屏的排列（显示器 A — 电脑 — 显示器 B） */
-.wb-chain {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  min-width: 0;
-  overflow-x: auto;
-  padding: 3px 2px;
-  scrollbar-width: thin;
-}
-.wb-chain::-webkit-scrollbar { height: 6px; }
-.wb-chain::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 6px; }
-
+/* 右列：电脑 + 按系统真实坐标摆开的显示器 */
+.wb-chain { display: flex; align-items: center; gap: 0; min-width: 0; }
 .chain-link {
-  flex: 0 0 14px;
+  flex: 0 0 12px;
   height: 1px;
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.18);
 }
 .chain-dev {
   flex: 0 0 auto;
-  width: 32px; height: 32px;
-  border-radius: 9px;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
   display: grid;
   place-items: center;
   color: #c3d0ea;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.14);
+  transition: color 0.16s, background 0.16s, border-color 0.16s;
 }
-.chain-dev svg { width: 16px; height: 16px; }
-.wb-row.is-active .chain-dev {
-  color: #d5e3ff;
-  background: rgba(91, 140, 240, 0.28);
-  border-color: rgba(150, 185, 255, 0.55);
+.chain-dev svg { width: 15px; height: 15px; }
+.wb-row.is-inuse .chain-dev {
+  color: var(--dev);
+  background: var(--dev-soft);
+  border-color: var(--dev-line);
 }
+
+.chain-map { position: relative; flex: 1 1 auto; min-width: 0; height: 86px; }
+.chain-map.is-flat { display: flex; align-items: center; gap: 8px; height: auto; }
 
 .chain-mon {
-  position: relative;
-  flex: 0 0 auto;
-  width: 156px;
+  position: absolute;
+  overflow: hidden;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px 9px 7px 12px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.032);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 5px 7px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  transition: background 0.15s, border-color 0.15s;
 }
-.chain-mon::before {
-  content: "";
-  position: absolute;
-  left: 4px;
-  top: 7px;
-  bottom: 7px;
-  width: 3px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.14);
+.chain-mon:hover:not(.is-here):not(.is-internal) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(150, 185, 255, 0.4);
 }
-.chain-mon:hover:not(.is-here) {
-  background: rgba(255, 255, 255, 0.075);
-  border-color: rgba(150, 185, 255, 0.34);
-}
-.chain-mon:active:not(.is-here) { transform: translateY(1px); }
 .chain-mon.is-here {
   cursor: default;
-  background: rgba(91, 140, 240, 0.2);
-  border-color: rgba(140, 180, 255, 0.5);
-}
-.chain-mon.is-here::before {
-  background: #7fb0ff;
-  box-shadow: 0 0 6px rgba(127, 176, 255, 0.85);
+  background: var(--dev-soft);
+  border-color: var(--dev-line);
+  box-shadow: 0 0 14px -4px var(--dev-line);
 }
 .chain-mon.is-noport { border-style: dashed; }
+.chain-mon.is-internal {
+  cursor: default;
+  border-style: dotted;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.02);
+}
 .chain-mon.is-busy { opacity: 0.5; pointer-events: none; }
-.chain-mon.is-unknown::before { background: rgba(255, 255, 255, 0.1); }
+.chain-mon.is-flat { position: static; width: 124px !important; height: 58px !important; }
 
-.cm-top { display: flex; align-items: center; gap: 5px; }
-.cm-id {
-  font-size: 11px;
-  font-weight: 650;
-  color: #dde6f8;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-.chain-mon.is-here .cm-id { color: #d6e6ff; }
-.cm-state {
-  margin-left: auto;
-  font-style: normal;
-  font-size: 9.5px;
-  letter-spacing: 0.03em;
-  color: var(--text-3);
-  white-space: nowrap;
-}
-.chain-mon.is-here .cm-state { color: #9dc0ff; }
-.cm-name {
+.cm-letter {
   font-size: 10px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  color: #dbe5f8;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.chain-mon.is-here .cm-letter { background: var(--dev); color: #0a1020; }
+.cm-tag {
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
   color: var(--text-3);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  padding: 0 4px;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .cm-port {
   appearance: none;
-  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: inherit;
-  font-size: 9.5px;
-  line-height: 1;
-  letter-spacing: 0.03em;
+  font-size: 8.5px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
   color: #b9cbe8;
-  background: rgba(0, 0, 0, 0.28);
+  background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 5px;
-  padding: 2px 5px;
-  margin-top: 2px;
+  border-radius: 4px;
+  padding: 0 4px;
   cursor: pointer;
   white-space: nowrap;
 }
-.cm-port:hover { color: #fff; border-color: rgba(150, 185, 255, 0.6); background: rgba(91, 140, 240, 0.4); }
+.cm-port:hover { color: #fff; border-color: rgba(150, 185, 255, 0.6); background: rgba(91, 140, 240, 0.45); }
 .cm-port.is-unset { color: var(--warn); border-color: rgba(240, 180, 91, 0.34); background: rgba(90, 72, 30, 0.35); }
-.chain-mon.is-here .cm-port { color: #cfe0ff; border-color: rgba(150, 185, 255, 0.4); }
+.chain-mon.is-here .cm-port { color: #e6eefc; border-color: rgba(255, 255, 255, 0.22); }
 
 .wb-empty { font-size: 11.5px; color: var(--text-3); }
 
@@ -1271,3 +1257,13 @@ body.win .brand { padding-left: 0; }
 .link:hover { color: #c7d3ea; }
 .link .arrow { font-size: 11px; }
 .foot-ver { font-size: 11px; color: rgba(255, 255, 255, 0.16); }
+
+/* ============ 窄窗口：左信息 / 右排列改成上下两段 ============ */
+@media (max-width: 900px) {
+  .wb-row { grid-template-columns: 1fr; align-items: start; }
+  .wb-actions { padding-left: 36px; }
+  .chain-map { height: 74px; }
+}
+@media (max-width: 880px) {
+  .share-grid { grid-template-columns: 1fr; }
+}

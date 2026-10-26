@@ -232,24 +232,24 @@ function portFor(monitorId, deviceId) {
   return '';
 }
 
-/** 补齐默认端口（不覆盖用户已保存的值） */
+/**
+ * 补齐接口表的容器（不预填具体值）。
+ * 以前这里用「全局默认接口」预填每块屏，结果一个全局值会盖掉每块屏的真实情况，
+ * 也让自动学习失去机会 —— 现在没配过就是空，界面显示「设置接口」。
+ */
 function ensurePortDefaults() {
   if (!cfg.ui.portMap) cfg.ui.portMap = {};
   let changed = false;
   for (const m of monitorsCache) {
-    const t = cfg.ui.portMap[m.id] || {};
-    if (!Object.prototype.hasOwnProperty.call(t, cfg.peerName)) {
-      t[cfg.peerName] = cfg.ui.localInput || cfg.selfInput || '';
-      changed = true;
-    }
+    if (m.internal) continue; // 内建屏没有接口可配
+    if (!cfg.ui.portMap[m.id]) { cfg.ui.portMap[m.id] = {}; changed = true; }
+    const t = cfg.ui.portMap[m.id];
     for (const p of peersNow) {
-      if (!Object.prototype.hasOwnProperty.call(t, p.name)) {
-        const legacy = (cfg.ui.legacyRemotePorts && cfg.ui.legacyRemotePorts[m.id]) || '';
-        t[p.name] = legacy || cfg.ui.remoteInput || '';
-        changed = true;
-      }
+      if (Object.prototype.hasOwnProperty.call(t, p.name)) continue;
+      // 老版本按「对端默认接口」存过，迁移过来（有值才写）
+      const legacy = (cfg.ui.legacyRemotePorts && cfg.ui.legacyRemotePorts[m.id]) || '';
+      if (legacy) { t[p.name] = legacy; changed = true; }
     }
-    cfg.ui.portMap[m.id] = t;
   }
   if (changed) persist();
 }
@@ -276,6 +276,71 @@ function setPort(monitorId, deviceId, value) {
   return true;
 }
 
+/**
+ * 导出本机每块屏的接口配置（按显示器名字），供对端合并。
+ * 接口值是这块屏上的物理事实，配一次两台机器都该知道 —— 否则在 A 上配好，
+ * 到 B 上点切换就会因为「没设接口」切不动。
+ */
+function exportPorts() {
+  const out = [];
+  for (const m of monitorsCache) {
+    if (m.internal) continue;
+    const t = (cfg.ui.portMap && cfg.ui.portMap[m.id]) || {};
+    const ports = {};
+    for (const k of Object.keys(t)) if (t[k]) ports[k] = t[k];
+    if (Object.keys(ports).length) out.push({ name: m.name, ports });
+  }
+  return out;
+}
+
+/** 合并对端发来的接口配置：按显示器名字配对，只补本机还没设的（本机手改优先） */
+function importPorts(list) {
+  if (!Array.isArray(list) || !list.length) return 0;
+  let n = 0;
+  for (const it of list) {
+    const key = normName(it && it.name);
+    if (!key || !it.ports) continue;
+    const m = monitorsCache.find((x) => !x.internal && normName(x.name) && (
+      normName(x.name) === key || normName(x.name).includes(key) || key.includes(normName(x.name))));
+    if (!m) continue;
+    if (!cfg.ui.portMap) cfg.ui.portMap = {};
+    const t = cfg.ui.portMap[m.id] || {};
+    for (const dev of Object.keys(it.ports)) {
+      const v = it.ports[dev];
+      if (!v || t[dev]) continue;
+      t[dev] = v;
+      n += 1;
+    }
+    cfg.ui.portMap[m.id] = t;
+  }
+  if (n) persist();
+  return n;
+}
+
+/**
+ * 自动补齐接口：一块屏此刻显示的是哪台机器，它当前的输入源就一定是那台机器接的口。
+ * 所以「画面正在这台机器上、而这台机器还没给这块屏配接口」时，直接把当前输入源记下来。
+ * 这样绝大多数场景根本不用手动配接口，点一下就能切。
+ */
+function learnPorts() {
+  const active = activeTarget;
+  if (!active || !monitorsCache.length) return 0;
+  if (!cfg.ui.portMap) cfg.ui.portMap = {};
+  let n = 0;
+  for (const m of monitorsCache) {
+    if (m.internal || !m.currentInput) continue;
+    const t = cfg.ui.portMap[m.id] || {};
+    if (t[active]) continue; // 已经配过就不猜
+    const known = deviceIds().some((id) => t[id] && t[id] === m.currentInput);
+    if (known) continue;     // 这个口已经有主了
+    t[active] = m.currentInput;
+    cfg.ui.portMap[m.id] = t;
+    n += 1;
+  }
+  if (n) persist();
+  return n;
+}
+
 /** 这块屏此刻正显示哪台设备（读不到当前输入时返回空字符串） */
 function ownerOf(m) {
   if (!m || !m.currentInput) return '';
@@ -289,15 +354,19 @@ function ownerOf(m) {
 function monitorRows() {
   return monitorsCache.map((m) => {
     const ports = {};
-    for (const id of deviceIds()) {
-      const v = portFor(m.id, id);
-      ports[id] = { value: v, label: v ? labelForInput(v) : '未设置' };
+    if (!m.internal) {
+      for (const id of deviceIds()) {
+        const v = portFor(m.id, id);
+        ports[id] = { value: v, label: v ? labelForInput(v) : '未设置' };
+      }
     }
-    const ownerId = ownerOf(m);
+    // 内建屏永远显示本机自己
+    const ownerId = m.internal ? cfg.peerName : ownerOf(m);
     return {
       id: m.id,
       index: typeof m.index === 'number' ? m.index : null,
       name: m.name,
+      internal: !!m.internal,
       hasDdc: typeof m.index === 'number',
       currentInput: m.currentInput || '',
       currentInputLabel: m.currentInputLabel || '',
@@ -313,6 +382,11 @@ function monitorRows() {
 /* ---------------- 桌面布局（真实显示器排列） ---------------- */
 
 let screenRects = [];
+
+const INTERNAL_LABEL = /built-?in|内建|内置|internal display|colou?r lcd/i;
+
+/** 内建屏（笔记本自带）的伪显示器 id —— 不参与切换，只用来画排列图 */
+const INTERNAL_ID = (rid) => `int:${rid}`;
 
 /**
  * 读系统里各显示器的真实位置（左/右/上/下）。
@@ -333,14 +407,18 @@ function readScreenRects() {
       try { b = screen.dipToScreenRect(null, b) || b; } catch { /* ignore */ }
     }
     if (!b.width || !b.height) continue;
+    const label = d.label || '';
     out.push({
       x: Math.round(b.x),
       y: Math.round(b.y),
       width: Math.round(b.width),
       height: Math.round(b.height),
-      label: d.label || '',
+      label,
       id: String(d.id),
-      primary: String(d.id) === primaryId
+      primary: String(d.id) === primaryId,
+      // 笔记本自带的屏没有 DDC，也不参与切换；但要显示在排列图里，
+      // 否则「显示器 A/B」在图上会和系统设置里的位置对不上
+      internal: d.internal === true || INTERNAL_LABEL.test(label)
     });
   }
   return out;
@@ -356,22 +434,35 @@ const normName = (s) => String(s || '').toLowerCase().replace(/[\s\-_()（）]/g
  * 给每块屏定位，再按 (x, y) 排序；DDC index 仍然跟着各自的对象走，切换不受影响。
  */
 function sortMonitorsByLayout() {
-  if (!monitorsCache.length) return;
-  const rects = screenRects;
-  if (!rects.length) {
-    monitorsCache.forEach((m) => { if (!m.pos) m.pos = null; });
+  const real = monitorsCache.filter((m) => !m.internal);
+  const all = screenRects || [];
+  if (!all.length) {
+    monitorsCache = real;
+    real.forEach((m) => { m.pos = null; });
     return;
   }
+
+  // 内建屏单独拎出来：它没有 DDC，绝不能占掉某块外接屏的坐标
+  const rects = all.filter((r) => !r.internal);
+  const inner = all.filter((r) => r.internal);
 
   const used = new Set();
   const pairs = [];
   const unpaired = [];
 
+  // 同名（Windows 上 DDC 描述常全是 Generic PnP Monitor）说明名字不可靠，
+  // 这种情况下不做名字配对，直接按坐标顺序对应
+  const keyCount = new Map();
+  for (const m of real) {
+    const k = normName(m.name);
+    if (k) keyCount.set(k, (keyCount.get(k) || 0) + 1);
+  }
+
   // 1) 先按型号名配对（Electron 的 label 与系统友好名同源，命中率最高）
-  for (const m of monitorsCache) {
+  for (const m of real) {
     const key = normName(m.name);
     let hit = null;
-    if (key) {
+    if (key && keyCount.get(key) === 1) {
       hit = rects.find((r) => !used.has(r) && normName(r.label) && (
         normName(r.label).includes(key) || key.includes(normName(r.label))));
     }
@@ -379,25 +470,44 @@ function sortMonitorsByLayout() {
     else unpaired.push(m);
   }
 
-  // 2) 剩下的按顺序补齐（数量一致时就是一一对应）
-  const free = rects.filter((r) => !used.has(r));
+  // 2) 剩下的按「从左到右」的顺序补齐（数量一致时就是一一对应）
+  const free = rects.filter((r) => !used.has(r)).sort((a, b) => (a.x - b.x) || (a.y - b.y));
   unpaired.forEach((m, i) => pairs.push({ m, r: free[i] || null }));
 
   const orderOf = new Map();
-  monitorsCache.forEach((m, i) => orderOf.set(m, i));
+  real.forEach((m, i) => orderOf.set(m, i));
 
-  pairs.sort((a, b) => {
-    if (!a.r && !b.r) return orderOf.get(a.m) - orderOf.get(b.m);
-    if (!a.r) return 1;
-    if (!b.r) return -1;
-    if (a.r.x !== b.r.x) return a.r.x - b.r.x;
-    return a.r.y - b.r.y;
-  });
-
-  monitorsCache = pairs.map((p) => {
+  const list = pairs.map((p) => {
     p.m.pos = p.r ? { x: p.r.x, y: p.r.y, width: p.r.width, height: p.r.height } : null;
+    if (p.r) p.m.displayId = p.r.id;
     return p.m;
   });
+
+  // 3) 内建屏作为「只显示不切换」的条目并进列表，排列图里才和系统设置一一对应
+  for (const r of inner) {
+    list.push({
+      id: INTERNAL_ID(r.id),
+      displayId: r.id,
+      index: null,
+      name: r.label || '内建显示器',
+      serial: '',
+      size: '',
+      currentInput: '',
+      currentInputLabel: '',
+      internal: true,
+      pos: { x: r.x, y: r.y, width: r.width, height: r.height }
+    });
+  }
+
+  list.sort((a, b) => {
+    if (!a.pos && !b.pos) return orderOf.get(a) - orderOf.get(b);
+    if (!a.pos) return 1;
+    if (!b.pos) return -1;
+    if (a.pos.x !== b.pos.x) return a.pos.x - b.pos.x;
+    return a.pos.y - b.pos.y;
+  });
+
+  monitorsCache = list;
 }
 
 /** 刷新显示器布局：既更新捕获端的桌面范围，也重排显示器顺序 */
@@ -418,50 +528,49 @@ function unifyInput(map, involved) {
 }
 
 /**
- * 切到某台设备：算出每块屏该去哪个口，以及各自该由谁执行 DDC。
- * DDC 必须由「这块屏当前正在显示的那台机器」发出，所以按 owner 分组。
+ * 切到某台设备：算出本机要写的 VCP 值。
+ *
+ * **DDC 是走视频线的**：本机接了哪块屏，本机就能直接写哪块屏的输入源，
+ * 跟「这块屏当前画面在哪台机器上」没有关系。所以这里不再按 owner 把计划
+ * 转给对端 —— 以前那样做，只要两端的显示器 index / 名字对不上（Windows 的
+ * DDC 描述经常全是 Generic PnP Monitor），就会漏切或切错屏。
+ *
+ * 本机够不着的屏（没接线、没枚举到）留给对端补：对端也只切它自己连着的屏。
  */
 function buildSwitchPlan(targetId) {
-  if (!targetId) return { ok: false, total: 0, skipped: 0, localPlan: null, relays: [], label: '' };
-  const localPlan = {};
-  const groups = new Map();
-  // 只有真的在线（有 WS 链路）才能替我们执行 DDC
-  const online = new Set([cfg.peerName, ...peersNow.map((p) => p.name)]);
+  if (!targetId) {
+    return { ok: false, total: 0, skipped: 0, unreachable: 0, plan: null, monitors: [], label: '' };
+  }
+  const map = {};
+  const monitors = [];
+  const missing = [];
   let total = 0;
   let skipped = 0;
-  let involved = 0;
+  let unreachable = 0;
   let label = '';
 
   for (const m of monitorsCache) {
-    if (typeof m.index !== 'number') { skipped += 1; continue; }
-    involved += 1;
-    const value = portFor(m.id, targetId);
-    if (!value) { skipped += 1; continue; }
+    if (m.internal) continue;
+    if (typeof m.index !== 'number') { unreachable += 1; continue; }
     total += 1;
+    const value = portFor(m.id, targetId);
+    if (!value) { skipped += 1; missing.push({ id: m.id, name: m.name }); continue; }
     if (!label) label = labelForInput(value);
-    const owner = ownerOf(m);
-    if (!owner || owner === cfg.peerName || !online.has(owner)) {
-      localPlan[m.index] = value;
-    } else {
-      const g = groups.get(owner) || { plan: {}, monitors: [] };
-      g.plan[m.index] = value;
-      g.monitors.push({ name: m.name, value });
-      groups.set(owner, g);
-    }
+    map[m.index] = value;
+    monitors.push({ name: m.name, index: m.index, value, label: labelForInput(value) });
   }
 
+  const count = Object.keys(map).length;
   return {
-    ok: total > 0,
+    ok: count > 0,
     target: targetId,
     total,
     skipped,
-    // 统一接口 → 传字符串；各屏不同 → 传 { index: value }（对端还会按名字再校验一次）
-    localPlan: Object.keys(localPlan).length ? unifyInput(localPlan, involved) : null,
-    relays: [...groups.entries()].map(([to, g]) => ({
-      to,
-      plan: unifyInput(g.plan, involved),
-      monitors: g.monitors
-    })),
+    unreachable,
+    missing,
+    // 每块屏接口相同时压成一个值：执行端「枚举到几块就切几块」，不依赖 index
+    plan: count ? unifyInput(map, count) : null,
+    monitors,
     label: label || (targetId === cfg.peerName ? cfg.ui.localInputLabel : cfg.ui.remoteInputLabel) || ''
   };
 }
@@ -470,17 +579,15 @@ function buildSwitchPlan(targetId) {
 function monitorSwitchPlan(monitorId, targetId) {
   const m = monitorsCache.find((x) => x.id === monitorId);
   if (!m) return { ok: false, error: '找不到这台显示器' };
+  if (m.internal) return { ok: false, error: '内建屏无法切换输入源' };
   if (typeof m.index !== 'number') return { ok: false, error: '这台显示器不支持 DDC，无法单独切换' };
   const value = portFor(monitorId, targetId);
   if (!value) return { ok: false, error: '这台显示器还没给这台电脑指定接口' };
-  const owner = ownerOf(m);
   return {
     ok: true,
     index: m.index,
     value,
     label: labelForInput(value),
-    owner,
-    ownerOnline: !owner || owner === cfg.peerName || peersNow.some((p) => p.name === owner),
     name: m.name,
     monitorId,
     target: targetId
@@ -535,7 +642,7 @@ function detectWin() {
       'Get-CimInstance -Namespace root\\wmi -ClassName WmiMonitorID | ForEach-Object {',
       "  $n = ($_.UserFriendlyName | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join '';",
       "  $s = ($_.SerialNumberID  | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join '';",
-      "  \"$n|$s\" }"
+      "  \"$n|$s|$($_.InstanceName)\" }"
     ].join('\n');
     execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 12000 }, (err, stdout) => {
       if (err) return resolve([]);
@@ -543,9 +650,11 @@ function detectWin() {
       for (const line of String(stdout).split(/\r?\n/)) {
         const t = line.trim();
         if (!t || !t.includes('|')) continue;
-        const [name, serial] = t.split('|');
+        const [name, serial, inst] = t.split('|');
         if (!name) continue;
-        out.push({ id: serial || name, name, serial: serial || '', size: '' });
+        // DISPLAY\DELA0A4\5&… → DELA0A4：和 dxva2 报的硬件 ID 同一套编号
+        const hwid = (String(inst || '').match(/^[^\\]+\\([^\\]+)/) || [])[1] || '';
+        out.push({ id: serial || name, name, serial: serial || '', size: '', hwid });
       }
       resolve(out);
     });
@@ -564,9 +673,14 @@ async function detectMonitors() {
       // ddcctl 没有可靠的列表输出，探测数量可能多于实际，用系统枚举结果裁剪
       let ddcList = r.displays;
       if (friendly.length && friendly.length < ddcList.length) ddcList = ddcList.slice(0, friendly.length);
+      // 优先按硬件 ID 精确配对（Windows 的 dxva2 枚举顺序和 WMI 顺序不一定一致，
+      // 按顺序对会把两块屏的型号弄反，进而切错屏）；没有硬件 ID 时才退回顺序对齐
+      const byHwid = new Map();
+      for (const f of friendly) if (f.hwid) byHwid.set(f.hwid, f);
       const aligned = friendly.length === ddcList.length;
       list = ddcList.map((d, i) => {
-        const f = aligned ? friendly[i] : null;
+        let f = d.hwid ? (byHwid.get(d.hwid) || null) : null;
+        if (!f && aligned) f = friendly[i];
         return {
           id: `ddc:${d.index}`,
           index: d.index,
@@ -614,6 +728,7 @@ async function detectMonitors() {
     persist();
   }
   ensurePortDefaults();
+  learnPorts();
   ensureMonitorHotkeys();
 
   pushStatus(
@@ -631,12 +746,19 @@ function ensureMonitorHotkeys() {
   if (!cfg.ui.hotkeys.monitor) cfg.ui.hotkeys.monitor = {};
   const map = cfg.ui.hotkeys.monitor;
   let changed = false;
-  monitorsCache.forEach((m, i) => {
+  let slot = 0;
+  for (const m of monitorsCache) {
+    // 内建屏不参与切换，自然也不该占快捷键
+    if (m.internal) {
+      if (map[m.id] === undefined) { map[m.id] = ''; changed = true; }
+      continue;
+    }
     if (map[m.id] === undefined) {
-      map[m.id] = MONITOR_HOTKEY_DEFAULTS[i] || '';
+      map[m.id] = MONITOR_HOTKEY_DEFAULTS[slot] || '';
       changed = true;
     }
-  });
+    slot += 1;
+  }
   if (changed) persist();
 }
 
@@ -746,16 +868,20 @@ function getState() {
   const rows = monitorRows();
   const arrange = arrangeOrder();
 
-  const devices = arrange.map((id) => {
+  const devices = arrange.map((id, di) => {
     const info = deviceInfo(id);
-    const monitors = rows.map((m) => ({
+    const monitors = rows.map((m, mi) => ({
       id: m.id,
       name: m.name,
+      internal: m.internal,
+      pos: m.pos || null,
+      letter: String.fromCharCode(65 + (mi % 26)),
       port: m.ports[id] ? m.ports[id].label : '未设置',
       hasPort: !!(m.ports[id] && m.ports[id].value),
       here: m.ownerId === '' ? null : m.ownerId === id,
       ownerId: m.ownerId
     }));
+    const hereCount = monitors.filter((m) => m.here === true && !m.internal).length;
     return {
       id,
       name: info.name,
@@ -763,6 +889,10 @@ function getState() {
       local: info.local,
       online: info.online,
       active: id === activeTarget,
+      colorIndex: di % 6,
+      // 这台电脑此刻是否在「点亮」某块屏 —— 界面靠它决定要不要着色
+      inUse: hereCount > 0,
+      hereCount,
       note: info.local ? '本机' : (info.online ? '局域网' : '离线'),
       monitors
     };
@@ -772,6 +902,7 @@ function getState() {
     id: m.id,
     index: m.index,
     name: m.name,
+    internal: m.internal,
     hasDdc: m.hasDdc,
     ownerId: m.ownerId,
     ownerLabel: m.ownerLabel,
@@ -891,37 +1022,12 @@ function onFileUpdate(list) {
   }
 }
 
-/** 两块屏同名时按顺序取没被占用过的那个 */
-function nameMatches(a, b) {
-  const x = normName(a);
-  const y = normName(b);
-  if (!x || !y) return false;
-  return x === y || x.includes(y) || y.includes(x);
-}
-
-/** 把对端发来的显示器名字换成本机的 DDC index（两端枚举顺序不一定一致） */
-function resolveByName(list) {
-  const map = {};
-  const used = new Set();
-  for (const it of (Array.isArray(list) ? list : [])) {
-    if (!it || !it.value) continue;
-    const m = monitorsCache.find((x) => typeof x.index === 'number' && !used.has(x.index) && nameMatches(x.name, it.name));
-    if (m) { used.add(m.index); map[m.index] = it.value; }
-  }
-  return map;
-}
-
-/** peer 发起一次显示器输入源切换时调用：真正执行并如实回报结果 */
-async function onSwitchRequest({ input, label, from, index, name: reqName, monitors }) {
-  // 对端指定了显示器名字：优先按名字定位，避免 index 对不上切错屏
-  if (Array.isArray(monitors) && monitors.length) {
-    const byName = resolveByName(monitors);
-    if (Object.keys(byName).length) { input = byName; index = undefined; }
-  } else if (typeof index === 'number' && reqName) {
-    const local = monitorsCache.find((x) => typeof x.index === 'number' && nameMatches(x.name, reqName));
-    if (local) index = local.index;
-  }
-
+/**
+ * 执行一次显示器输入源切换（本机或对端请求都走这里）。
+ * `input` 是「本机自己的」计划：字符串（所有屏同口）或 { index: 值 }。
+ * 不再需要跨机器换 index / 名字 —— 每台机器都只切自己接线能碰到的屏。
+ */
+async function onSwitchRequest({ input, label, from, index }) {
   // 指定了 index = 只切这一台显示器
   if (typeof index === 'number') {
     const name = label || (typeof input === 'string' ? labelForInput(input) : '目标接口');
@@ -949,10 +1055,15 @@ async function onSwitchRequest({ input, label, from, index, name: reqName, monit
   return r;
 }
 
-function onSwitch({ result, target, label, detail }) {
+function onSwitch({ result, target, label, detail, missing }) {
   const name = target ? deviceInfo(target).name : '';
   if (result === 'no-input') {
-    pushStatus('这台电脑在显示器上还没指定接口，点显示器卡片上的齿轮设置', 'warn');
+    const list = (missing || []).map((m) => m.name).filter(Boolean);
+    if (list.length) {
+      pushStatus(`「${list.join('」「')}」还没设 ${name} 的接口 —— 点那块屏上的「设置接口」选一下`, 'warn');
+    } else {
+      pushStatus(`${name} 还没在任何显示器上指定接口，点显示器卡片上的「设置接口」配一下`, 'warn');
+    }
   } else if (result === 'relayed') {
     pushStatus(`已请求当前画面所在设备把显示器切到 ${name}`, 'ok');
   } else if (result === 'peers-gone') {
@@ -1013,6 +1124,8 @@ module.exports = {
   setPort,
   ensurePortDefaults,
   monitorRows,
+  exportPorts,
+  importPorts,
   buildSwitchPlan,
   monitorSwitchPlan,
   monitorCyclePlan,

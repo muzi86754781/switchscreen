@@ -29,10 +29,42 @@ public class SsDdc
         public string szPhysicalMonitorDescription;
     }
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct MONITORINFOEX
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string szDevice;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct DISPLAY_DEVICE
+    {
+        public int cb;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string DeviceName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceString;
+        public uint StateFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceID;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceKey;
+    }
+
     public delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, ref RECT lprcMonitor, IntPtr dwData);
 
     [DllImport("user32.dll")]
     public static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool EnumDisplayDevices(string lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
 
     [DllImport("dxva2.dll", SetLastError = true)]
     public static extern bool GetNumberOfPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, ref uint pdwNumberOfPhysicalMonitors);
@@ -45,6 +77,19 @@ public class SsDdc
 
     [DllImport("dxva2.dll", SetLastError = true)]
     public static extern bool GetVCPFeatureAndVCPFeatureReply(IntPtr hMonitor, byte bVCPCode, IntPtr pvct, ref uint pdwCurrentValue, ref uint pdwMaximumValue);
+
+    // One physical monitor: DDC handle + DXVA2 description + the GDI device
+    // (\\.\DISPLAY1) and its friendly model name (e.g. "DELL U2414H").
+    // The friendly name is what makes index<->model mapping exact: DXVA2 often
+    // reports every monitor as "Generic PnP Monitor", and WMI order is not the
+    // same as the enumeration order used below.
+    public class SsMon
+    {
+        public PHYSICAL_MONITOR pm;
+        public string device;
+        public string hwid;
+        public SsMon(PHYSICAL_MONITOR p, string d, string h) { pm = p; device = d; hwid = h; }
+    }
 
     public class Job
     {
@@ -60,9 +105,33 @@ public class SsDdc
         }
     }
 
-    public static List<PHYSICAL_MONITOR> Enum()
+    // Hardware id of the panel behind a monitor, e.g. "MONITOR\DELA0A4\{...}\0004".
+    // Its middle segment (DELA0A4) is exactly what WmiMonitorID.InstanceName carries,
+    // so JS can join the two and get the real model name per enumeration index.
+    // (DeviceString is useless here: Windows reports "Generic PnP Monitor".)
+    static string HwIdOf(IntPtr hMonitor)
     {
-        List<PHYSICAL_MONITOR> result = new List<PHYSICAL_MONITOR>();
+        MONITORINFOEX mi = new MONITORINFOEX();
+        mi.cbSize = Marshal.SizeOf(typeof(MONITORINFOEX));
+        if (!GetMonitorInfo(hMonitor, ref mi)) return "";
+        if (mi.szDevice == null || mi.szDevice.Length == 0) return "";
+        DISPLAY_DEVICE dd = new DISPLAY_DEVICE();
+        dd.cb = Marshal.SizeOf(typeof(DISPLAY_DEVICE));
+        if (!EnumDisplayDevices(mi.szDevice, 0, ref dd, 0)) return "";
+        return dd.DeviceID == null ? "" : dd.DeviceID.Trim();
+    }
+
+    static string DeviceOf(IntPtr hMonitor)
+    {
+        MONITORINFOEX mi = new MONITORINFOEX();
+        mi.cbSize = Marshal.SizeOf(typeof(MONITORINFOEX));
+        if (!GetMonitorInfo(hMonitor, ref mi)) return "";
+        return mi.szDevice == null ? "" : mi.szDevice;
+    }
+
+    public static List<SsMon> Enum()
+    {
+        List<SsMon> result = new List<SsMon>();
         MonitorEnumProc cb = delegate(IntPtr hMonitor, IntPtr hdc, ref RECT r, IntPtr d)
         {
             uint count = 0;
@@ -71,7 +140,9 @@ public class SsDdc
                 PHYSICAL_MONITOR[] arr = new PHYSICAL_MONITOR[count];
                 if (GetPhysicalMonitorsFromHMONITOR(hMonitor, count, arr))
                 {
-                    foreach (PHYSICAL_MONITOR m in arr) result.Add(m);
+                    string dev = DeviceOf(hMonitor);
+                    string hwid = HwIdOf(hMonitor);
+                    foreach (PHYSICAL_MONITOR m in arr) result.Add(new SsMon(m, dev, hwid));
                 }
             }
             return true;
@@ -95,17 +166,18 @@ public class SsDdc
     }
 
     // Enumerate once and read name + current input for every physical monitor.
+    // Format: MON=index|dxva2 desc|current input|gdi device|hardware id
     public static string ListAll()
     {
-        List<PHYSICAL_MONITOR> l = Enum();
+        List<SsMon> l = Enum();
         StringBuilder sb = new StringBuilder();
         sb.Append("COUNT=" + l.Count + "\n");
         for (int i = 0; i < l.Count; i++)
         {
             uint cur = 0, max = 0;
-            bool ok = GetVCPFeatureAndVCPFeatureReply(l[i].hPhysicalMonitor, 0x60, IntPtr.Zero, ref cur, ref max);
+            bool ok = GetVCPFeatureAndVCPFeatureReply(l[i].pm.hPhysicalMonitor, 0x60, IntPtr.Zero, ref cur, ref max);
             string hex = ok ? ("0x" + cur.ToString("x")) : "";
-            sb.Append("MON=" + i + "|" + Desc(l[i]) + "|" + hex + "\n");
+            sb.Append("MON=" + i + "|" + Desc(l[i].pm) + "|" + hex + "|" + l[i].device + "|" + l[i].hwid + "\n");
         }
         return sb.ToString();
     }
@@ -166,14 +238,14 @@ public class SsDdc
     }
 
     // Pick the slot in 'pool' that belongs to 'desc' and remove it from the pool.
-    static int TakeBest(List<PHYSICAL_MONITOR> pool, string desc)
+    static int TakeBest(List<SsMon> pool, string desc)
     {
         if (pool.Count == 0) return -1;
         if (desc == null || desc.Length == 0) return 0;
         int hit = -1;
         for (int i = 0; i < pool.Count; i++)
         {
-            if (Same(Desc(pool[i]), desc)) { hit = i; break; }
+            if (Same(Desc(pool[i].pm), desc)) { hit = i; break; }
         }
         return hit;
     }
@@ -182,7 +254,7 @@ public class SsDdc
     public static string SetPlan(string plan)
     {
         Dictionary<int, uint> map = ParsePlan(plan);
-        List<PHYSICAL_MONITOR> all = Enum();
+        List<SsMon> all = Enum();
         List<Job> jobs = new List<Job>();
         List<int> missing = new List<int>();
 
@@ -190,7 +262,7 @@ public class SsDdc
         {
             uint v;
             if (!Pick(map, i, out v)) continue;
-            jobs.Add(new Job(i, all[i].hPhysicalMonitor, Desc(all[i]), v));
+            jobs.Add(new Job(i, all[i].pm.hPhysicalMonitor, Desc(all[i].pm), v));
         }
         foreach (int key in map.Keys)
         {
@@ -219,14 +291,14 @@ public class SsDdc
             // the list (its picture no longer comes from this PC). Anything
             // still listed did not switch -> retry on a fresh handle.
             Thread.Sleep(320);
-            List<PHYSICAL_MONITOR> fresh = Enum();
+            List<SsMon> fresh = Enum();
             for (int k = 0; k < pending.Count; k++)
             {
                 Job j = pending[k];
                 if (j.done) continue;
                 int hit = TakeBest(fresh, j.desc);
                 if (hit < 0) { j.done = true; j.code = 0; }
-                else { j.handle = fresh[hit].hPhysicalMonitor; fresh.RemoveAt(hit); }
+                else { j.handle = fresh[hit].pm.hPhysicalMonitor; fresh.RemoveAt(hit); }
             }
         }
 

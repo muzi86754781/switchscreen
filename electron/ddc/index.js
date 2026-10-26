@@ -74,14 +74,19 @@ async function winList() {
 
   const displays = [];
   for (const line of r.out.split(/\r?\n/)) {
-    const m = line.trim().match(/^MON=(\d+)\|([^|]*)\|(.*)$/);
+    const m = line.trim().match(/^MON=(\d+)\|([^|]*)\|([^|]*)\|([^|]*)\|(.*)$/);
     if (!m) continue;
     const index = Number(m[1]);
+    const hex = m[3] || '';
+    // 第五段是面板硬件 ID（METRO\DELA0A4\…），用它和 WMI 的 InstanceName 精确配对
+    const hw = m[5] || '';
+    const hwid = (hw.match(/MONITOR\\([^\\]+)/i) || [])[1] || '';
     displays.push({
       index,
       name: m[2] || `显示器 ${index + 1}`,
-      currentInput: m[3] || '',
-      currentInputLabel: m[3] ? labelOf(m[3]) : ''
+      currentInput: hex,
+      currentInputLabel: hex ? labelOf(hex) : '',
+      hwid
     });
   }
   if (!displays.length) {

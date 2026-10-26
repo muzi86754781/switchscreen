@@ -23,8 +23,8 @@ const { loadConfig } = require('./config');
  * hooks（可选，供 GUI 订阅）：
  *   onPeers(list) / onActive(name) / onSwitch({...}) / onFileUpdate / onAskIncoming
  *   onText({text, from}) / onInputDebug(line) / onEdgeSwitch({...})
- *   getSwitchPlan(target) -> { localPlan, relays, label }  （由 GUI 侧计算每块屏的接口）
- *   onSwitchRequest({target, input, label}) -> Promise<{ok}>
+ *   getSwitchPlan(target) -> { plan, monitors, label }  （本机要写的 VCP 值）
+ *   onSwitchRequest({target, input, label, index}) -> Promise<{ok}>
  */
 function createPeer(userConfig, hooks) {
   const cfg = userConfig || loadConfig();
@@ -39,6 +39,7 @@ function createPeer(userConfig, hooks) {
   let captureError = '';
   let phantom = null;            // 对端指针位置（host 侧跟踪）
   let busy = false;              // 正在执行一次切换，避免边界反复触发
+  let autoLockUntil = 0;         // 手动切换后短暂关闭自动穿越（切换优先）
 
   const injector = createInjector();
 
@@ -85,6 +86,14 @@ function createPeer(userConfig, hooks) {
     const ws = peers.get(name);
     if (ws && ws.readyState === 1) { ws.send(JSON.stringify(msg)); return true; }
     return false;
+  }
+
+  /** 发给所有在线对端：只要有一台收到就算送达 */
+  function sendToAny(msg) {
+    const s = JSON.stringify(msg);
+    let n = 0;
+    for (const ws of peers.values()) if (ws.readyState === 1) { ws.send(s); n += 1; }
+    return n > 0;
   }
 
   /* ---------------- 设备排列（无缝移动的方向依据） ---------------- */
@@ -139,6 +148,11 @@ function createPeer(userConfig, hooks) {
     let label = '';
     let plan = null;
 
+    // 「切换电脑 / 显示器」是主功能，优先级高于无缝键鼠：
+    // 手动切换后先压住自动穿越一小会儿，免得鼠标还停在屏幕边上、一动就又弹回去。
+    // 由鼠标推边缘触发的切换不加锁，否则无缝移动会「走到头就卡住」。
+    if (!o.edge) autoLockUntil = Date.now() + 1500;
+
     if (typeof h.getSwitchPlan === 'function') {
       try { plan = h.getSwitchPlan(target); } catch (e) { console.warn('[peer] 计算切换计划失败:', e.message); }
     }
@@ -147,26 +161,26 @@ function createPeer(userConfig, hooks) {
 
     if (plan) {
       label = plan.label || '';
-      if (plan.localPlan && typeof h.onSwitchRequest === 'function') {
+      const hadPlan = !!plan.plan;
+      // 本机直接切自己接线能碰到的每一块屏（DDC 走视频线，与当前画面在哪台无关）
+      if (hadPlan && typeof h.onSwitchRequest === 'function') {
         try {
           // 等 DDC 真正执行完，把结果回传给界面（否则界面永远停在「切换中」）
-          detail = await h.onSwitchRequest({ target, input: plan.localPlan, label });
+          detail = await h.onSwitchRequest({ target, input: plan.plan, label });
           result = detail && detail.ok === false ? 'failed' : 'sent';
         } catch (e) {
           detail = { ok: false, error: e.message };
           result = 'failed';
         }
       }
-      // 有些屏当前显示的是别的机器 —— DDC 必须由那台机器发，转给它执行
-      // （带上显示器名字，对端按名字换成本机的 index，避免两端枚举顺序不同切错屏）
-      const relays = plan.relays || [];
-      for (const r of relays) {
-        if (sendTo(r.to, { type: 'ddc', input: r.plan, label, monitors: r.monitors })) {
-          if (result === 'skipped') result = 'relayed';
-        }
+      // 有几块屏本机够不着（没接这根线 / 本机 DDC 不可用）时，请对端补一刀：
+      // 对端同样只切它自己连着的屏，用的是它自己的接口配置，不做 index/名字换算
+      const blind = plan.unreachable > 0 && plan.total > 0;
+      if (blind && sendToAny({ type: 'switch-target', target })) {
+        if (result !== 'sent') result = 'relayed';
       }
-      if (result === 'skipped') result = relays.length ? 'relayed' : 'screen-kept';
-      if (!plan.total) result = 'no-input';
+      if (!hadPlan && result === 'skipped') result = 'no-input';
+      else if (hadPlan && result === 'skipped') result = 'screen-kept';
     } else {
       // 兜底：没有注入计划时，用配置里的单一接口值
       const input = target === myName ? cfg.selfInput : cfg.peers[target];
@@ -230,7 +244,9 @@ function createPeer(userConfig, hooks) {
     }
 
     notifyActive();
-    if (typeof h.onSwitch === 'function') h.onSwitch({ target, label, result, detail, edge: o.edge || null });
+    if (typeof h.onSwitch === 'function') {
+      h.onSwitch({ target, label, result, detail, edge: o.edge || null, missing: (plan && plan.missing) || [] });
+    }
     console.log(`[peer] 已切换到: ${target} (${result})`);
     return result;
   }
@@ -269,7 +285,7 @@ function createPeer(userConfig, hooks) {
         selfPlatform: platform,
         peerPlatform: 'unknown',
         modMap: ui('modMap', 'cmd-ctrl'),
-        edgeSwitch: !!ui('edgeSwitch', true) && peers.size > 0,
+        edgeSwitch: !!ui('edgeSwitch', true) && peers.size > 0 && Date.now() >= autoLockUntil,
         screen: localScreenSize()
       };
     }
@@ -298,7 +314,7 @@ function createPeer(userConfig, hooks) {
 
     send({ type: 'input', ev: { kind: 'move', dx: sx, dy: sy } });
 
-    if (!ui('edgeSwitch', true)) return;
+    if (!ui('edgeSwitch', true) || Date.now() < autoLockUntil) return;
     // 幻影指针顶出当前屏幕的左右边缘 → 交给排列里相邻的那台
     let dir = '';
     if (phantom.x < 0) dir = 'left';
@@ -319,7 +335,7 @@ function createPeer(userConfig, hooks) {
 
   /** 指针推到本机边缘：按排列切到相邻设备，并把指针放到对侧 */
   async function edgeTo(info) {
-    if (busy) return;
+    if (busy || Date.now() < autoLockUntil) return;
     const dir = info.side === 'left' ? 'left' : info.side === 'right' ? 'right' : '';
     if (!dir) return;
     const target = neighborOf(myName, dir);
@@ -378,9 +394,26 @@ function createPeer(userConfig, hooks) {
     }
     else if (msg.type === 'input-reset') injector.releaseAll();
     else if (msg.type === 'input-mode') applyRemoteInputMode(msg.mode, name);
+    else if (msg.type === 'ports') {
+      // 对端的接口配置：按显示器名字合并，只补本机还没设的
+      if (typeof h.onPorts === 'function') h.onPorts(msg.list);
+    }
     else if (msg.type === 'cursor-enter') {
       if (msg.edge === 'center') injector.place('center', 0.5, 0.5);
       else injector.place(msg.edge, msg.nx, msg.ny);
+    }
+    else if (msg.type === 'switch-target') {
+      // 对端要切到某台设备，但它够不着某些屏 —— 本机把自己连着的屏也切到这个目标。
+      // 只用自己的接口配置，不做跨机器的 index / 名字换算。
+      const t = msg.target;
+      if (!t) return;
+      autoLockUntil = Date.now() + 1500;
+      let p = null;
+      try { p = typeof h.getSwitchPlan === 'function' ? h.getSwitchPlan(t) : null; } catch { /* ignore */ }
+      if (p && p.plan && typeof h.onSwitchRequest === 'function') {
+        Promise.resolve(h.onSwitchRequest({ target: t, input: p.plan, label: p.label || '' }))
+          .catch(() => {});
+      }
     }
     else if (msg.type === 'ddc') {
       // 对端请求本机执行 DDC 切换（本机才是当前画面输出方）
@@ -423,6 +456,11 @@ function createPeer(userConfig, hooks) {
     try { ws.send(JSON.stringify(metaPayload())); } catch { /* ignore */ }
     // 顺手同步一次键鼠模式，新连上的设备立刻进入正确角色
     try { ws.send(JSON.stringify({ type: 'input-mode', mode: currentMode() })); } catch { /* ignore */ }
+    // 接口配置也同步过去：在任一台配好接口，另一台就能直接切
+    try {
+      const ports = typeof h.getPorts === 'function' ? h.getPorts() : [];
+      ws.send(JSON.stringify({ type: 'ports', list: ports }));
+    } catch { /* ignore */ }
 
     ws.on('message', (data) => {
       let msg = null;
@@ -574,6 +612,13 @@ function createPeer(userConfig, hooks) {
     getCaptureError: () => captureError,
     /** 让指定对端执行一次 DDC（单台显示器切换时用） */
     relayDdc: (target, payload) => sendTo(target, { type: 'ddc', ...payload }),
+    /** 手动切换后暂停自动穿越：避免鼠标一动就把画面又弹回去（切换优先） */
+    pauseAutoSwitch: (ms) => {
+      const v = Number(ms);
+      autoLockUntil = Date.now() + (Number.isFinite(v) ? v : 1500);
+    },
+    /** 把本机的接口配置发给对端（用户改完接口时调用） */
+    sendPorts: (list) => broadcast({ type: 'ports', list: list || [] }),
     /** 改名后重新广播一次身份，其它设备立刻能看到新名字 */
     resendMeta: () => broadcast(metaPayload()),
     getPhantom: () => phantom,

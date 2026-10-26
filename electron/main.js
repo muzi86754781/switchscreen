@@ -207,6 +207,20 @@ function matchAccel(accel, input) {
 /* ---------------- 动作 ---------------- */
 
 /** 切到某台设备（所有在它上面配置了接口的显示器一起切） */
+/**
+ * 切换完成后画面会从这块屏上「消失」，系统会重排桌面、DDC 的当前输入源也变了。
+ * 所以稍等一下轻量重扫一次（只更新顺序与当前输入源，不重建窗口），
+ * 界面上的高亮才会跟着变成新的「谁在显示」。
+ */
+let rescanTimer = null;
+function confirmSwitchHint(delay) {
+  if (rescanTimer) clearTimeout(rescanTimer);
+  rescanTimer = setTimeout(() => {
+    rescanTimer = null;
+    services.detectMonitors().then(() => broadcastState()).catch(() => {});
+  }, typeof delay === 'number' ? delay : 1800);
+}
+
 async function doSwitchAll(explicitTarget) {
   if (!peer) return { ok: false, reason: 'no-peer' };
   if (switching) return { ok: false, reason: 'busy' };
@@ -228,11 +242,12 @@ async function doSwitchAll(explicitTarget) {
   } finally {
     switching = false;
   }
+  if (result === 'sent' || result === 'relayed') confirmSwitchHint();
   broadcastState();
   return { ok: result !== 'failed' && result !== 'no-input', target, result };
 }
 
-/** 只切一块显示器：按这块屏当前显示的是谁来决定由哪台设备下发 DDC */
+/** 只切一块显示器：本机直接写这块屏的输入源（DDC 走视频线，与当前画面所属机器无关） */
 async function doSwitchMonitor(monitorId, explicitTarget) {
   const plan = explicitTarget
     ? services.monitorSwitchPlan(monitorId, explicitTarget)
@@ -242,14 +257,17 @@ async function doSwitchMonitor(monitorId, explicitTarget) {
     broadcastState();
     return { ok: false, error: plan.error };
   }
-  if (plan.owner && plan.owner !== services.cfg.peerName && plan.ownerOnline && peer) {
-    peer.relayDdc(plan.owner, { input: plan.value, label: plan.label, index: plan.index, name: plan.name });
-    services.pushStatus(`已请求 ${services.deviceInfo(plan.owner).name} 把「${plan.name}」切到 ${plan.label}`, 'ok');
-  } else {
-    await services.onSwitchRequest({ input: plan.value, label: plan.label, index: plan.index });
-  }
+  // 只切这一块屏：本机直接写（DDC 走视频线，跟这块屏当前画面在哪台机器上无关）。
+  // 以前用「当前画面在哪台就转给那台」的做法，一旦两端 index / 名字对不上就会切错屏。
+  if (peer && peer.pauseAutoSwitch) peer.pauseAutoSwitch(1500);
+  const r = await services.onSwitchRequest({
+    input: plan.value,
+    label: plan.label,
+    index: plan.index
+  });
+  confirmSwitchHint();
   broadcastState();
-  return { ok: true };
+  return { ok: !!(r && r.ok), error: (r && r.error) || '' };
 }
 
 /* ---------------- IPC ---------------- */
@@ -362,6 +380,8 @@ function registerIpc() {
   ipcMain.handle('monitor:port', (_e, { monitorId, deviceId, value } = {}) => {
     if (!services.setPort(monitorId, deviceId, value)) return services.getState();
     services.pushStatus(`接口已保存 · ${services.labelForInput(value)}`, 'ok');
+    // 接口是这块屏上的物理事实，同步给对端，免得在另一台上点切换时提示「没设接口」
+    if (peer && peer.sendPorts) peer.sendPorts(services.exportPorts());
     return services.getState();
   });
 
@@ -694,6 +714,11 @@ app.whenReady().then(() => {
       onSwitch: (info) => { services.onSwitch(info); broadcastState(); },
       // 每块屏的接口由服务层算，peer 只负责执行与状态同步
       getSwitchPlan: (target) => services.buildSwitchPlan(target),
+      // 接口配置两端共享：在任一台配好，另一台也能直接按这个值切
+      getPorts: () => services.exportPorts(),
+      onPorts: (list) => {
+        if (services.importPorts(list)) broadcastState();
+      },
       onSwitchRequest: (info) => {
         return Promise.resolve(services.onSwitchRequest(info)).then((r) => { broadcastState(); return r; }).catch(() => ({ ok: false }));
       },

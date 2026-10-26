@@ -157,87 +157,147 @@ function monitorLetters(s) {
   return map;
 }
 
+/* 每台设备一个颜色：电脑卡片和它正在点亮的那块屏用同一个颜色 */
+const DEV_COLORS = [
+  { c: '#5b9bff', soft: 'rgba(91,155,255,0.17)', line: 'rgba(122,166,255,0.6)' },
+  { c: '#f2a45c', soft: 'rgba(242,164,92,0.17)', line: 'rgba(242,164,92,0.6)' },
+  { c: '#48c9a1', soft: 'rgba(72,201,161,0.17)', line: 'rgba(72,201,161,0.6)' },
+  { c: '#b58bff', soft: 'rgba(181,139,255,0.17)', line: 'rgba(181,139,255,0.6)' },
+  { c: '#e879a6', soft: 'rgba(232,121,166,0.17)', line: 'rgba(232,121,166,0.6)' },
+  { c: '#8ab4d8', soft: 'rgba(138,180,216,0.17)', line: 'rgba(138,180,216,0.6)' }
+];
+
+function devColor(d, i) {
+  const idx = typeof d.colorIndex === 'number' ? d.colorIndex : i;
+  return DEV_COLORS[idx % DEV_COLORS.length];
+}
+
 /**
- * 右列排列图：显示器 … 电脑 … 显示器
- * 块数 ≥2 时把电脑放在中间（1 块时电脑在左），左侧优先。
+ * 右列排列图：按系统设置里显示器的**真实位置**摆开（左/右/上下、相对大小都照原样），
+ * 电脑图标贴在左边。这样「显示器 A」就是系统里最左边那块，不会和实际接的屏搞混。
  */
-function buildChain(d, letters) {
+function buildChain(d, letters, color) {
   const chain = el('div', 'wb-chain');
-  const list = d.monitors || [];
 
-  const devNode = () => {
-    const n = el('div', 'chain-dev');
-    n.innerHTML = d.kind === 'mac' ? ICON_LAPTOP : ICON_TOWER;
-    n.title = d.name;
-    return n;
-  };
-  const link = () => el('span', 'chain-link');
+  const dev = el('div', 'chain-dev');
+  dev.innerHTML = d.kind === 'mac' ? ICON_LAPTOP : ICON_TOWER;
+  dev.title = d.name;
+  chain.appendChild(dev);
+  chain.appendChild(el('span', 'chain-link'));
 
-  if (!list.length) {
-    chain.appendChild(devNode());
-    chain.appendChild(link());
+  // 内建屏只属于本机，别的电脑那一行不画它
+  const items = (d.monitors || []).filter((m) => d.local || !m.internal);
+  if (!items.length) {
     chain.appendChild(el('span', 'wb-empty', '未检测到显示器'));
     return chain;
   }
 
-  const leftCount = list.length <= 1 ? 0 : Math.ceil(list.length / 2);
-  const left = list.slice(0, leftCount);
-  const right = list.slice(leftCount);
+  const map = el('div', 'chain-map');
+  for (const m of items) map.appendChild(buildTile(m, d, letters, color));
+  chain.appendChild(map);
 
-  const tile = (m) => {
-    const here = m.here === true;
-    const away = m.here === false;
-    const node = el('div',
-      'chain-mon' +
-      (here ? ' is-here' : '') +
-      (away ? '' : (m.here === null ? ' is-unknown' : '')) +
-      (m.hasPort ? '' : ' is-noport'));
-    node.dataset.mon = m.id;
-    node.dataset.device = d.id;
-    node.tabIndex = 0;
-
-    const top = el('div', 'cm-top');
-    top.appendChild(el('span', 'cm-id', `显示器 ${letters[m.id] || '?'}`));
-    top.appendChild(el('span', 'cm-state', here ? '显示中' : (m.hasPort ? '点此切换' : '未设接口')));
-    node.appendChild(top);
-    node.appendChild(el('div', 'cm-name', m.name || '显示器'));
-
-    const port = el('button', 'cm-port' + (m.hasPort ? '' : ' is-unset'), m.hasPort ? m.port : '设置接口');
-    port.type = 'button';
-    port.title = `设置「${m.name}」上 ${d.name} 的接口`;
-    port.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openPortMenu(port, m.id, d.id);
-    });
-    node.appendChild(port);
-
-    node.title = here
-      ? `${d.name} 正在这块屏上显示（${m.port}）`
-      : m.hasPort
-        ? `把「${m.name}」切到 ${d.name}（${m.port}）`
-        : `先给这块屏设置 ${d.name} 的接口`;
-
-    if (!here) {
-      const go = () => {
-        if (!m.hasPort) { openPortMenu(port, m.id, d.id); return; }
-        switchMonitor(m.id, d.id, node);
-      };
-      node.addEventListener('click', go);
-      node.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
-      });
-    }
-    return node;
-  };
-
-  /* 组装：左半显示器 → 电脑 → 右半显示器，中间用细线连接 */
-  const nodes = left.map(tile).concat([devNode()]).concat(right.map(tile));
-  nodes.forEach((n, i) => {
-    if (i) chain.appendChild(link());
-    chain.appendChild(n);
-  });
-
+  const noPos = items.length && items.every((m) => !m.pos);
+  if (noPos) {
+    // 拿不到系统坐标时退化成一行等宽卡片，至少还能点
+    map.classList.add('is-flat');
+  }
   return chain;
+}
+
+function buildTile(m, d, letters, color) {
+  const here = m.here === true;
+  const cls = ['chain-mon'];
+  if (here) cls.push('is-here');
+  if (m.internal) cls.push('is-internal');
+  else if (!m.hasPort) cls.push('is-noport');
+  if (!m.pos) cls.push('is-flat');
+  const node = el('div', cls.join(' '));
+  node.dataset.mon = m.id;
+  node.dataset.device = d.id;
+  if (m.pos) node.dataset.g = `${m.pos.x},${m.pos.y},${m.pos.width},${m.pos.height}`;
+  node.tabIndex = 0;
+  if (here) node.style.setProperty('--dev', color.c);
+
+  node.appendChild(el('span', 'cm-letter', letters[m.id] || '?'));
+  if (m.internal) {
+    node.appendChild(el('span', 'cm-tag', '内建'));
+    node.title = `${m.name}（笔记本自带屏，始终显示本机，不参与切换）`;
+    return node;
+  }
+
+  const port = el('button', 'cm-port' + (m.hasPort ? '' : ' is-unset'), m.hasPort ? m.port : '设置接口');
+  port.type = 'button';
+  port.title = `设置「${m.name}」上 ${d.name} 的接口`;
+  port.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openPortMenu(port, m.id, d.id);
+  });
+  node.appendChild(port);
+
+  node.title = here
+    ? `${d.name} 正在这块屏上显示（${m.port}）`
+    : m.hasPort
+      ? `把「${m.name}」切到 ${d.name}（${m.port}）`
+      : `先给这块屏设置 ${d.name} 的接口`;
+
+  if (!here) {
+    const go = () => {
+      if (!m.hasPort) { openPortMenu(port, m.id, d.id); return; }
+      switchMonitor(m.id, d.id, node);
+    };
+    node.addEventListener('click', go);
+    node.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+    });
+  }
+  return node;
+}
+
+/**
+ * 把每块屏按 system 坐标摆到对应位置。
+ * 面板宽度是自适应的，所以先量容器再算比例（窗口缩放时重算）。
+ */
+function layoutChains() {
+  const maps = document.querySelectorAll('.chain-map');
+  for (const map of maps) {
+    const tiles = map.querySelectorAll('.chain-mon');
+    if (!tiles.length) continue;
+    const W = map.clientWidth - 2;
+    const H = map.clientHeight - 2;
+    if (W < 60 || H < 24) continue;
+
+    const geo = [];
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const t of tiles) {
+      const p = String(t.dataset.g || '').split(',').map(Number);
+      if (p.length !== 4 || p.some((n) => !Number.isFinite(n))) continue;
+      const g = { t, x: p[0], y: p[1], w: p[2], h: p[3] };
+      geo.push(g);
+      minX = Math.min(minX, g.x); minY = Math.min(minY, g.y);
+      maxX = Math.max(maxX, g.x + g.w); maxY = Math.max(maxY, g.y + g.h);
+    }
+    if (!geo.length) continue;
+
+    const tw = Math.max(1, maxX - minX);
+    const th = Math.max(1, maxY - minY);
+    const s = Math.min(W / tw, H / th);
+    const offY = Math.max(0, (H - th * s) / 2);
+    for (const g of geo) {
+      g.t.style.left = `${(g.x - minX) * s}px`;
+      g.t.style.top = `${(g.y - minY) * s + offY}px`;
+      g.t.style.width = `${g.w * s}px`;
+      g.t.style.height = `${g.h * s}px`;
+    }
+  }
+}
+
+let layoutTimer = null;
+function scheduleLayout() {
+  if (layoutTimer) clearTimeout(layoutTimer);
+  layoutTimer = setTimeout(() => { layoutTimer = null; layoutChains(); }, 60);
 }
 
 function buildWorkbench(s) {
@@ -247,15 +307,24 @@ function buildWorkbench(s) {
   const monitors = s.monitors || [];
 
   const sig = devices
-    .map((d) => `${d.id}|${d.name}|${d.online}|${d.active}|` +
-      (d.monitors || []).map((m) => `${m.id}:${m.here}:${m.hasPort}:${m.port}`).join(','))
-    .join(';') + `#${monitors.length}`;
-  if (box.dataset.sig === sig) return;
+    .map((d) => `${d.id}|${d.name}|${d.online}|${d.inUse}|${d.colorIndex}|` +
+      (d.monitors || []).map((m) => `${m.id}:${m.here}:${m.hasPort}:${m.port}:${m.internal}:${m.pos ? m.pos.x + '.' + m.pos.y + '.' + m.pos.width : ''}`).join(','))
+    .join(';') + `#${monitors.map((m) => m.id).join(',')}`;
+  if (box.dataset.sig === sig) { scheduleLayout(); return; }
   box.dataset.sig = sig;
   box.innerHTML = '';
 
-  for (const d of devices) {
-    const row = el('div', `wb-row${d.active ? ' is-active' : ''}${d.online ? '' : ' is-off'}`);
+  devices.forEach((d, i) => {
+    const color = devColor(d, i);
+    const shared = (d.monitors || []).filter((m) => !m.internal);
+    const hereCount = shared.filter((m) => m.here === true).length;
+    const allHere = shared.length > 0 && hereCount === shared.length;
+
+    // 整行不再着色：只有「电脑」和「它点亮的屏」分别用同一个颜色标出来
+    const row = el('div', `wb-row${d.online ? '' : ' is-off'}${d.inUse ? ' is-inuse' : ''}`);
+    row.style.setProperty('--dev', color.c);
+    row.style.setProperty('--dev-soft', color.soft);
+    row.style.setProperty('--dev-line', color.line);
 
     /* ---- 左列：电脑信息 ---- */
     const left = el('div', 'wb-left');
@@ -276,8 +345,7 @@ function buildWorkbench(s) {
     nameLine.appendChild(el('span', `wb-chip${d.online ? '' : ' off'}`, d.note));
     idBox.appendChild(nameLine);
 
-    const hereCount = (d.monitors || []).filter((m) => m.here === true).length;
-    const total = (d.monitors || []).length;
+    const total = shared.length;
     const sub = d.local
       ? `本机${total ? ` · 接 ${total} 块屏${hereCount ? `（正在显示 ${hereCount} 块）` : ''}` : ''}`
       : `${d.online ? '已连接 · 同局域网' : '离线'}${total ? ` · 接 ${total} 块屏${hereCount ? `（正在显示 ${hereCount} 块）` : ''}` : ''}`;
@@ -286,10 +354,10 @@ function buildWorkbench(s) {
     left.appendChild(head);
 
     const actions = el('div', 'wb-actions');
-    if (d.active) actions.appendChild(el('span', 'wb-flag', '使用中'));
-    const go = el('button', 'wb-go', d.active ? '当前' : '全部切到这台');
+    if (d.inUse) actions.appendChild(el('span', 'wb-flag', hereCount === total ? '全部显示中' : '使用中'));
+    const go = el('button', 'wb-go', allHere ? '全部显示中' : '全部切到这台');
     go.type = 'button';
-    go.disabled = d.active || !d.online;
+    go.disabled = allHere || !d.online;
     go.addEventListener('click', (e) => {
       e.stopPropagation();
       switchToDevice(d.id);
@@ -298,17 +366,18 @@ function buildWorkbench(s) {
     left.appendChild(actions);
     row.appendChild(left);
 
-    /* ---- 右列：电脑与显示器的排列 ---- */
-    row.appendChild(buildChain(d, letters));
+    /* ---- 右列：这台电脑与显示器的真实排列 ---- */
+    row.appendChild(buildChain(d, letters, color));
     box.appendChild(row);
-  }
+  });
 
   const n = monitors.length;
   const devs = devices.length;
   const onlineOthers = devices.filter((d) => !d.local && d.online).length;
   $('#wbNote').textContent = n
-    ? `${devs} 台设备 · ${n} 块显示器${onlineOthers ? '' : ' · 没有其它设备在线'}`
+    ? `${devs} 台设备 · ${n} 块屏${onlineOthers ? '' : ' · 没有其它设备在线'}`
     : '未检测到显示器';
+  layoutChains();
 }
 
 /* 本机改名（就地编辑） */
@@ -417,7 +486,8 @@ function chipItems(values) {
 
 function buildHotkeys(s) {
   const hk = s.hotkeys || { enabled: true, global: 'F12', monitor: {}, choices: [] };
-  const monitors = s.monitors || [];
+  // 内建屏不参与切换，也就不给它配快捷键
+  const monitors = (s.monitors || []).filter((m) => !m.internal);
   const letters = monitorLetters(s);
 
   const choices = [{ value: 'NONE', label: '关闭' }]
@@ -784,6 +854,7 @@ function switchTab(name) {
   $$('#tabs .tab').forEach((t) => t.classList.toggle('is-active', t.dataset.tab === name));
   $$('.panel').forEach((p) => p.classList.toggle('is-active', p.dataset.panel === name));
   closePortMenu();
+  if (name === 'switch') scheduleLayout();
 }
 
 function bindTabs() {
@@ -946,4 +1017,5 @@ function bindConnBar() {
   }, 3000);
 
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePortMenu(); }, true);
+  window.addEventListener('resize', scheduleLayout);
 })();
