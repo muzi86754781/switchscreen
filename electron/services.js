@@ -113,6 +113,9 @@ function ensureDefaults() {
   if (!ui.modMap) ui.modMap = 'cmd-ctrl';
   if (typeof ui.keyDebug !== 'boolean') ui.keyDebug = false;
   if (!ui.portMap || typeof ui.portMap !== 'object') ui.portMap = {};
+  // 每条接口的来源：manual=用户手配（永远不被自动清理）/ learn=本机 DDC 实测学的 /
+  // sync=从对端同步来的。清理遗留错值时只动后两种。
+  if (!ui.portSrc || typeof ui.portSrc !== 'object') ui.portSrc = {};
   // 每块屏「上次确认过归谁」——DDC 读不到当前输入源时靠它着色（很多显示器/Mac 读不到）
   if (!ui.ownerMap || typeof ui.ownerMap !== 'object') ui.ownerMap = {};
   // 记下每台设备最近一次上报的显示名，离线时也能显示正确的名字
@@ -347,13 +350,36 @@ function ensurePortDefaults() {
   if (changed) persist();
 }
 
+/** 接口条目的来源标记：manual（手配，永不自动清理）/ learn（本机实测）/ sync（对端同步） */
+function portSrcOf(monitorId, deviceId) {
+  const s = cfg.ui.portSrc && cfg.ui.portSrc[monitorId];
+  return (s && s[deviceId]) || '';
+}
+
+function markPortSrc(monitorId, deviceId, src) {
+  if (!cfg.ui.portSrc) cfg.ui.portSrc = {};
+  const t = cfg.ui.portSrc[monitorId] || {};
+  if (src) t[deviceId] = src;
+  else delete t[deviceId];
+  cfg.ui.portSrc[monitorId] = t;
+}
+
 function setPort(monitorId, deviceId, value) {
   if (!monitorId || !deviceId) return false;
   if (!cfg.ui.portMap) cfg.ui.portMap = {};
   if (!cfg.ui.ownerMap) cfg.ui.ownerMap = {};
   const t = cfg.ui.portMap[monitorId] || {};
   const v = normInput(value);
+  if (!v) {
+    // 清空 = 删掉这条配置（界面上的「清除」）
+    delete t[deviceId];
+    markPortSrc(monitorId, deviceId, '');
+    cfg.ui.portMap[monitorId] = t;
+    persist();
+    return true;
+  }
   t[deviceId] = v;
+  markPortSrc(monitorId, deviceId, 'manual');
   cfg.ui.portMap[monitorId] = t;
   // 手配完顺手校准归属：如果这块屏此刻的输入源正好就是这个口，那现在就是这台在用
   const m = monitorsCache.find((x) => x.id === monitorId);
@@ -392,8 +418,9 @@ function exportPorts() {
 
 /** 合并对端发来的接口配置：按显示器名字配对，只补本机还没设的（本机手改优先） */
 function importPorts(list) {
-  if (!Array.isArray(list) || !list.length) return 0;
+  if (!Array.isArray(list)) return 0;
   let n = 0;
+  const hasAny = list.length > 0;
   for (const it of list) {
     const key = normName(it && it.name);
     if (!key || !it.ports) continue;
@@ -405,7 +432,8 @@ function importPorts(list) {
     const live = normInput(m.currentInput);
     for (const dev of Object.keys(it.ports)) {
       const v = normInput(it.ports[dev]);
-      if (!v || t[dev]) continue;
+      // sync 条目允许被对端的最新值覆盖（对端改了口要能追平）；manual / learn 不动
+      if (!v || (t[dev] && portSrcOf(m.id, dev) !== 'sync')) continue;
       // 本机此刻正用着这个口（DDC 实测）：一块屏的一个口只接一根线，
       // 说明对端这条记错了 —— 本机实测是唯一能自证的方向，拒收。
       if (dev !== cfg.peerName && live && sameInput(v, live)) continue;
@@ -420,9 +448,44 @@ function importPorts(list) {
         guessedPorts.delete(`${m.id}|${clash}`);
       }
       t[dev] = v;
+      markPortSrc(m.id, dev, 'sync');
       n += 1;
     }
     cfg.ui.portMap[m.id] = t;
+  }
+
+  // 对端发来的是它那边的**全量**配置：本机「从对端同步来」的条目若已不在里面，
+  // 说明对端把它删掉了（比如清掉了历史遗留的错值）—— 本机跟着删，两端才能对齐。
+  // 旧版本写入、没有来源标记的**对端**条目也算同步来的（v0.8.8 及之前没有 portSrc）。
+  // 手配（manual）的条目和本机自己的口（由 learnPorts 的实测铁证管理）永远不动。
+  if (hasAny) {
+    const remote = new Map();
+    for (const it of list) {
+      const k = normName(it && it.name);
+      if (!k || !it.ports) continue;
+      remote.set(k, new Set(Object.keys(it.ports)));
+    }
+    for (const m of monitorsCache) {
+      if (m.internal) continue;
+      const key = normName(m.name);
+      if (!key) continue;
+      const devs = new Set();
+      for (const [k, set] of remote) {
+        if (k === key || k.includes(key) || key.includes(k)) for (const d of set) devs.add(d);
+      }
+      const t = cfg.ui.portMap[m.id] || {};
+      let dirty = false;
+      for (const dev of Object.keys(t)) {
+        if (!t[dev] || dev === cfg.peerName || portSrcOf(m.id, dev) === 'manual') continue;
+        if (!devs.has(dev)) {
+          delete t[dev];
+          markPortSrc(m.id, dev, '');
+          dirty = true;
+          n += 1;
+        }
+      }
+      if (dirty) cfg.ui.portMap[m.id] = t;
+    }
   }
   if (n) persist();
   return n;
@@ -469,8 +532,18 @@ function learnPorts() {
     // 所以在 Mac 上「枚举到」不是归属证据，唯一可信的是 DDC 读回的输入源：
     // 它等于某台设备已配的口 → 自证归它；对不上任何已配口 → 这根线可能根本是另一台电脑的，绝不写。
     if (IS_MAC) {
-      if (!cur) continue;
       const t = cfg.ui.portMap[m.id] || {};
+      if (!cur) {
+        // 读不到输入源（VGA 一类不支持 DDC/CI 的口，Mac 上永远拿不到证据）：
+        // 历史遗留的「学来 / 同步来」的本机口清掉，免得切换时往错误的口上写；
+        // 用户手配（manual）的保留 —— 那是他自己确认过的事实。
+        if (t[me] && portSrcOf(m.id, me) !== 'manual') {
+          delete t[me];
+          markPortSrc(m.id, me, '');
+          n += 1;
+        }
+        continue;
+      }
       const claimed = ids.find((id) => t[id] && sameInput(t[id], cur));
       if (claimed && cfg.ui.ownerMap[m.id] !== claimed) {
         cfg.ui.ownerMap[m.id] = claimed;
@@ -492,6 +565,7 @@ function learnPorts() {
     // 铁证：这块屏正在显示本机 → 当前输入源就是本机的口（存错了就纠正）
     if (!sameInput(t[me], cur)) {
       t[me] = cur;
+      markPortSrc(m.id, me, 'learn');
       guessedPorts.delete(`${m.id}|${me}`);
       n += 1;
       changed = true;
@@ -501,6 +575,7 @@ function learnPorts() {
     for (const id of ids) {
       if (id === me || !t[id] || !sameInput(t[id], cur)) continue;
       delete t[id];
+      markPortSrc(m.id, id, '');
       if (cfg.ui.ownerMap[m.id] === id) cfg.ui.ownerMap[m.id] = me;
       guessedPorts.delete(`${m.id}|${id}`);
       n += 1;
@@ -1413,6 +1488,7 @@ async function onSwitchRequest({ input, label, from, index, target }) {
         if (!portFor(m.id, target) && normInput(value)) {
           if (!cfg.ui.portMap) cfg.ui.portMap = {};
           cfg.ui.portMap[m.id] = { ...(cfg.ui.portMap[m.id] || {}), [target]: normInput(value) };
+          markPortSrc(m.id, target, 'learn');
         }
         persist();
       }
@@ -1444,6 +1520,7 @@ async function onSwitchRequest({ input, label, from, index, target }) {
           if (!portFor(m.id, target) && normInput(v)) {
             if (!cfg.ui.portMap) cfg.ui.portMap = {};
             cfg.ui.portMap[m.id] = { ...(cfg.ui.portMap[m.id] || {}), [target]: normInput(v) };
+            markPortSrc(m.id, target, 'learn');
           }
         }
       }
