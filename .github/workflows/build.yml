@@ -12,7 +12,8 @@ on:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    # windows-2022 自带 VS2022(v17)，node-gyp 可识别；windows-latest 已是 VS2025(v18)，老 node-gyp 不认会报“找不到 VS”
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,8 +39,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      # macOS 12+ 的 Python 3.12 移除了 distutils，node-gyp 需要它 -> 用 setuptools 补回
-      - run: python3 -m pip install --upgrade setuptools
+      # macOS 12+ 的 Python 3.12+ 移除了 distutils，node-gyp 需要它 -> 用 setuptools 补回（PEP668 需 --break-system-packages）
+      - run: python3 -m pip install --break-system-packages --upgrade "setuptools<81" wheel
       - run: echo "npm_config_python=$(which python3)" >> "$GITHUB_ENV"
       - run: npm install --ignore-scripts
       - run: node node_modules/electron/install.js
