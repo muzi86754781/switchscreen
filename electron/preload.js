@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('api', {
   // 显示器
   detectMonitor: () => ipcRenderer.invoke('display:detect'),
   setPort: (monitorId, deviceId, value) => ipcRenderer.invoke('monitor:port', { monitorId, deviceId, value }),
+  probePort: (monitorId, deviceId) => ipcRenderer.invoke('monitor:probe', { monitorId, deviceId }),
   switchDevice: (deviceId) => ipcRenderer.invoke('switch:device', deviceId),
   switchMonitor: (monitorId, deviceId) => ipcRenderer.invoke('switch:monitor', { monitorId, deviceId }),
 

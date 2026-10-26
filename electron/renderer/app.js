@@ -465,6 +465,7 @@ function openPortMenu(anchor, monitorId, deviceId) {
 
   const m = ((S && S.monitors) || []).find((x) => x.id === monitorId);
   const cur = m && m.ports && m.ports[deviceId] ? m.ports[deviceId].value : '';
+  const curSrc = m && m.ports && m.ports[deviceId] ? m.ports[deviceId].src : '';
 
   const pop = el('div', 'port-pop');
   pop.dataset.anchor = `${monitorId}@${deviceId}`;
@@ -472,6 +473,33 @@ function openPortMenu(anchor, monitorId, deviceId) {
   const title = el('div', 'pp-title');
   title.innerHTML = `<b>${m ? m.name : '显示器'}</b> <em>·</em> ${deviceName(deviceId)} 接哪个口？`;
   pop.appendChild(title);
+
+  // 记下来的口标一句来源：手配 / 自动识别的都在，不会被自动清掉
+  if (cur) {
+    const note = el('div', 'pp-note', curSrc === 'manual'
+      ? '已保存（手配或自动识别，不会被自动清掉）'
+      : '已保存');
+    pop.appendChild(note);
+  }
+
+  // 没配过就先自动认一次：省得用户去猜自己的线插在 HDMI1 还是 DVI 上
+  if (!cur) {
+    const auto = el('button', 'chip chip-auto', '自动识别');
+    auto.type = 'button';
+    auto.title = '逐个口试一下，认出来就记住（识别时屏幕会闪几下）';
+    auto.addEventListener('click', async () => {
+      closePortMenu();
+      auto.disabled = true;
+      auto.textContent = '识别中…';
+      try {
+        const r = await window.api.probePort(monitorId, deviceId);
+        if (r && r.state) apply(r.state);
+      } catch (e) {
+        console.error('[ui]', e);
+      }
+    });
+    pop.appendChild(auto);
+  }
 
   // 这块屏「此刻正在用」的口直接顶在最上面：多数情况下点一下就对，
   // 不用去猜自己的线插在 HDMI1 还是 DVI 上（有的显示器读回来是 0x03 这类非常见值）

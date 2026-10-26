@@ -930,6 +930,20 @@ body.win .brand { padding-left: 0; }
 .pp-live-t { font-size: 11px; color: #bdd4f5; flex: 1 1 auto; white-space: nowrap; }
 .chip-live { flex: 0 0 auto; border-color: rgba(91, 155, 255, 0.45); }
 
+/* 已保存来源的说明 + 「自动识别」按钮 */
+.pp-note {
+  margin-bottom: 9px;
+  font-size: 10.5px;
+  color: #7f93b5;
+  line-height: 1.5;
+}
+.chip-auto {
+  margin-bottom: 9px;
+  flex: 0 0 auto;
+  border-color: rgba(72, 201, 161, 0.5);
+  color: #8fe8c8;
+}
+
 .wb-tip {
   margin-top: 11px;
   padding-top: 10px;

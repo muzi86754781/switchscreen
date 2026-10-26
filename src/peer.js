@@ -385,6 +385,26 @@ function createPeer(userConfig, hooks) {
     return wiggleCursor();
   }
 
+  /** 「这块屏现在显示的是你吗」的等待队列：自动识别接口时用它确认候选口 */
+  const probeWaiters = new Map();
+
+  function askProbe(target, key, timeout) {
+    const k = `${target}|${key}`;
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        probeWaiters.delete(k);
+        resolve(v || 'unknown');
+      };
+      const timer = setTimeout(() => finish('unknown'), Number(timeout) > 0 ? Number(timeout) : 1800);
+      probeWaiters.set(k, finish);
+      if (!sendTo(target, { type: 'probe-ask', key })) finish('unknown');
+    });
+  }
+
   function triggerSwitch() {
     const list = arrangeOrder().filter(isOnline);
     const idx = list.indexOf(activePeer);
@@ -527,8 +547,9 @@ function createPeer(userConfig, hooks) {
     else if (msg.type === 'authority') {
       // 对端发来的「每块屏现在归谁」：新开的软件靠它对齐到局域网里已有的状态，
       // 任意一台切换之后也靠它让所有界面保持一致 —— 旧的直接丢，否则两端会来回覆盖
-      if (!msg.rev || msg.rev <= authorityRev) return;
-      authorityRev = msg.rev;
+      // （版本号是逻辑计数，不比时钟；平局交给服务层判断）
+      if (!msg.rev || msg.rev < authorityRev) return;
+      authorityRev = Math.max(authorityRev, Number(msg.rev) || 0);
       if (typeof h.onAuthority === 'function') h.onAuthority(msg);
     }
     else if (msg.type === 'cursor-enter') {
@@ -581,6 +602,15 @@ function createPeer(userConfig, hooks) {
       if (!list.length || ui('arrangeTouched', false)) return;
       cfg.ui.arrange = list;
       if (typeof h.onArrange === 'function') h.onArrange(arrangeOrder());
+    }
+    else if (msg.type === 'probe-ask') {
+      // 对端在自动识别接口：问「这块屏现在显示的是我吗」，按本机证据回答
+      const ans = typeof h.onProbe === 'function' ? h.onProbe(msg.key) : 'unknown';
+      sendTo(name, { type: 'probe-answer', key: msg.key, ans });
+    }
+    else if (msg.type === 'probe-answer') {
+      const w = probeWaiters.get(`${name}|${msg.key}`);
+      if (w) w(msg.ans || 'unknown');
     }
     else if (msg.type === 'locate') {
       // 对端喊「把鼠标亮出来」：本机把指针抖一下，帮用户在对端屏幕上找到它
@@ -790,6 +820,11 @@ function createPeer(userConfig, hooks) {
     },
     /** 改名后重新广播一次身份，其它设备立刻能看到新名字 */
     resendMeta: () => broadcast(metaPayload()),
+    /**
+     * 问某台设备「这块屏现在显示的是你吗」（自动识别接口时用）。
+     * 对端答不上来（读不到输入源）就当 unknown，等超时。
+     */
+    askProbe: (target, key, timeout) => askProbe(target, key, timeout),
     getPhantom: () => phantom,
     stop: () => {
       if (capture) { try { capture.stop(); } catch { /* ignore */ } capture = null; }

@@ -244,6 +244,7 @@ async function doSwitchAll(explicitTarget) {
   }
   const target = explicitTarget || services.nextDevice();
   const name = services.deviceInfo(target).name;
+  const missing = (services.buildSwitchPlan(target).missing || []).slice();
   switching = true;
   services.pushStatus(`正在切换到 ${name}…`, 'info');
   broadcastState();
@@ -257,7 +258,28 @@ async function doSwitchAll(explicitTarget) {
   }
   if (result === 'sent' || result === 'relayed') { onSwitchDone(); confirmSwitchHint(); }
   broadcastState();
+  // 有屏还没配目标电脑的接口：切完顺手认一次口（会闪几下屏，认到就永久记住，
+  // 以后再切就是一次到位；认不出来也不影响，手动点接口配一次即可）
+  if ((result === 'sent' || result === 'relayed') && missing.length) autoProbePorts(target, missing);
   return { ok: result !== 'failed' && result !== 'no-input', target, result };
+}
+
+/** 切完之后自动认口：一台一台来，认到就停 */
+async function autoProbePorts(target, missing) {
+  for (const s of missing) {
+    if (!services.portFor(s.id, target)) {
+      services.pushStatus(`正在识别「${s.name}」上 ${services.deviceInfo(target).name} 接的是哪个口…`, 'info');
+      broadcastState();
+      const r = await services.probePort(s.id, target);
+      if (r.ok) {
+        services.pushStatus(`已识别：「${s.name}」上 ${services.deviceInfo(target).name} 接的是 ${r.label}`, 'ok');
+        if (peer && peer.sendPorts) peer.sendPorts(services.exportPorts());
+      } else {
+        services.pushStatus(`「${s.name}」没认出来：${r.error}`, 'warn');
+      }
+      broadcastState();
+    }
+  }
 }
 
 /** 只切一块显示器：本机直接写这块屏的输入源（DDC 走视频线，与当前画面所属机器无关） */
@@ -391,6 +413,18 @@ function registerIpc() {
     // 接口是这块屏上的物理事实，同步给对端，免得在另一台上点切换时提示「没设接口」
     if (peer && peer.sendPorts) peer.sendPorts(services.exportPorts());
     return services.getState();
+  });
+
+  ipcMain.handle('monitor:probe', async (_e, { monitorId, deviceId } = {}) => {
+    const r = await services.probePort(monitorId, deviceId);
+    if (r.ok) {
+      services.pushStatus(`已识别：${services.labelForInput(r.value)} —— 这个口记住了`, 'ok');
+      if (peer && peer.sendPorts) peer.sendPorts(services.exportPorts());
+    } else if (r.error) {
+      services.pushStatus(`自动识别没成功：${r.error}`, 'warn');
+    }
+    broadcastState();
+    return { result: r, state: services.getState() };
   });
 
   ipcMain.handle('switch:device', async (_e, deviceId) => {
@@ -767,10 +801,17 @@ app.whenReady().then(() => {
       onPorts: (list) => {
         if (services.importPorts(list)) broadcastState();
       },
+      // 对端自动识别接口时问「这块屏显示的是我吗」——按本机证据回答
+      onProbe: (key) => services.probeAnswer(key),
       // 「每块屏现在归谁」：新开的机器对齐到局域网已有状态，切换后全局界面一致
       getAuthority: () => services.publishAuthority(),
       onAuthority: (msg) => {
-        if (services.applyAuthority(msg)) broadcastState();
+        const r = services.applyAuthority(msg);
+        if (!r) return;
+        broadcastState();
+        // 快照变了：本机这份读数可能刚被判为过期，重扫一次以 DDC 实测为准 ——
+        // 不然界面会一直停在「切换前谁在显示」，看着就像对端没同步
+        confirmSwitchHint(r.stale ? 400 : 1200);
       },
       onSwitchRequest: (info) => {
         return Promise.resolve(services.onSwitchRequest(info)).then((r) => {
