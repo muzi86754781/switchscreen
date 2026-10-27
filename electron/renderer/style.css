@@ -884,17 +884,19 @@ textarea.input {
   box-shadow: 0 0 12px -5px var(--dev-line);
 }
 .chain-mon.is-internal .cm-head {
-  align-items: flex-start;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  flex: none;
 }
 .chain-mon.is-internal .cm-name {
-  white-space: normal;
-  word-break: break-all;
-  overflow-wrap: anywhere;
-  line-height: 1.25;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 8.5px;
+  line-height: 1.5;
+  max-width: 100%;
 }
 .chain-mon .cm-tag.is-internal-bottom {
   margin-top: auto;
@@ -907,6 +909,7 @@ textarea.input {
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: rgba(0, 0, 0, 0.25);
   white-space: nowrap;
+  flex: none;
 }
 .chain-mon.is-here .cm-tag.is-internal-bottom {
   color: #eef4ff;
