@@ -456,6 +456,14 @@ async function setInputAll(target, opts) {
     if (IS_MAC && /built-?in|内建|color lcd/i.test(d.name || '')) continue;
     let v = isMap ? (target[d.index] || target[`ddc:${d.index}`]) : target;
     if (!v) continue;
+    // 显示器当前输入源若已是目标端口（例如已被对端协同提前切好），直接跳过不重复写，彻底消除二次黑屏
+    if (d.currentInput) {
+      const curNorm = parseInt(d.currentInput, 16);
+      const tarNorm = parseInt(v, 16);
+      if (Number.isFinite(curNorm) && Number.isFinite(tarNorm) && curNorm === tarNorm) {
+        continue;
+      }
+    }
     // 硬件防重复过滤：同一块显示器 4.5 秒内写入过相同目标输入源，绝不再次写入（杜绝黑屏两次）
     const key = `${d.index}|${d.name || ''}`;
     const last = hardwareDdcCache.get(key);

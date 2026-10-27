@@ -226,6 +226,16 @@ public class SsDdc
             ts[kk] = new Thread(delegate()
             {
                 go.WaitOne();
+                uint cur = 0, max = 0;
+                if (GetVCPFeatureAndVCPFeatureReply(h, 0x60, IntPtr.Zero, ref cur, ref max))
+                {
+                    if (cur == v)
+                    {
+                        okRes[kk] = true;
+                        codes[kk] = 0;
+                        return;
+                    }
+                }
                 bool r = SetVCPFeature(h, 0x60, v);
                 okRes[kk] = r;
                 if (!r) codes[kk] = Marshal.GetLastWin32Error();
@@ -262,6 +272,17 @@ public class SsDdc
         {
             uint v;
             if (!Pick(map, i, out v)) continue;
+            uint cur = 0, max = 0;
+            if (GetVCPFeatureAndVCPFeatureReply(all[i].pm.hPhysicalMonitor, 0x60, IntPtr.Zero, ref cur, ref max))
+            {
+                if (cur == v)
+                {
+                    Job j = new Job(i, all[i].pm.hPhysicalMonitor, Desc(all[i].pm), v);
+                    j.done = true;
+                    jobs.Add(j);
+                    continue;
+                }
+            }
             jobs.Add(new Job(i, all[i].pm.hPhysicalMonitor, Desc(all[i].pm), v));
         }
         foreach (int key in map.Keys)

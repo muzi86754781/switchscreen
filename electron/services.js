@@ -1860,7 +1860,20 @@ function detectWin() {
   });
 }
 
-async function detectMonitors() {
+let detectMonitorsInFlight = null;
+function detectMonitors() {
+  if (detectMonitorsInFlight) return detectMonitorsInFlight;
+  detectMonitorsInFlight = (async () => {
+    try {
+      return await doDetectMonitors();
+    } finally {
+      detectMonitorsInFlight = null;
+    }
+  })();
+  return detectMonitorsInFlight;
+}
+
+async function doDetectMonitors() {
   let list = [];
   let via = 'sys';
   try {
@@ -2403,7 +2416,6 @@ async function onSwitchRequest({ input, label, from, index, target }) {
     logger.info('SWITCH', `switchMonitorInput successful: ${scope} switched to ${name}`);
     pushStatus(from ? `已由 ${from} 把${scope}切换到 ${name}` : `已将${scope}切换到 ${name}`, 'ok');
     if (r.partial) pushStatus(`有显示器未响应：${r.error}（VGA 线和一些转接头不走 DDC，屏幕收不到切换指令，属于正常现象，这根线连的口请在接了 DDC 可用线的那台电脑上切）`, 'warn');
-    setTimeout(() => { detectMonitors().catch(() => {}); }, 1500);
   } else {
     logger.warn('SWITCH', `switchMonitorInput failed: ${r.error || '未知原因'}`);
     pushStatus(`切换到 ${name} 失败`, 'warn');
