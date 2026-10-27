@@ -65,6 +65,11 @@ function createWindow() {
       doSwitchAll();
       return;
     }
+    if (hk.inputCycle && matchAccel(hk.inputCycle, input)) {
+      e.preventDefault();
+      doCycleInput();
+      return;
+    }
     const monitors = services.monitorRows();
     for (const m of monitors) {
       const key = (hk.monitor || {})[m.id];
@@ -148,6 +153,153 @@ function refreshTray() {
   if (tray) tray.setContextMenu(trayMenu());
 }
 
+/* ---------------- 悬浮提示窗（OSD HUD） ---------------- */
+
+let osdWin = null;
+let osdTimer = null;
+
+function createOsdWindow() {
+  if (osdWin && !osdWin.isDestroyed()) return osdWin;
+  let scrW = 1920;
+  let scrH = 1080;
+  let bx = 0;
+  let by = 0;
+  try {
+    const primary = screen.getPrimaryDisplay();
+    scrW = primary.workAreaSize.width;
+    scrH = primary.workAreaSize.height;
+    bx = primary.bounds.x;
+    by = primary.bounds.y;
+  } catch { /* ignore */ }
+
+  const osdW = 360;
+  const osdH = 68;
+  const x = Math.round(bx + (scrW - osdW) / 2);
+  const y = Math.round(by + 70);
+
+  osdWin = new BrowserWindow({
+    width: osdW,
+    height: osdH,
+    x,
+    y,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false,
+    hasShadow: false,
+    show: false,
+    webPreferences: {
+      contextIsolation: false,
+      nodeIntegration: true
+    }
+  });
+
+  try {
+    osdWin.setIgnoreMouseEvents(true, { forward: true });
+    osdWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    if (osdWin.setAlwaysOnTop) osdWin.setAlwaysOnTop(true, 'screen-saver');
+  } catch { /* ignore */ }
+
+  const html = `<!doctype html>
+  <html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      * { margin:0; padding:0; box-sizing:border-box; user-select:none; }
+      body {
+        width: 100vw; height: 100vh;
+        display: flex; align-items: center; justify-content: center;
+        background: transparent; overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      .osd-pill {
+        display: inline-flex; align-items: center; gap: 12px;
+        padding: 10px 24px;
+        background: rgba(18, 24, 38, 0.92);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
+        border: 1px solid rgba(110, 160, 255, 0.45);
+        border-radius: 999px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 18px rgba(80, 140, 255, 0.3);
+        color: #fff;
+        animation: popIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      }
+      @keyframes popIn {
+        from { opacity: 0; transform: scale(0.92) translateY(-6px); }
+        to { opacity: 1; transform: scale(1) translateY(0); }
+      }
+      .icon {
+        font-size: 18px;
+        display: flex; align-items: center; justify-content: center;
+        color: #5ef0b0;
+      }
+      .text {
+        font-size: 14.5px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: #f2f6ff;
+        white-space: nowrap;
+      }
+      .name {
+        color: #6ea6ff;
+        font-weight: 700;
+      }
+      .tag {
+        font-size: 11px;
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: rgba(94, 240, 176, 0.2);
+        color: #5ef0b0;
+        border: 1px solid rgba(94, 240, 176, 0.4);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="osd-pill">
+      <span class="icon">🖱️</span>
+      <span class="text">键鼠已切至：<span class="name" id="name">--</span></span>
+      <span class="tag" id="tag" style="display:none;">本机</span>
+    </div>
+    <script>
+      const { ipcRenderer } = require('electron');
+      ipcRenderer.on('show-osd', (_e, { name, local }) => {
+        document.getElementById('name').textContent = name || '电脑';
+        const tag = document.getElementById('tag');
+        if (local) tag.style.display = 'inline-block';
+        else tag.style.display = 'none';
+      });
+    </script>
+  </body>
+  </html>`;
+
+  osdWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+  return osdWin;
+}
+
+function showOsdNotice(name, local) {
+  try {
+    const ow = createOsdWindow();
+    ow.webContents.send('show-osd', { name, local });
+    ow.showInactive();
+    if (osdTimer) clearTimeout(osdTimer);
+    osdTimer = setTimeout(() => {
+      if (ow && !ow.isDestroyed()) ow.hide();
+      osdTimer = null;
+    }, 1600);
+  } catch (e) {
+    console.warn('[osd]', e.message);
+  }
+}
+
+async function doCycleInput() {
+  const result = await services.cycleInputDevice();
+  if (result) {
+    broadcastState();
+    showOsdNotice(result.name, result.local);
+  }
+}
+
 /* ---------------- 全局快捷键 ---------------- */
 
 // 单按功能键（F1~F12）在不少系统上会被占用，注册失败时按这个顺序回退
@@ -164,7 +316,7 @@ function tryRegister(key, fn) {
 }
 
 /**
- * 注册全部快捷键：全局切换 + 每块显示器各自一个。
+ * 注册全部快捷键：全局切换 + 键鼠切换 + 每块显示器各自一个。
  * 注册失败不会静默：要么回退到可用的键并写回配置，要么在状态栏说明。
  */
 function registerHotkeys() {
@@ -172,7 +324,7 @@ function registerHotkeys() {
   registeredHotkey = '';
   const cfg = services.cfg;
   if (cfg.ui.hotkeyEnabled === false) return;
-  if (!cfg.ui.hotkeys) cfg.ui.hotkeys = { global: 'F12', monitor: {} };
+  if (!cfg.ui.hotkeys) cfg.ui.hotkeys = { global: 'F12', inputCycle: 'Alt+Q', monitor: {} };
 
   const want = (cfg.ui.hotkeys.global || '').trim();
   if (!want) {
@@ -199,6 +351,14 @@ function registerHotkeys() {
       }
     } else {
       services.pushStatus(`快捷键 ${want} 注册失败（可能已被系统或其它程序占用）`, 'warn');
+    }
+  }
+
+  // 键鼠切换快捷键（在多台电脑间移交键鼠控制权，不动显示器）
+  const inputCycleKey = ((cfg.ui.hotkeys && cfg.ui.hotkeys.inputCycle) || '').trim();
+  if (inputCycleKey) {
+    if (!tryRegister(inputCycleKey, () => doCycleInput())) {
+      services.pushStatus(`键鼠切换快捷键 ${inputCycleKey} 注册失败（可能被占用）`, 'warn');
     }
   }
 
@@ -513,6 +673,11 @@ function registerIpc() {
         : `快捷键已更新 · 关闭窗口后仍有效`,
       'ok'
     );
+    return services.getState();
+  });
+
+  ipcMain.handle('hotkey:cycle-input', async () => {
+    await doCycleInput();
     return services.getState();
   });
 

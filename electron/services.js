@@ -124,18 +124,19 @@ function ensureDefaults() {
   ui.inputMode = ui.inputMaster ? (ui.inputMaster === cfg.peerName ? 'local' : 'remote') : 'separate';
   if (!ui.displayName) ui.displayName = cfg.peerName;
 
-  // 快捷键：global + 每块显示器一个
+  // 快捷键：global + inputCycle + 每块显示器一个
   if (!ui.hotkeys || typeof ui.hotkeys !== 'object') {
-    ui.hotkeys = { global: ui.hotkeyKey || 'F12', monitor: {} };
+    ui.hotkeys = { global: ui.hotkeyKey || 'F12', inputCycle: 'Alt+Q', monitor: {} };
   }
   if (!ui.hotkeys.global) ui.hotkeys.global = ui.hotkeyKey || 'F12';
+  if (!ui.hotkeys.inputCycle && ui.hotkeys.inputCycle !== '') ui.hotkeys.inputCycle = 'Alt+Q';
   if (!ui.hotkeys.monitor || typeof ui.hotkeys.monitor !== 'object') ui.hotkeys.monitor = {};
   ui.hotkeyKey = ui.hotkeys.global;
 
   if (!Array.isArray(ui.arrange)) ui.arrange = [];
   if (!Array.isArray(ui.targetPeers)) ui.targetPeers = ui.targetPeer ? [ui.targetPeer] : [];
   if (typeof ui.autoAccept !== 'boolean') ui.autoAccept = false;
-  if (typeof ui.edgeSwitch !== 'boolean') ui.edgeSwitch = true;
+  if (typeof ui.edgeSwitch !== 'boolean') ui.edgeSwitch = false;
   if (!ui.modMap) ui.modMap = 'cmd-ctrl';
   if (typeof ui.keyDebug !== 'boolean') ui.keyDebug = false;
   if (!ui.portMap || typeof ui.portMap !== 'object') ui.portMap = {};
@@ -2140,6 +2141,7 @@ function getState() {
     hotkeys: {
       enabled: cfg.ui.hotkeyEnabled !== false,
       global: (cfg.ui.hotkeys && cfg.ui.hotkeys.global) || 'F12',
+      inputCycle: (cfg.ui.hotkeys && cfg.ui.hotkeys.inputCycle) || 'Alt+Q',
       monitor: monitorKeys,
       choices: HOTKEY_CHOICES
     },
@@ -2158,7 +2160,7 @@ function getState() {
       isHost: !!(cfg.ui && cfg.ui.inputMaster && cfg.ui.inputMaster === cfg.peerName),
       isGuest: !!(cfg.ui && cfg.ui.inputMaster && cfg.ui.inputMaster !== cfg.peerName),
       sharing: !!(cfg.ui && cfg.ui.inputMaster),
-      edgeSwitch: cfg.ui.edgeSwitch !== false,
+      edgeSwitch: !!(cfg.ui && cfg.ui.edgeSwitch),
       mouseSpeed: Number(cfg.ui.mouseSpeed) || 1,
       capturing: !!(peer && peer.isCapturing && peer.isCapturing()),
       error: (peer && peer.getCaptureError && peer.getCaptureError()) || ''
@@ -2364,12 +2366,14 @@ function rename(text) {
 }
 
 function setHotkey(kind, id, key) {
-  if (!cfg.ui.hotkeys) cfg.ui.hotkeys = { global: 'F12', monitor: {} };
+  if (!cfg.ui.hotkeys) cfg.ui.hotkeys = { global: 'F12', inputCycle: 'Alt+Q', monitor: {} };
   if (!cfg.ui.hotkeys.monitor) cfg.ui.hotkeys.monitor = {};
   const cleanKey = typeof key === 'string' ? key.trim() : '';
   if (kind === 'global') {
     cfg.ui.hotkeys.global = cleanKey;
     cfg.ui.hotkeyKey = cfg.ui.hotkeys.global;
+  } else if (kind === 'inputCycle') {
+    cfg.ui.hotkeys.inputCycle = cleanKey;
   } else if (kind === 'monitor' && id) {
     if (cleanKey) {
       cfg.ui.hotkeys.monitor[id] = cleanKey;
@@ -2378,6 +2382,31 @@ function setHotkey(kind, id, key) {
     }
   }
   persist();
+}
+
+/** 快捷键循环切换键鼠焦点到下一台在线设备（只交接控制权，不动显示器） */
+async function cycleInputDevice() {
+  if (!peer) return null;
+  const list = arrangeOrder().filter((id) => id === cfg.peerName || peersNow.some((p) => p.name === id));
+  if (list.length <= 1) {
+    pushStatus('局域网未发现其他在线设备，无法切换键鼠', 'warn');
+    return { name: localLabel(), alone: true };
+  }
+
+  // 若尚未开启共用键鼠，自动将当前物理电脑设为主控
+  if (!cfg.ui.inputMaster) {
+    setInputMaster(cfg.peerName, cfg.ui.edgeSwitch, cfg.ui.mouseSpeed);
+  }
+
+  const cur = activeTarget || cfg.peerName;
+  const idx = list.indexOf(cur);
+  const next = list[(idx + 1) % list.length] || cfg.peerName;
+  const info = deviceInfo(next);
+
+  await peer.switchInputTo(next);
+  activeTarget = next;
+  pushStatus(`键鼠已切至「${info.name}」`, 'ok');
+  return { id: next, name: info.name, local: info.local };
 }
 
 /** 切换共用键鼠的主控端：'' 表示各用各的，masterId 表示由该设备作为主控 */
@@ -2422,6 +2451,7 @@ module.exports = {
   setPeer,
   setInputMaster,
   applyInputMode,
+  cycleInputDevice,
   arrangeOrder,
   setArrange,
   deviceIds,

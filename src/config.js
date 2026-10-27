@@ -34,10 +34,10 @@ const DEFAULTS = {
     // 本机显示名：可以随便改，会同步给其它设备显示（网络标识仍用 peerName）
     displayName: '',
     hotkeyEnabled: true,
-    // 快捷键：global = 全局切换（切到下一台）；monitor = 每块显示器各自一个
-    // { global: 'F12', monitor: { 'ddc:0': 'CommandOrControl+Alt+1' } }
+    // 快捷键：global = 全局显示器切换（切到下一台）；inputCycle = 键鼠切换；monitor = 每块显示器各自一个
+    // { global: 'F12', inputCycle: 'Alt+Q', monitor: { 'ddc:0': 'CommandOrControl+Alt+1' } }
     hotkeyKey: 'F12',         // 兼容旧字段，等同于 hotkeys.global
-    hotkeys: { global: 'F12', monitor: {} },
+    hotkeys: { global: 'F12', inputCycle: 'Alt+Q', monitor: {} },
     launchAtLogin: false,
     inputMode: 'separate',    // 兼容旧字段
     inputMaster: '',          // '' = 各用各的键鼠；某个 deviceId = 该设备为主控，共用其键鼠
@@ -57,7 +57,7 @@ const DEFAULTS = {
     targetPeer: '',           // 上次选中的接收对象（兼容旧字段）
     targetPeers: [],          // 传输对象（可多选）
     // ---- 共用键鼠 / 无缝移动 ----
-    edgeSwitch: true,         // 鼠标推到屏幕边缘就换电脑
+    edgeSwitch: false,        // 鼠标推到屏幕边缘就换电脑（默认关闭，推荐使用快捷键精准切换）
     arrange: [],              // 设备排列顺序（deviceId 数组，含本机）；数组下标 = 从左到右的位置
     edgeSide: 'right',        // 旧字段，保留兼容（排列模型已取代它）
     modMap: 'cmd-ctrl',       // 修饰键映射：cmd-ctrl（推荐）| swap | off

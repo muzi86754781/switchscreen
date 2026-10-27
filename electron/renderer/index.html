@@ -191,6 +191,25 @@
             </div>
           </div>
 
+          <!-- 快捷键切换键鼠（极度实用、零误触） -->
+          <div class="card">
+            <div class="card-label">
+              <span>快捷键切换键鼠控制权</span>
+              <span class="card-note">推荐使用 · 纯按键移交 · 屏幕居中 OSD 悬浮提示</span>
+            </div>
+            <div class="hk-row" style="margin-top: 6px;">
+              <span class="hk-name" style="font-weight: 600;">切换到下一台设备</span>
+              <div class="hk-recorder-group">
+                <button type="button" class="hk-record-btn" id="hotkeyInputCycleBtn" title="点击后直接按下键盘快捷键进行自定义">
+                  <span class="hk-key-text">Alt + Q</span>
+                </button>
+                <button type="button" class="hk-clear-btn" id="hotkeyInputCycleClear" title="清除快捷键">✕</button>
+              </div>
+              <button type="button" class="btn btn-ghost" id="testCycleInputBtn" style="margin-left: 8px;">立即测试切换</button>
+            </div>
+            <div class="hk-tip">点击按键框即可直接按下键盘自定义（例如 Alt+Q、Ctrl+~、F10 等，按 Esc 取消，点 ✕ 清除）。按下时屏幕正上方将弹出发光悬浮窗提示当前控制权！</div>
+          </div>
+
           <!-- 模式选择卡片组 -->
           <div class="card">
             <div class="card-label">
@@ -202,18 +221,18 @@
             </div>
           </div>
 
-          <!-- 无缝穿梭与辅助选项 -->
+          <!-- 边缘穿梭与辅助选项 -->
           <div class="card">
             <div class="card-label">
-              <span>无缝穿梭与参数调节</span>
+              <span>鼠标移动穿梭设置（可选）</span>
             </div>
             <div class="input-settings-grid">
               <label class="check-row">
-                <input type="checkbox" id="edgeSwitchToggle" checked />
+                <input type="checkbox" id="edgeSwitchToggle" />
                 <span class="box"></span>
                 <span class="check-text">
-                  <b>边缘滑动无缝穿梭</b>
-                  <span class="sub-note">当鼠标推到当前屏幕边缘时，自动滑入相邻电脑屏幕并移交控制权</span>
+                  <b>开启鼠标推至屏幕边缘时滑动切换</b>
+                  <span class="sub-note">默认关闭；若不习惯鼠标滑动切电脑，请保持关闭并使用上方快捷键精准切换</span>
                 </span>
               </label>
 
@@ -227,11 +246,11 @@
             </div>
 
             <div class="input-tips-box">
-              <div class="itb-title">💡 使用提示</div>
+              <div class="itb-title">💡 为什么快捷键切换更实用？</div>
               <ul class="itb-list">
-                <li><b>一处设置，全网同步</b>：在任一台电脑选择模式后，局域网所有在线电脑立即自动同步该设置，无需逐台手动选择。</li>
-                <li><b>无缝边缘穿梭</b>：在主控电脑上将鼠标推向屏幕最左侧或最右侧边缘，光标将无缝穿越到相邻电脑屏幕中。</li>
-                <li><b>安全防卡死保障</b>：当主控电脑断网或退出软件时，所有电脑将自动安全回退为“各用各的键鼠”，确保不卡键、不悬挂。</li>
+                <li><b>零误触</b>：多显示器各自分辨率和摆放不同，鼠标移到边缘容易误判或顶死。快捷键切换 100% 精准可靠，写代码、玩游戏时绝对不乱跳。</li>
+                <li><b>全局 OSD 醒目提示</b>：无论全屏还是后台，按下快捷键屏幕正上方都会弹出毛玻璃胶囊提示，一目了然看清此刻切到了哪台设备。</li>
+                <li><b>不动显示器</b>：只移交键盘和鼠标的操作控制权，显示器不会黑屏或重连信号，秒级来回穿梭。</li>
               </ul>
             </div>
           </div>

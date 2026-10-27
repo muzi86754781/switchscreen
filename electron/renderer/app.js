@@ -352,7 +352,7 @@ function renderInput(s) {
 
   // 3. 辅助设置状态同步
   const edgeToggle = $('#edgeSwitchToggle');
-  if (edgeToggle) edgeToggle.checked = input.edgeSwitch !== false;
+  if (edgeToggle) edgeToggle.checked = !!input.edgeSwitch;
 
   const speedSlider = $('#mouseSpeedSlider');
   const speedVal = $('#mouseSpeedVal');
@@ -361,6 +361,18 @@ function renderInput(s) {
   }
   if (speedVal) {
     speedVal.textContent = `${(Number(input.mouseSpeed) || 1.0).toFixed(1)}x`;
+  }
+
+  // 4. 键鼠切换快捷键展示
+  const hkBtn = $('#hotkeyInputCycleBtn');
+  const hkClear = $('#hotkeyInputCycleClear');
+  if (hkBtn && !hkBtn.classList.contains('is-recording')) {
+    const val = (s.hotkeys && s.hotkeys.inputCycle) || 'Alt+Q';
+    const label = hotkeyLabel(val);
+    const textEl = hkBtn.querySelector('.hk-key-text');
+    if (textEl) textEl.textContent = label || '点击录制';
+    hkBtn.classList.toggle('has-value', !!label);
+    if (hkClear) hkClear.style.visibility = label ? 'visible' : 'hidden';
   }
 }
 
@@ -1238,6 +1250,18 @@ function bindConnBar() {
 }
 
 function bindInputPanel() {
+  bindHotkeyRecorder(
+    $('#hotkeyInputCycleBtn'),
+    $('#hotkeyInputCycleClear'),
+    () => (S && S.hotkeys && S.hotkeys.inputCycle) || 'Alt+Q',
+    (val) => push(window.api.setHotkey(true, 'inputCycle', '', val))
+  );
+
+  const testBtn = $('#testCycleInputBtn');
+  if (testBtn) {
+    testBtn.addEventListener('click', () => push(window.api.cycleInput()));
+  }
+
   const edgeToggle = $('#edgeSwitchToggle');
   if (edgeToggle) {
     edgeToggle.addEventListener('change', (e) => {
@@ -1255,7 +1279,7 @@ function bindInputPanel() {
     });
     speedSlider.addEventListener('change', (e) => {
       const master = (S && S.input && S.input.master) || '';
-      const edge = (S && S.input && S.input.edgeSwitch) !== false;
+      const edge = !!(S && S.input && S.input.edgeSwitch);
       push(window.api.setInputMaster(master, edge, parseFloat(e.target.value)));
     });
   }

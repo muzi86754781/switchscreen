@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // 共用键鼠
   setInputMaster: (masterId, edgeSwitch, mouseSpeed) => ipcRenderer.invoke('input:set-master', { masterId, edgeSwitch, mouseSpeed }),
+  cycleInput: () => ipcRenderer.invoke('hotkey:cycle-input'),
 
   // 剪贴板
   setClipboardSync: (enabled) => ipcRenderer.invoke('clip:set', enabled),

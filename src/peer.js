@@ -203,12 +203,12 @@ function createPeer(userConfig, hooks) {
     // 「切换电脑 / 显示器」是主功能，优先级高于无缝键鼠：
     // 手动切换后先压住自动穿越一小会儿，免得鼠标还停在屏幕边上、一动就又弹回去。
     // 鼠标推边缘触发也加 400ms 短暂冷却，杜绝左右边界反向跳动的乒乓振荡。
-    if (!o.edge) autoLockUntil = Date.now() + 1500;
+    if (!o.edge && !o.inputOnly) autoLockUntil = Date.now() + 1500;
     else autoLockUntil = Date.now() + 400;
 
-    // 鼠标跨设备流动只切「键鼠控制权」，不动显示器 ——
-    // 屏幕怎么分是用户在「设备与显示器」里手动切的，边缘穿越不能去改它。
-    if (o.edge) {
+    // 鼠标跨设备流动或快捷键交接只切「键鼠控制权」，不动显示器 ——
+    // 屏幕怎么分是用户在「设备与显示器」里手动切的，键鼠交接不能去改它。
+    if (o.edge || o.inputOnly) {
       plan = null;
     } else if (typeof h.getSwitchPlan === 'function') {
       try { plan = h.getSwitchPlan(target); } catch (e) { console.warn('[peer] 计算切换计划失败:', e.message); }
@@ -216,9 +216,9 @@ function createPeer(userConfig, hooks) {
 
     activePeer = target;
 
-    if (o.edge) {
-      // 边缘流动：只切键鼠控制权，不动显示器（也不通知对端切屏）
-      result = 'sent';
+    if (o.edge || o.inputOnly) {
+      // 只切键鼠控制权，不动显示器（也不通知对端切屏）
+      result = 'control';
     } else if (plan) {
       label = plan.label || '';
       const hadPlan = !!plan.plan;
@@ -274,7 +274,7 @@ function createPeer(userConfig, hooks) {
     // 仅在「未开启键鼠共用」且明确切屏失败/没配接口时才回退焦点；
     // 若开启了共用键鼠，键鼠控制权允许跨机切换，不被 DDC 硬件失败或单屏无接口卡死
     const sharingInput = !!cfg.shareInput;
-    if ((result === 'failed' || result === 'no-input') && prev !== target && !sharingInput && !o.edge) {
+    if ((result === 'failed' || result === 'no-input') && prev !== target && !sharingInput && !o.edge && !o.inputOnly) {
       activePeer = prev;
     }
 
@@ -482,6 +482,9 @@ function createPeer(userConfig, hooks) {
     else if (msg.type === 'input-reset') injector.releaseAll();
     else if (msg.type === 'input-mode') applyRemoteInputMode(msg.mode, name);
     else if (msg.type === 'input-master') applyRemoteInputMaster(msg.master, msg.edgeSwitch);
+    else if (msg.type === 'switch-input') {
+      if (msg.target) applySwitch(msg.target, { inputOnly: true }).catch(() => {});
+    }
     else if (msg.type === 'ports') {
       // 对端的接口配置：按显示器名字合并，只补本机还没设的
       if (typeof h.onPorts === 'function') h.onPorts(msg.list);
@@ -772,6 +775,12 @@ function createPeer(userConfig, hooks) {
     announceInputMode,
     setInputMaster,
     announceInputMaster,
+    switchInputTo: (t) => {
+      if (!cfg.isHost && cfg.ui && cfg.ui.inputMaster) {
+        sendTo(cfg.ui.inputMaster, { type: 'switch-input', target: t });
+      }
+      return applySwitch(t, { inputOnly: true });
+    },
     isCapturing: () => !!capture,
     listPeers,
     neighbors: neighborInfo,
