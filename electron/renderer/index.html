@@ -226,8 +226,11 @@
 
     <footer class="footer">
       <button class="link" id="helpBtn">使用说明 <span class="arrow">↗</span></button>
-      <button class="link" id="footLogBtn" style="margin-left: 14px;">运行日志</button>
-      <span class="foot-ver" id="footVer"></span>
+      <div class="foot-right">
+        <button class="link foot-sponsor-btn" id="sponsorBtn" type="button">❤️ 支持作者</button>
+        <span class="foot-sep">·</span>
+        <span class="foot-ver" id="footVer"></span>
+      </div>
     </footer>
   </div>
 
@@ -247,7 +250,38 @@
     </div>
   </div>
 
-   </div>
+  <!-- 支持作者赞赏弹窗 -->
+  <div class="modal" id="sponsorModal" hidden>
+    <div class="modal-card sponsor-card">
+      <div class="modal-head">
+        <b>❤️ 支持作者 · 创作不易</b>
+        <button class="modal-x" id="smClose" type="button" title="关闭">×</button>
+      </div>
+      <div class="sponsor-body">
+        <div class="sponsor-desc">
+          <p>SwitchScreen 是一款由独立开发者利用业余时间打造的跨平台硬件级 KVM 工具，完全免费开源。</p>
+          <p>为了攻克多屏跨机秒级切换、低延迟共用键鼠与剪贴板实时同步，作者在无数个深夜中反复攻坚底层驱动、跨平台网络通信协议与各类外设兼容细节。</p>
+          <p class="sponsor-highlight">若这款软件切实帮您提升了多机协同的办公与娱乐效率，欢迎扫码请作者喝一杯咖啡，您的每一份认可都是本项目持续维护和进化的最大动力！☕✨</p>
+        </div>
+
+        <div class="sponsor-contact">
+          <span class="contact-label">作者 QQ：</span>
+          <b class="contact-val" id="smQqText">285351298</b>
+          <button class="btn btn-sm" id="smCopyQq" type="button">复制 QQ</button>
+          <span class="copy-tip" id="smCopyTip">已复制</span>
+        </div>
+
+        <div class="sponsor-qr-box">
+          <img src="assets/sponsor_qr.jpg" class="sponsor-qr-img" alt="微信赞赏收款码" />
+          <div class="sponsor-qr-tip">
+            <span class="wechat-badge">微信扫一扫 · 赞赏支持</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-primary" id="smDone" type="button" style="margin-left: auto;">关闭</button>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>

@@ -473,7 +473,7 @@ function buildTile(m, d, letters, color) {
   if (m.internal) {
     const bottomTag = el('span', 'cm-tag is-internal-bottom', '内建');
     node.appendChild(bottomTag);
-    node.title = `${m.name}（笔记本自带屏，始终显示此电脑，不参与切换）`;
+    node.title = m.name || '内建显示器';
     return node;
   }
 
@@ -1216,6 +1216,8 @@ function bindSharePanel() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (!$('#textModal').hidden) closeTextModal();
+      const sm = $('#sponsorModal');
+      if (sm && !sm.hidden) sm.hidden = true;
     }
   });
 
@@ -1259,11 +1261,76 @@ function bindSharePanel() {
 }
 
 function bindFooter() {
-  $('#helpBtn').addEventListener('click', () => window.api.help());
+  const helpBtn = $('#helpBtn');
+  if (helpBtn) helpBtn.addEventListener('click', () => window.api.help());
   const footLog = $('#footLogBtn');
   if (footLog) footLog.addEventListener('click', () => {
     if (window.api && window.api.openLogFile) window.api.openLogFile();
   });
+
+  const sponsorBtn = $('#sponsorBtn');
+  const sm = $('#sponsorModal');
+  const smClose = $('#smClose');
+  const smDone = $('#smDone');
+  const smCopyQq = $('#smCopyQq');
+  const smCopyTip = $('#smCopyTip');
+
+  const openSponsor = () => {
+    if (sm) {
+      sm.hidden = false;
+      if (smCopyTip) smCopyTip.classList.remove('is-shown');
+    }
+  };
+  const closeSponsor = () => {
+    if (sm) sm.hidden = true;
+  };
+
+  if (sponsorBtn) sponsorBtn.addEventListener('click', openSponsor);
+  if (smClose) smClose.addEventListener('click', closeSponsor);
+  if (smDone) smDone.addEventListener('click', closeSponsor);
+  if (sm) {
+    sm.addEventListener('click', (e) => {
+      if (e.target.id === 'sponsorModal') closeSponsor();
+    });
+  }
+
+  if (smCopyQq) {
+    smCopyQq.addEventListener('click', () => {
+      const qq = '285351298';
+      const fallbackCopy = () => {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = qq;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          return true;
+        } catch { return false; }
+      };
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(qq).then(() => {
+          if (smCopyTip) {
+            smCopyTip.classList.add('is-shown');
+            setTimeout(() => smCopyTip.classList.remove('is-shown'), 1800);
+          }
+        }).catch(() => {
+          if (fallbackCopy() && smCopyTip) {
+            smCopyTip.classList.add('is-shown');
+            setTimeout(() => smCopyTip.classList.remove('is-shown'), 1800);
+          }
+        });
+      } else {
+        if (fallbackCopy() && smCopyTip) {
+          smCopyTip.classList.add('is-shown');
+          setTimeout(() => smCopyTip.classList.remove('is-shown'), 1800);
+        }
+      }
+    });
+  }
 }
 
 /* 顶部提示区：点击跳转到共用键鼠 Tab */
