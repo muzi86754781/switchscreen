@@ -304,6 +304,10 @@ function createPeer(userConfig, hooks) {
       else if (o.edge.side === 'left') moveLocalCursor(lscr.width - 16, ny * lscr.height);
     } else {
       phantom = null;
+      if (o.inputOnly) {
+        const lscr = localScreenSize();
+        moveLocalCursor(Math.round(lscr.width / 2), Math.round(lscr.height / 2));
+      }
     }
 
     notifyActive();
@@ -736,10 +740,13 @@ function createPeer(userConfig, hooks) {
         captureError = e.message;
         console.error('[peer] 键鼠捕获启动失败:', e.message);
       }
-    } else if (!need && capture) {
-      try { capture.stop(); } catch { /* ignore */ }
-      capture = null;
-      console.log(`[peer] 本机非键鼠主控端，全局捕获已停止`);
+    } else if (!need) {
+      if (capture) {
+        try { capture.stop(); } catch { /* ignore */ }
+        capture = null;
+        console.log(`[peer] 本机非键鼠主控端，全局捕获已停止`);
+      }
+      captureError = '';
     }
   }
 

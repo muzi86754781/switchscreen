@@ -207,7 +207,7 @@
               </div>
               <button type="button" class="btn btn-ghost" id="testCycleInputBtn" style="margin-left: 8px;">立即测试切换</button>
             </div>
-            <div class="hk-tip">点击按键框即可直接按下键盘自定义（例如 Alt+Q、Ctrl+~、F10 等，按 Esc 取消，点 ✕ 清除）。按下时屏幕正上方将弹出发光悬浮窗提示当前控制权！</div>
+            <div class="hk-tip">点击按键框即可直接按下键盘自定义（例如 Alt+Q、Ctrl+~、F10 等，按 Esc 取消，点 ✕ 清除）。按下时屏幕正上方将弹出半透明悬浮窗提示当前控制权！快捷键切换零误触，不闪烁屏幕，极速流转。</div>
           </div>
 
           <!-- 模式选择卡片组 -->
@@ -218,40 +218,6 @@
             </div>
             <div class="input-master-list" id="inputMasterList">
               <!-- 动态渲染：各用各的键鼠 / 共用设备1键鼠 / 共用设备2键鼠... -->
-            </div>
-          </div>
-
-          <!-- 边缘穿梭与辅助选项 -->
-          <div class="card">
-            <div class="card-label">
-              <span>鼠标移动穿梭设置（可选）</span>
-            </div>
-            <div class="input-settings-grid">
-              <label class="check-row">
-                <input type="checkbox" id="edgeSwitchToggle" />
-                <span class="box"></span>
-                <span class="check-text">
-                  <b>开启鼠标推至屏幕边缘时滑动切换</b>
-                  <span class="sub-note">默认关闭；若不习惯鼠标滑动切电脑，请保持关闭并使用上方快捷键精准切换</span>
-                </span>
-              </label>
-
-              <div class="input-slider-row">
-                <div class="isr-label">
-                  <span>鼠标跨屏灵敏度</span>
-                  <span class="isr-value" id="mouseSpeedVal">1.0x</span>
-                </div>
-                <input type="range" class="range-slider" id="mouseSpeedSlider" min="0.5" max="2.0" step="0.1" value="1.0" />
-              </div>
-            </div>
-
-            <div class="input-tips-box">
-              <div class="itb-title">💡 为什么快捷键切换更实用？</div>
-              <ul class="itb-list">
-                <li><b>零误触</b>：多显示器各自分辨率和摆放不同，鼠标移到边缘容易误判或顶死。快捷键切换 100% 精准可靠，写代码、玩游戏时绝对不乱跳。</li>
-                <li><b>全局 OSD 醒目提示</b>：无论全屏还是后台，按下快捷键屏幕正上方都会弹出毛玻璃胶囊提示，一目了然看清此刻切到了哪台设备。</li>
-                <li><b>不动显示器</b>：只移交键盘和鼠标的操作控制权，显示器不会黑屏或重连信号，秒级来回穿梭。</li>
-              </ul>
             </div>
           </div>
         </div>

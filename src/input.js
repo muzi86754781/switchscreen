@@ -332,11 +332,18 @@ function createInjector() {
     const c = ensure();
     const minX = s.x || 0;
     const minY = s.y || 0;
-    // 从本机右侧穿出去 → 落在对端的左侧，留安全边距避免刚穿入即被边缘触发反弹
-    if (edge === 'right') c.x = minX + 12;
-    else if (edge === 'left') c.x = Math.max(minX + 12, minX + s.width - 14);
-    else if (edge === 'bottom') c.y = minY + 12;
-    else if (edge === 'top') c.y = Math.max(minY + 12, minY + s.height - 14);
+    if (edge === 'center') {
+      c.x = Math.round(minX + (typeof nx === 'number' ? nx : 0.5) * s.width);
+      c.y = Math.round(minY + (typeof ny === 'number' ? ny : 0.5) * s.height);
+    } else if (edge === 'right') {
+      c.x = minX + 12;
+    } else if (edge === 'left') {
+      c.x = Math.max(minX + 12, minX + s.width - 14);
+    } else if (edge === 'bottom') {
+      c.y = minY + 12;
+    } else if (edge === 'top') {
+      c.y = Math.max(minY + 12, minY + s.height - 14);
+    }
 
     if ((edge === 'right' || edge === 'left') && typeof ny === 'number') {
       c.y = Math.round(minY + ny * s.height);

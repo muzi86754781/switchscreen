@@ -183,32 +183,11 @@ function ensureDefaults() {
   delete ui.usePassword;
   delete ui.password;
 
-  // 键鼠模式固定「各用各的」：共用键鼠已移除，旧配置里残留的 shareInput=true 必须清掉，
-  // 否则「各用各的」也会偷偷捕获键鼠、鼠标推到屏幕边上就换电脑
-  cfg.shareInput = false;
-  cfg.isHost = true;
-
   saveConfig(cfg);
 }
 
 function persist() {
   saveConfig(cfg);
-}
-
-/**
- * 键鼠模式：固定「各用各的」。
- * 共用键鼠（共用本机 / 共用对端）已整体移除 —— 不管谁传什么进来都只回落到 separate，
- * 免得旧配置、对端的模式同步消息或残留 IPC 又把键鼠捕获打开。
- */
-function applyInputMode(mode, opts) {
-  void mode;
-  void opts;
-  cfg.ui.inputMode = 'separate';
-  cfg.shareInput = false;
-  cfg.isHost = true; // 捕获层存在但永不启动
-  persist();
-  if (peer && peer.refreshInputMode) peer.refreshInputMode();
-  return false;
 }
 
 /* ---------------- 设备 ---------------- */
@@ -1957,6 +1936,8 @@ async function switchMonitorInput(value, label) {
  */
 function accessibilityGranted() {
   if (!IS_MAC) return true;
+  // 若当前本机不是键鼠主控端（即各用各的，或当前由对端主控），本机无需捕获全局输入，不需要报权限错误
+  if (!cfg.ui || !cfg.ui.inputMaster || cfg.ui.inputMaster !== cfg.peerName) return true;
   if (peer && typeof peer.getCaptureError === 'function' && !peer.getCaptureError()) return true;
   try { return systemPreferences.isTrustedAccessibilityClient(false); } catch { return false; }
 }
@@ -2393,9 +2374,10 @@ async function cycleInputDevice() {
     return { name: localLabel(), alone: true };
   }
 
-  // 若尚未开启共用键鼠，自动将当前物理电脑设为主控
-  if (!cfg.ui.inputMaster) {
-    setInputMaster(cfg.peerName, cfg.ui.edgeSwitch, cfg.ui.mouseSpeed);
+  // 关键：用户在当前物理机按下快捷键，说明正在使用当前机器的物理键鼠！
+  // 若本机不是主控端，立即将本机激活为主控端并广播全网，启动本地全局键鼠捕获
+  if (!cfg.ui || cfg.ui.inputMaster !== cfg.peerName) {
+    setInputMaster(cfg.peerName, false, 1.0);
   }
 
   const cur = activeTarget || cfg.peerName;

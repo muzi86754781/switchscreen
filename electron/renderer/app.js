@@ -290,7 +290,7 @@ function renderInput(s) {
     } else if (input.isHost) {
       banner.classList.add('is-host');
       titleEl.textContent = '本机为主控端（共用本机键鼠）';
-      descEl.textContent = '正在使用本机的键盘与鼠标！鼠标推至屏幕边缘即可无缝穿梭到其他电脑。';
+      descEl.textContent = '正在使用本机的键盘与鼠标！按快捷键即可无缝切换控制其他电脑。';
     } else {
       banner.classList.add('is-guest');
       titleEl.textContent = `受控中 · 正在共用 ${input.masterName || '对端'} 键鼠`;
@@ -319,7 +319,7 @@ function renderInput(s) {
   sepCard.appendChild(sepMain);
 
   sepCard.addEventListener('click', () => {
-    push(window.api.setInputMaster('', input.edgeSwitch, input.mouseSpeed));
+    push(window.api.setInputMaster('', false, 1.0));
   });
   list.appendChild(sepCard);
 
@@ -340,30 +340,17 @@ function renderInput(s) {
     if (isActive) head.appendChild(el('span', 'imc-badge is-active-badge', '当前主控'));
     main.appendChild(head);
 
-    const desc = el('div', 'imc-desc', `使用 ${d.name} 的键鼠控制所有电脑，支持鼠标滑动跨屏`);
+    const desc = el('div', 'imc-desc', `使用 ${d.name} 的键鼠控制所有电脑，按快捷键自由切换`);
     main.appendChild(desc);
     card.appendChild(main);
 
     card.addEventListener('click', () => {
-      push(window.api.setInputMaster(d.id, input.edgeSwitch, input.mouseSpeed));
+      push(window.api.setInputMaster(d.id, false, 1.0));
     });
     list.appendChild(card);
   }
 
-  // 3. 辅助设置状态同步
-  const edgeToggle = $('#edgeSwitchToggle');
-  if (edgeToggle) edgeToggle.checked = !!input.edgeSwitch;
-
-  const speedSlider = $('#mouseSpeedSlider');
-  const speedVal = $('#mouseSpeedVal');
-  if (speedSlider) {
-    speedSlider.value = String(input.mouseSpeed || 1.0);
-  }
-  if (speedVal) {
-    speedVal.textContent = `${(Number(input.mouseSpeed) || 1.0).toFixed(1)}x`;
-  }
-
-  // 4. 键鼠切换快捷键展示
+  // 3. 键鼠切换快捷键展示
   const hkBtn = $('#hotkeyInputCycleBtn');
   const hkClear = $('#hotkeyInputCycleClear');
   if (hkBtn && !hkBtn.classList.contains('is-recording')) {
@@ -1260,28 +1247,6 @@ function bindInputPanel() {
   const testBtn = $('#testCycleInputBtn');
   if (testBtn) {
     testBtn.addEventListener('click', () => push(window.api.cycleInput()));
-  }
-
-  const edgeToggle = $('#edgeSwitchToggle');
-  if (edgeToggle) {
-    edgeToggle.addEventListener('change', (e) => {
-      const master = (S && S.input && S.input.master) || '';
-      const speed = (S && S.input && S.input.mouseSpeed) || 1.0;
-      push(window.api.setInputMaster(master, e.target.checked, speed));
-    });
-  }
-
-  const speedSlider = $('#mouseSpeedSlider');
-  if (speedSlider) {
-    speedSlider.addEventListener('input', (e) => {
-      const speedVal = $('#mouseSpeedVal');
-      if (speedVal) speedVal.textContent = `${parseFloat(e.target.value).toFixed(1)}x`;
-    });
-    speedSlider.addEventListener('change', (e) => {
-      const master = (S && S.input && S.input.master) || '';
-      const edge = !!(S && S.input && S.input.edgeSwitch);
-      push(window.api.setInputMaster(master, edge, parseFloat(e.target.value)));
-    });
   }
 }
 
