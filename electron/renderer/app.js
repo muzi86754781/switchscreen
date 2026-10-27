@@ -303,24 +303,34 @@ function buildChain(d, letters, color) {
   chain.appendChild(dev);
   chain.appendChild(el('span', 'chain-link'));
 
-  // 内建屏只属于本机，别的电脑那一行不画它
-  const items = (d.monitors || []).filter((m) => d.local || !m.internal);
+  // 每台设备展示属于它的显示器（外接屏 + 设备专属内建屏）
+  const items = d.monitors || [];
   if (!items.length) {
     chain.appendChild(el('span', 'wb-empty', '未检测到显示器'));
     return chain;
   }
 
   const map = el('div', 'chain-map');
-  // 没有系统坐标的屏（被切走的、memo 补出来的）不参与等比定位，
-  // 但也不能叠在左上角 —— 给它排到已定位屏的最右边
+  let minX = Infinity;
   let vx = 0;
   for (const m of items) {
-    if (m.pos) vx = Math.max(vx, m.pos.x + m.pos.width);
+    if (m.pos) {
+      vx = Math.max(vx, m.pos.x + m.pos.width);
+      minX = Math.min(minX, m.pos.x);
+    }
   }
+  if (!Number.isFinite(minX)) minX = 0;
+
   for (const m of items) {
-    if (!m.pos && !m.internal) {
-      m.pos = { x: vx + 60, y: 0, width: 1920, height: 1080 };
-      vx += 2040;
+    if (!m.pos) {
+      if (m.internal) {
+        // 内建屏排在最左侧
+        m.pos = { x: minX - 1980, y: 0, width: 1920, height: 1200 };
+        minX -= 2040;
+      } else {
+        m.pos = { x: vx + 60, y: 0, width: 1920, height: 1080 };
+        vx += 2040;
+      }
     }
   }
   for (const m of items) map.appendChild(buildTile(m, d, letters, color));
@@ -350,23 +360,17 @@ function buildTile(m, d, letters, color) {
   node.tabIndex = 0;
   if (here) node.style.setProperty('--dev', color.c);
 
-  // 屏幕上写真实型号（DELL U2414H），字母只留作快捷键对应的小角标
+  // 屏幕上写真实型号（DELL U2414H），字母留作快捷键对应的小角标
   const head = el('div', 'cm-head');
-  head.appendChild(el('span', 'cm-key', letters[m.id] || '?'));
-  head.appendChild(el('span', 'cm-name', m.name || '显示器'));
+  head.appendChild(el('span', 'cm-key', letters[m.id] || (m.internal ? '内' : '?')));
+  head.appendChild(el('span', 'cm-name', m.name || (m.internal ? '内建显示器' : '显示器')));
+  if (m.internal) {
+    head.appendChild(el('span', 'cm-tag', '内建'));
+  }
   node.appendChild(head);
 
   if (m.internal) {
-    head.appendChild(el('span', 'cm-tag', '内建'));
-    node.title = `${m.name}（笔记本自带屏，始终显示本机，不参与切换）`;
-    return node;
-  }
-  // 这块屏此刻被切到别的电脑上了，本机已经够不到它 —— 画出来，别让它凭空消失
-  if (away) {
-    head.appendChild(el('span', 'cm-tag', '不在本机'));
-    node.title = here
-      ? `${m.name} 正在显示 ${d.name}（本机此刻够不到它）`
-      : `${m.name} 此刻不是 ${d.name} 的画面`;
+    node.title = `${m.name}（笔记本自带屏，始终显示此电脑，不参与切换）`;
     return node;
   }
 
@@ -380,7 +384,7 @@ function buildTile(m, d, letters, color) {
   node.appendChild(port);
 
   node.title = here
-    ? `${d.name} 正在这块屏上显示（${m.port}）`
+    ? `${d.name} 正在这块屏上显示（${m.port || '未设置接口'}）`
     : m.hasPort
       ? `把「${m.name}」切到 ${d.name}（${m.port}）`
       : `先给这块屏设置 ${d.name} 的接口`;
@@ -523,7 +527,8 @@ function buildWorkbench(s) {
     box.appendChild(row);
   });
 
-  const n = monitors.length;
+  const extMonitors = monitors.filter((m) => !m.internal);
+  const n = extMonitors.length;
   const devs = devices.length;
   const onlineOthers = devices.filter((d) => !d.local && d.online).length;
   $('#wbNote').textContent = n

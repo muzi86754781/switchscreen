@@ -57,7 +57,11 @@ function createPeer(userConfig, hooks) {
   }
 
   function metaPayload() {
-    return { type: 'meta', platform, screen: localScreenSize(), name: myName, displayName: myLabel(), bootAt: BOOT_AT };
+    let displays = [];
+    if (typeof h.getDisplaysMeta === 'function') {
+      try { displays = h.getDisplaysMeta() || []; } catch { /* ignore */ }
+    }
+    return { type: 'meta', platform, screen: localScreenSize(), displays, name: myName, displayName: myLabel(), bootAt: BOOT_AT };
   }
 
   function notifyPeers() {
@@ -71,6 +75,7 @@ function createPeer(userConfig, hooks) {
         label: m.label || n,
         platform: m.platform || 'unknown',
         screen: m.screen || null,
+        displays: m.displays || [],
         bootAt: Number(m.bootAt) || 0
       };
     });
@@ -454,15 +459,17 @@ function createPeer(userConfig, hooks) {
     else if (msg.type === 'meta') {
       const meta = peersMeta.get(name) || { name };
       const before = meta.label;
+      const beforeDisplays = JSON.stringify(meta.displays || []);
       meta.platform = msg.platform || meta.platform || 'unknown';
       if (msg.screen && msg.screen.width) {
         meta.screen = msg.screen;
         // 注入端按对端的桌面范围算虚拟指针，多显示器时不会顶死在主屏边界
         if (typeof injector.setScreen === 'function') injector.setScreen(msg.screen);
       }
+      if (Array.isArray(msg.displays)) meta.displays = msg.displays;
       if (msg.displayName) meta.label = msg.displayName;
       peersMeta.set(name, meta);
-      if (meta.label !== before) notifyPeers();
+      if (meta.label !== before || JSON.stringify(meta.displays || []) !== beforeDisplays) notifyPeers();
     }
     else if (msg.type === 'input') {
       const ev = msg.ev || {};

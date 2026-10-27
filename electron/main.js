@@ -246,6 +246,9 @@ function confirmSwitchHint(delay, opts) {
       if (publish && peer && typeof peer.sendAuthority === 'function') {
         peer.sendAuthority(services.publishAuthority());
       }
+      if (peer && typeof peer.resendMeta === 'function') {
+        peer.resendMeta();
+      }
     }).catch(() => {});
   }, typeof delay === 'number' ? delay : 1800);
 }
@@ -427,6 +430,7 @@ function registerIpc() {
     services.clearSettle();
     await services.detectMonitors();
     registerHotkeys();
+    if (peer && typeof peer.resendMeta === 'function') peer.resendMeta();
     return services.getState();
   });
 
@@ -759,6 +763,8 @@ app.whenReady().then(() => {
       onSwitch: (info) => { services.onSwitch(info); broadcastState(); },
       // 每块屏的接口由服务层算，peer 只负责执行与状态同步
       getSwitchPlan: (target) => services.buildSwitchPlan(target),
+      // 显示器元数据（内建屏与排列）同步给对端
+      getDisplaysMeta: () => services.exportDisplaysMeta(),
       // 接口配置两端共享：在任一台配好，另一台也能直接按这个值切
       getPorts: () => services.exportPorts(),
       onPorts: (list) => {

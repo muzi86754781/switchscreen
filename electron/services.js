@@ -60,8 +60,32 @@ let peer = null;
 let peersNow = [];
 let activeTarget = cfg.peerName;
 let monitorsCache = [];
-// 本机是否醒着（休眠/锁屏时笔记本内建屏不在显示）
 let selfAwake = true;
+
+// 远端设备上报的内建屏信息：peerName -> { name, pos }
+const remoteInternals = new Map();
+// 跨机器 key 别名映射：foreignKey -> local monitorId
+const keyAliases = new Map();
+
+function recordAlias(m, foreignKey) {
+  if (!m || !foreignKey) return;
+  keyAliases.set(foreignKey, m.id);
+  const mk = portKey(m);
+  if (mk && mk !== foreignKey) {
+    if (!cfg.ui.portAlias) cfg.ui.portAlias = {};
+    cfg.ui.portAlias[foreignKey] = mk;
+  }
+}
+
+/** 主进程获取当前显示器简要拓扑，用于同步给局域网对端 */
+function exportDisplaysMeta() {
+  return monitorsCache.map((m) => ({
+    name: m.name,
+    internal: !!m.internal,
+    pos: m.pos || null,
+    serial: m.serial || ''
+  }));
+}
 
 /** 主进程监听 powerMonitor 的锁屏/休眠事件后调用 */
 function setSelfAwake(v) {
@@ -137,6 +161,19 @@ function ensureDefaults() {
       ui.portMap[mid] = t;
     }
     delete ui.perMonitor;
+  }
+
+  // 清理历史残留的 generic 占位名（显示器 1/2）与幽灵记录
+  if (cfg.ui.screenMemo && typeof cfg.ui.screenMemo === 'object') {
+    for (const k of Object.keys(cfg.ui.screenMemo)) {
+      const memo = cfg.ui.screenMemo[k];
+      if (isGenericName(memo && memo.name) || /^nm:(显示器\s*\d*|generic.*)$/i.test(k)) {
+        delete cfg.ui.screenMemo[k];
+      }
+    }
+  }
+  if (cfg.ui.authority && Array.isArray(cfg.ui.authority.screens)) {
+    cfg.ui.authority.screens = cfg.ui.authority.screens.filter((s) => !isGenericName(s && s.name));
   }
 
   // 早期版本存过连接配对密码，已不再使用
@@ -819,9 +856,8 @@ function portsMatch(a, b) {
 }
 
 /**
- * 按型号名认领：稳定键、接口指纹都认不上时的兜底（比如对端还是旧版、
- * 快照里没有接口指纹）。两边都得有真实型号名（「显示器 1」这种占位名不认），
- * 且全机恰好只有一块对得上 —— 同型号双屏并列就不敢认，宁缺毋滥。
+ * 按型号名认领：两边都得有真实型号名（「显示器 1」这种占位名不认），
+ * 提取型号核心词匹配（如 u2414h / s2316m）。
  */
 function nameClaimMonitor(s) {
   if (!s || !s.name || isGenericName(s.name)) return null;
@@ -839,14 +875,22 @@ function nameClaimMonitor(s) {
 }
 
 /**
- * 快照里的一块屏 → 本机的哪块屏。先按稳定键；键对不上（另一台机器的命名 /
- * 序列号口径不同，比如一边是 EDID 序列号、一边是「显示器 1」占位名）就按
- * 接口指纹认领 —— 认领不上，对端发来的归属就永远落不到本机的屏上。
+ * 快照里的一块屏 → 本机的哪块屏。先按别名/稳定键；键对不上就按接口指纹认领，
+ * 认领不上再按型号特征词认领，绝不让同一台物理外接显示器重复变成两块。
  */
 function localMonitorForEntry(s) {
   if (!s) return null;
+  // 1) 别名映射命中
+  if (s.key && keyAliases.has(s.key)) {
+    const aid = keyAliases.get(s.key);
+    const hit = monitorsCache.find((x) => !x.internal && x.id === aid);
+    if (hit) return hit;
+  }
+  // 2) 稳定键直接精确匹配
   const byKey = monitorsCache.find((x) => !x.internal && screenKey(x) === s.key);
   if (byKey) return byKey;
+
+  // 3) 接口指纹匹配
   const fp = s.ports;
   if (fp && Object.keys(fp).length) {
     let best = null, bestScore = 0, tie = false;
@@ -854,12 +898,36 @@ function localMonitorForEntry(s) {
       if (m.internal) continue;
       const score = portsMatch(fp, portsOfKey(portKey(m)));
       if (score > bestScore) { best = m; bestScore = score; tie = false; }
-      else if (score > 0 && score === bestScore) tie = true; // 并列就不敢认，宁可不认
+      else if (score > 0 && score === bestScore) tie = true;
     }
-    if (best && !tie) return best;
+    if (best && !tie) {
+      recordAlias(best, s.key);
+      return best;
+    }
   }
-  // 键、指纹都认不上：按型号名认领（对端旧版快照没带指纹时唯一能靠的线索）
-  return nameClaimMonitor(s);
+
+  // 4) 型号名认领（提取型号核心词）
+  const byName = nameClaimMonitor(s);
+  if (byName) {
+    recordAlias(byName, s.key);
+    return byName;
+  }
+
+  // 5) 数量匹配兜底（两端都连接同样数量的外接显示器，且数量>=1）：
+  const ext = monitorsCache.filter((m) => !m.internal);
+  const a = cfg.ui.authority;
+  if (ext.length > 0 && a && Array.isArray(a.screens)) {
+    const extScreens = a.screens.filter((x) => x && !x.internal && !isGenericName(x.name));
+    if (extScreens.length === ext.length) {
+      const idx = extScreens.findIndex((x) => x.key === s.key);
+      if (idx >= 0 && idx < ext.length) {
+        recordAlias(ext[idx], s.key);
+        return ext[idx];
+      }
+    }
+  }
+
+  return null;
 }
 
 /** 本机这块屏在公认快照里的条目：先按稳定键，再按接口指纹反查，最后按型号名兜底 */
@@ -867,7 +935,7 @@ function authorityEntryFor(m) {
   const a = cfg.ui.authority;
   if (!a || !Array.isArray(a.screens) || !m) return null;
   const k = m.key || screenKey(m);
-  const byKey = a.screens.find((s) => s && s.key === k);
+  const byKey = a.screens.find((s) => s && (s.key === k || (keyAliases.get(s.key) === m.id)));
   if (byKey) return byKey;
   const mine = portsOfKey(portKey(m));
   if (Object.keys(mine).length) {
@@ -1097,7 +1165,11 @@ function applyAuthority(a) {
     const m = localMonitorForEntry(s);
     if (m) {
       const lk = portKey(m);
-      if (lk && lk !== s.key) pinned.push({ key: lk, owner: s.owner });
+      if (lk) {
+        pinned.push({ key: lk, owner: s.owner });
+        if (!cfg.ui.ownerMap) cfg.ui.ownerMap = {};
+        cfg.ui.ownerMap[lk] = s.owner;
+      }
     }
     if (!m || !m.currentInput) continue;
     const byInput = deviceIds().find((id) => sameInput(portFor(m.id, id), m.currentInput));
@@ -1123,13 +1195,24 @@ function offlineRows() {
   const have = new Set(monitorsCache.map(screenKey));
   const out = [];
   for (const s of a.screens) {
-    if (!s.key || have.has(s.key)) continue;
-    // 键对不上、但接口指纹认得出是本机的屏：不是离线屏，别补成重复的一行
+    if (!s || !s.key) continue;
+    // 忽略通用占位名（显示器 1/2、Generic 等幽灵屏）
+    if (isGenericName(s.name)) continue;
+    if (have.has(s.key)) continue;
+
+    // 键对不上、但能认领到本机的屏：不是离线屏，绝不补成重复的一行
     if (localMonitorForEntry(s)) continue;
-    // 只补「本机真的接过线、见过的屏」（screenMemo 里有记录）。
-    // 对端接了、但本机从没见过的屏不属于本机这行 —— 画出来只会把排列搅乱。
+
+    // 只补「本机真的见过、且有真实型号名的屏」
     const memo = (cfg.ui.screenMemo && cfg.ui.screenMemo[s.key]) || {};
     if (!memo.name && !memo.pos) continue;
+    if (isGenericName(memo.name)) continue;
+
+    // 如果这块屏的名字与本地已有某块外接屏型号一致，说明只是稳定键口径不同，绝不重复生成
+    if (monitorsCache.some((m) => !m.internal && modelNameHit(m.name, memo.name || s.name))) {
+      continue;
+    }
+
     out.push({
       key: s.key,
       id: 'mem:' + String(s.key).replace(/[^a-zA-Z0-9]+/g, '_'),
@@ -1598,18 +1681,24 @@ function parseEdidDisplays(ioregOut) {
   return out;
 }
 
+function extractModelTokens(s) {
+  const str = String(s || '').toLowerCase();
+  const tokens = str.match(/[a-z0-9]{4,}/g) || [];
+  return tokens.filter((t) => !/^(dell|generic|monitor|display|screen|color|colour|pnpmonitor)$/i.test(t));
+}
+
 /**
  * 型号名能不能算「同一块屏」：整串归一后相等/互相包含算；
  * 「显示器 U2414H」↔「DELL U2414H」这种互不包含的，取两边共有的
- * 型号词（≥5 位字母数字，比如 u2414h）也算 —— 厂牌前缀（DELL，4 位）不会误伤。
+ * 型号词（≥4 位字母数字，比如 u2414h / s2316m）也算 —— 厂牌前缀（DELL）不误伤。
  */
 function modelNameHit(a, b) {
   const na = normName(a);
   const nb = normName(b);
   if (!na || !nb) return false;
   if (na === nb || na.includes(nb) || nb.includes(na)) return true;
-  const ta = String(a).toLowerCase().match(/[a-z0-9]{5,}/g) || [];
-  const tb = new Set(String(b).toLowerCase().match(/[a-z0-9]{5,}/g) || []);
+  const ta = extractModelTokens(a);
+  const tb = new Set(extractModelTokens(b));
   return ta.some((t) => tb.has(t));
 }
 
@@ -1898,11 +1987,14 @@ function getState() {
 
   const devices = arrange.map((id, di) => {
     const info = deviceInfo(id);
-    const monitors = rows.map((m) => ({
+    const isThisLocal = info.local;
+
+    // 外接屏由所有设备共享
+    const sharedMonitors = rows.filter((m) => !m.internal).map((m) => ({
       id: m.id,
       name: m.name,
-      internal: m.internal,
-      present: m.present !== false, // 本机此刻能不能碰得到它（被切走就是 false）
+      internal: false,
+      present: m.present !== false,
       pos: m.pos || null,
       letter: letterMap.get(m.id) || '?',
       port: m.ports[id] ? m.ports[id].label : '未设置',
@@ -1910,7 +2002,50 @@ function getState() {
       here: m.ownerId === '' ? null : m.ownerId === id,
       ownerId: m.ownerId
     }));
-    const hereCount = monitors.filter((m) => m.here === true && !m.internal).length;
+
+    // 为有内建屏的设备添加专属内建屏（排在最左侧体现相对位置）
+    const devMonitors = sharedMonitors.slice();
+    if (isThisLocal) {
+      const localInternal = rows.find((m) => m.internal);
+      if (localInternal) {
+        devMonitors.unshift({
+          id: localInternal.id,
+          name: localInternal.name,
+          internal: true,
+          present: true,
+          pos: localInternal.pos || null,
+          letter: letterMap.get(localInternal.id) || 'E',
+          port: '内建',
+          hasPort: false,
+          here: selfAwake,
+          ownerId: id
+        });
+      }
+    } else {
+      const remInt = remoteInternals.get(id);
+      if (remInt) {
+        let relPos = remInt.pos;
+        if (!relPos && sharedMonitors.length) {
+          const minX = Math.min(...sharedMonitors.filter((m) => m.pos).map((m) => m.pos.x), 0);
+          relPos = { x: minX - 1980, y: 0, width: 1920, height: 1200 };
+        }
+        devMonitors.unshift({
+          id: `remote-int:${id}`,
+          name: remInt.name || '内建视网膜显示器',
+          internal: true,
+          present: true,
+          pos: relPos,
+          letter: '内',
+          port: '内建',
+          hasPort: false,
+          here: true,
+          ownerId: id
+        });
+      }
+    }
+
+    // hereCount 与屏幕统计严格只计外接屏，内建屏不占外接屏数量
+    const hereCount = sharedMonitors.filter((m) => m.here === true).length;
     return {
       id,
       name: info.name,
@@ -1921,11 +2056,11 @@ function getState() {
       // 第一个打开本软件的是主控，界面上标出来，省得用户猜谁说了算
       primary: id === primary,
       colorIndex: di % 6,
-      // 这台电脑此刻是否在「点亮」某块屏 —— 界面靠它决定要不要着色
+      // 这台电脑此刻是否在「点亮」某块外接屏 —— 界面靠它决定要不要着色
       inUse: hereCount > 0,
       hereCount,
       note: info.local ? '本机' : (info.online ? '局域网' : '离线'),
-      monitors
+      monitors: devMonitors
     };
   });
 
@@ -2014,6 +2149,15 @@ function onPeers(list) {
   for (const p of list) {
     cfg.ui.peerLabels[p.name] = p.label || p.name;
     cfg.ui.knownPeers[p.name] = { label: p.label || p.name, platform: p.platform || 'unknown', at: Date.now() };
+    if (Array.isArray(p.displays)) {
+      const intDisp = p.displays.find((d) => d && d.internal);
+      if (intDisp) {
+        remoteInternals.set(p.name, {
+          name: intDisp.name || '内建视网膜显示器',
+          pos: intDisp.pos || null
+        });
+      }
+    }
   }
   // 只留最近见过的 8 台，配置文件别无限长
   const knownNames = Object.keys(cfg.ui.knownPeers);
@@ -2234,6 +2378,7 @@ module.exports = {
   openAccessibilitySettings,
   openInputMonitoringSettings,
   getState,
+  exportDisplaysMeta,
   onPeers,
   onActive,
   onFileUpdate,

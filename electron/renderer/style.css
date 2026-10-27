@@ -937,6 +937,7 @@ textarea.input {
 }
 .chain-mon.is-here .cm-name { color: #eef4ff; font-weight: 600; }
 .cm-tag {
+  flex: none;
   font-size: 8.5px;
   letter-spacing: 0.04em;
   color: var(--text-3);
