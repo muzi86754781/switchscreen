@@ -8,6 +8,7 @@ const services = require('./services');
 const { createPeer } = require('../src/peer');
 
 const IS_MAC = process.platform === 'darwin';
+const IS_WIN = process.platform === 'win32';
 
 let win = null;
 let tray = null;
@@ -104,12 +105,29 @@ function trayMenu() {
     ...(monitorItems.length ? monitorItems : [{ label: '未检测到显示器', enabled: false }]),
     { type: 'separator' },
     {
-      label: `共用键鼠：${cfg.shareInput ? '开' : '关'}`,
-      click: () => {
-        services.applyInputMode(cfg.shareInput ? 'separate' : 'local');
-        broadcastState();
-        refreshTray();
-      }
+      label: `共用键鼠：${cfg.ui && cfg.ui.inputMaster ? (cfg.ui.inputMaster === cfg.peerName ? '共用本机' : '受控中') : '各用各的'}`,
+      submenu: [
+        {
+          label: '各用各的键鼠',
+          type: 'radio',
+          checked: !cfg.ui || !cfg.ui.inputMaster,
+          click: () => {
+            services.setInputMaster('');
+            broadcastState();
+            refreshTray();
+          }
+        },
+        ...devices.filter((d) => d.online || d.local).map((d) => ({
+          label: `共用 ${d.name} 键鼠${d.local ? '（本机）' : ''}`,
+          type: 'radio',
+          checked: !!(cfg.ui && cfg.ui.inputMaster === d.id),
+          click: () => {
+            services.setInputMaster(d.id);
+            broadcastState();
+            refreshTray();
+          }
+        }))
+      ]
     },
     {
       label: `剪贴板同步：${cfg.clipboardSync ? '开' : '关'}`,
@@ -539,7 +557,12 @@ function registerIpc() {
     return services.getState();
   });
 
-  /* 共用键鼠（键鼠模式 / 无缝移动 / 按键映射 / macOS 键鼠权限）已整体移除，相关 IPC 不再注册 */
+  ipcMain.handle('input:set-master', (_e, { masterId, edgeSwitch, mouseSpeed } = {}) => {
+    const s = services.setInputMaster(masterId, edgeSwitch, mouseSpeed);
+    broadcastState();
+    refreshTray();
+    return s;
+  });
 
   ipcMain.handle('app:help', () => {
     shell.openExternal('https://github.com/muzi86754781/switchscreen#readme');
@@ -812,9 +835,9 @@ app.whenReady().then(() => {
         write: (text) => clipboard.writeText(text)
       },
       onNotice: (msg) => { services.pushStatus(msg, 'warn'); broadcastState(); },
-      // 对端跑的是旧版本、还在发键鼠模式同步：忽略（共用键鼠已移除，恒为「各用各的」）
-      onInputMode: () => { services.persist(); broadcastState(); },
-      // 鼠标穿越边界自动切换（共用键鼠已移除，正常不会再触发）
+      onInputMaster: () => { services.persist(); broadcastState(); refreshTray(); },
+      onInputMode: () => { services.persist(); broadcastState(); refreshTray(); },
+      // 鼠标穿越边界自动切换
       onEdgeSwitch: ({ to }) => {
         services.pushStatus(`鼠标越过屏幕边界，已切到 ${services.deviceInfo(to).name}`, 'ok');
         broadcastState();

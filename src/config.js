@@ -39,7 +39,8 @@ const DEFAULTS = {
     hotkeyKey: 'F12',         // 兼容旧字段，等同于 hotkeys.global
     hotkeys: { global: 'F12', monitor: {} },
     launchAtLogin: false,
-    inputMode: 'separate',    // 恒为 separate（各用各的）；共用本机 / 共用对端已移除
+    inputMode: 'separate',    // 兼容旧字段
+    inputMaster: '',          // '' = 各用各的键鼠；某个 deviceId = 该设备为主控，共用其键鼠
     mouseSpeed: 1,            // 0.5 ~ 2（相对位移的缩放系数）
     monitorId: '',
     monitorName: '',

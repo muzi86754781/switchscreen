@@ -118,8 +118,10 @@ function ensureDefaults() {
   const ui = cfg.ui;
   if (!ui.receiveDir) ui.receiveDir = defaultReceiveDir();
   if (typeof ui.mouseSpeed !== 'number') ui.mouseSpeed = 1;
-  // 键鼠模式固定「各用各的」：共用键鼠功能已移除，旧配置里存过的 local / remote 一律归位
-  ui.inputMode = 'separate';
+  if (typeof ui.inputMaster !== 'string') ui.inputMaster = '';
+  cfg.shareInput = !!ui.inputMaster;
+  cfg.isHost = ui.inputMaster === cfg.peerName;
+  ui.inputMode = ui.inputMaster ? (ui.inputMaster === cfg.peerName ? 'local' : 'remote') : 'separate';
   if (!ui.displayName) ui.displayName = cfg.peerName;
 
   // 快捷键：global + 每块显示器一个
@@ -2149,12 +2151,17 @@ function getState() {
       progress: clipProgress,
       percent: clipPercent
     },
-    inputMode: 'separate',
+    inputMode: (cfg.ui && cfg.ui.inputMaster) ? ((cfg.ui && cfg.ui.inputMaster === cfg.peerName) ? 'local' : 'remote') : 'separate',
     input: {
-      // 共用键鼠已移除：键鼠模式恒为「各用各的」，不再捕获、不再转发
-      mode: 'separate',
-      capturing: false,
-      error: ''
+      master: (cfg.ui && cfg.ui.inputMaster) || '',
+      masterName: (cfg.ui && cfg.ui.inputMaster) ? deviceInfo(cfg.ui.inputMaster).name : '',
+      isHost: !!(cfg.ui && cfg.ui.inputMaster && cfg.ui.inputMaster === cfg.peerName),
+      isGuest: !!(cfg.ui && cfg.ui.inputMaster && cfg.ui.inputMaster !== cfg.peerName),
+      sharing: !!(cfg.ui && cfg.ui.inputMaster),
+      edgeSwitch: cfg.ui.edgeSwitch !== false,
+      mouseSpeed: Number(cfg.ui.mouseSpeed) || 1,
+      capturing: !!(peer && peer.isCapturing && peer.isCapturing()),
+      error: (peer && peer.getCaptureError && peer.getCaptureError()) || ''
     },
     files: {
       transfers: fileTransfers,
@@ -2373,6 +2380,37 @@ function setHotkey(kind, id, key) {
   persist();
 }
 
+/** 切换共用键鼠的主控端：'' 表示各用各的，masterId 表示由该设备作为主控 */
+function setInputMaster(masterId, edgeSwitch, mouseSpeed) {
+  if (!cfg.ui) cfg.ui = {};
+  const cleanMaster = typeof masterId === 'string' ? masterId.trim() : '';
+  cfg.ui.inputMaster = cleanMaster;
+  if (typeof edgeSwitch === 'boolean') cfg.ui.edgeSwitch = edgeSwitch;
+  if (typeof mouseSpeed === 'number' && Number.isFinite(mouseSpeed)) {
+    cfg.ui.mouseSpeed = Math.max(0.5, Math.min(2, mouseSpeed));
+  }
+  cfg.shareInput = !!cleanMaster;
+  cfg.isHost = cleanMaster === cfg.peerName;
+  cfg.ui.inputMode = cleanMaster ? (cleanMaster === cfg.peerName ? 'local' : 'remote') : 'separate';
+  persist();
+  if (peer && typeof peer.setInputMaster === 'function') {
+    peer.setInputMaster(cleanMaster, cfg.ui.edgeSwitch);
+  }
+  if (!cleanMaster) {
+    pushStatus('已切为：各用各的键鼠', 'info');
+  } else {
+    const dev = deviceInfo(cleanMaster);
+    pushStatus(`已切为：共用 ${dev.name} 键鼠`, 'ok');
+  }
+  return getState();
+}
+
+function applyInputMode(mode) {
+  if (mode === 'separate') return setInputMaster('');
+  if (mode === 'local') return setInputMaster(cfg.peerName);
+  return getState();
+}
+
 /* ---------------- 导出 ---------------- */
 
 module.exports = {
@@ -2382,6 +2420,7 @@ module.exports = {
   ensureDefaults,
   persist,
   setPeer,
+  setInputMaster,
   applyInputMode,
   arrangeOrder,
   setArrange,

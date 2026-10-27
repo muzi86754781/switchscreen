@@ -1,6 +1,6 @@
 {
   "name": "switchscreen",
-  "version": "0.9.10",
+  "version": "0.9.11",
   "description": "跨平台软件 KVM：单显示器共用键鼠 + 快捷键切换 + 剪贴板跨机同步",
   "main": "electron/main.js",
   "bin": {

@@ -25,7 +25,10 @@ contextBridge.exposeInMainWorld('api', {
   setHotkey: (enabled, kind, id, key) => ipcRenderer.invoke('hotkey:set', { enabled, kind, id, key }),
   setLaunchAtLogin: (open) => ipcRenderer.invoke('launch:set', open),
 
-  // 剪贴板（共用键鼠已移除，键鼠模式恒为「各用各的」）
+  // 共用键鼠
+  setInputMaster: (masterId, edgeSwitch, mouseSpeed) => ipcRenderer.invoke('input:set-master', { masterId, edgeSwitch, mouseSpeed }),
+
+  // 剪贴板
   setClipboardSync: (enabled) => ipcRenderer.invoke('clip:set', enabled),
   clipDir: (action) => ipcRenderer.invoke('clip:dir', action),
 

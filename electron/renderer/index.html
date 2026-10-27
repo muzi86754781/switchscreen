@@ -37,6 +37,7 @@
     <nav class="tabs" id="tabs">
       <button class="tab is-active" data-tab="switch">切换电脑</button>
       <button class="tab" data-tab="share">传输与剪贴板</button>
+      <button class="tab" data-tab="input">共用键鼠</button>
     </nav>
 
     <main class="content">
@@ -168,6 +169,70 @@
               </div>
               <div class="tx-list" id="txList"></div>
               <div class="hint">点记录可查看文本或定位文件 · 右侧 × 删除单条</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 共用键鼠 ============ -->
+      <section class="panel" data-panel="input">
+        <div class="input-panel-layout">
+          <!-- 当前运行状态提示条 -->
+          <div class="input-banner" id="inputStatusBanner">
+            <div class="ib-icon" id="inputStatusIcon">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="4" width="20" height="16" rx="2"/>
+                <path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M7 16h10"/>
+              </svg>
+            </div>
+            <div class="ib-content">
+              <div class="ib-title" id="inputStatusTitle">各用各的键鼠</div>
+              <div class="ib-desc" id="inputStatusDesc">当前所有电脑使用各自物理连接的键盘与鼠标，互不干扰。</div>
+            </div>
+          </div>
+
+          <!-- 模式选择卡片组 -->
+          <div class="card">
+            <div class="card-label">
+              <span>键鼠共用模式</span>
+              <span class="card-note">单选切换 · 全网多设备自动同步生效</span>
+            </div>
+            <div class="input-master-list" id="inputMasterList">
+              <!-- 动态渲染：各用各的键鼠 / 共用设备1键鼠 / 共用设备2键鼠... -->
+            </div>
+          </div>
+
+          <!-- 无缝穿梭与辅助选项 -->
+          <div class="card">
+            <div class="card-label">
+              <span>无缝穿梭与参数调节</span>
+            </div>
+            <div class="input-settings-grid">
+              <label class="check-row">
+                <input type="checkbox" id="edgeSwitchToggle" checked />
+                <span class="box"></span>
+                <span class="check-text">
+                  <b>边缘滑动无缝穿梭</b>
+                  <span class="sub-note">当鼠标推到当前屏幕边缘时，自动滑入相邻电脑屏幕并移交控制权</span>
+                </span>
+              </label>
+
+              <div class="input-slider-row">
+                <div class="isr-label">
+                  <span>鼠标跨屏灵敏度</span>
+                  <span class="isr-value" id="mouseSpeedVal">1.0x</span>
+                </div>
+                <input type="range" class="range-slider" id="mouseSpeedSlider" min="0.5" max="2.0" step="0.1" value="1.0" />
+              </div>
+            </div>
+
+            <div class="input-tips-box">
+              <div class="itb-title">💡 使用提示</div>
+              <ul class="itb-list">
+                <li><b>一处设置，全网同步</b>：在任一台电脑选择模式后，局域网所有在线电脑立即自动同步该设置，无需逐台手动选择。</li>
+                <li><b>无缝边缘穿梭</b>：在主控电脑上将鼠标推向屏幕最左侧或最右侧边缘，光标将无缝穿越到相邻电脑屏幕中。</li>
+                <li><b>安全防卡死保障</b>：当主控电脑断网或退出软件时，所有电脑将自动安全回退为“各用各的键鼠”，确保不卡键、不悬挂。</li>
+              </ul>
             </div>
           </div>
         </div>

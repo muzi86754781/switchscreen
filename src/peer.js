@@ -363,19 +363,20 @@ function createPeer(userConfig, hooks) {
   /* ---------------- 键鼠：捕获与转发 ---------------- */
 
   function inputOptions() {
+    const isMaster = !!(cfg.ui && cfg.ui.inputMaster === myName);
     if (activePeer === myName || !isPeerReady(activePeer)) {
       return {
         forwarding: false,
         selfPlatform: platform,
         peerPlatform: 'unknown',
         modMap: ui('modMap', 'cmd-ctrl'),
-        edgeSwitch: !!ui('edgeSwitch', true) && peers.size > 0 && Date.now() >= autoLockUntil,
+        edgeSwitch: isMaster && !!ui('edgeSwitch', true) && peers.size > 0 && Date.now() >= autoLockUntil,
         screen: localScreenSize()
       };
     }
     const meta = peersMeta.get(activePeer);
     return {
-      forwarding: !!(cfg.shareInput && cfg.isHost),
+      forwarding: isMaster,
       selfPlatform: platform,
       peerPlatform: (meta && meta.platform) || 'unknown',
       modMap: ui('modMap', 'cmd-ctrl'),
@@ -480,6 +481,7 @@ function createPeer(userConfig, hooks) {
     }
     else if (msg.type === 'input-reset') injector.releaseAll();
     else if (msg.type === 'input-mode') applyRemoteInputMode(msg.mode, name);
+    else if (msg.type === 'input-master') applyRemoteInputMaster(msg.master, msg.edgeSwitch);
     else if (msg.type === 'ports') {
       // 对端的接口配置：按显示器名字合并，只补本机还没设的
       if (typeof h.onPorts === 'function') h.onPorts(msg.list);
@@ -578,6 +580,13 @@ function createPeer(userConfig, hooks) {
     try { ws.send(JSON.stringify(metaPayload())); } catch { /* ignore */ }
     // 顺手同步一次键鼠模式，新连上的设备立刻进入正确角色
     try { ws.send(JSON.stringify({ type: 'input-mode', mode: currentMode() })); } catch { /* ignore */ }
+    try {
+      ws.send(JSON.stringify({
+        type: 'input-master',
+        master: (cfg.ui && cfg.ui.inputMaster) || '',
+        edgeSwitch: !!(cfg.ui && cfg.ui.edgeSwitch)
+      }));
+    } catch { /* ignore */ }
     // 接口配置也同步过去：在任一台配好接口，另一台就能直接切
     try {
       const ports = typeof h.getPorts === 'function' ? h.getPorts() : [];
@@ -598,6 +607,15 @@ function createPeer(userConfig, hooks) {
       peers.delete(name);
       if (activePeer === name) { activePeer = myName; phantom = null; notifyActive(); }
       injector.releaseAll();
+      if (cfg.ui && cfg.ui.inputMaster && cfg.ui.inputMaster === name) {
+        console.warn(`[peer] 主控设备 ${name} 离线，自动回退到各用各的键鼠`);
+        cfg.ui.inputMaster = '';
+        cfg.shareInput = false;
+        cfg.isHost = false;
+        refreshInputMode();
+        if (typeof h.onInputMaster === 'function') h.onInputMaster('', true);
+        if (typeof h.onNotice === 'function') h.onNotice(`主控设备「${name}」已离线，已自动切回各用各的键鼠`);
+      }
       notifyPeers();
     });
     ws.on('error', () => {});
@@ -628,43 +646,75 @@ function createPeer(userConfig, hooks) {
     }
   });
 
-  /* ---------------- 键鼠模式 ----------------
-   * 共用键鼠（共用本机 / 共用对端）已整体移除，模式恒为「各用各的」。
-   * 对端如果还在发旧版的模式同步消息，一律忽略 —— 不能有任一端的键鼠被接管。 */
+  /* ---------------- 键鼠模式与多设备共用 ----------------
+   * 支持多设备模式：
+   * 1. 各用各的键鼠（inputMaster = ''）：每台设备独立运行，不捕获、不转发、不注入
+   * 2. 共用 [设备ID] 键鼠（inputMaster = masterId）：
+   *    - 若本机即 masterId：本机为主控端（isHost=true），启动 capture，监听鼠标移动并按需转发至活动设备
+   *    - 若本机不是 masterId：本机为受控端（isHost=false），不启动 capture，接收来自主控端的 input 消息并注入
+   */
+
+  function inputMaster() {
+    return (cfg.ui && cfg.ui.inputMaster) || '';
+  }
+
+  function setInputMaster(masterId, edgeSwitch) {
+    if (!cfg.ui) cfg.ui = {};
+    const cleanMaster = typeof masterId === 'string' ? masterId.trim() : '';
+    cfg.ui.inputMaster = cleanMaster;
+    if (typeof edgeSwitch === 'boolean') cfg.ui.edgeSwitch = edgeSwitch;
+    cfg.shareInput = !!cleanMaster;
+    cfg.isHost = cleanMaster === myName;
+    refreshInputMode();
+    announceInputMaster();
+    if (typeof h.onInputMaster === 'function') h.onInputMaster(cleanMaster, cfg.ui.edgeSwitch);
+    return cleanMaster;
+  }
+
+  function announceInputMaster() {
+    const master = inputMaster();
+    const edgeSwitch = !!(cfg.ui && cfg.ui.edgeSwitch);
+    broadcast({ type: 'input-master', master, edgeSwitch });
+    return true;
+  }
+
+  function applyRemoteInputMaster(master, edgeSwitch) {
+    if (!cfg.ui) cfg.ui = {};
+    const cleanMaster = typeof master === 'string' ? master.trim() : '';
+    cfg.ui.inputMaster = cleanMaster;
+    if (typeof edgeSwitch === 'boolean') cfg.ui.edgeSwitch = edgeSwitch;
+    cfg.shareInput = !!cleanMaster;
+    cfg.isHost = cleanMaster === myName;
+    refreshInputMode();
+    if (typeof h.onInputMaster === 'function') h.onInputMaster(cleanMaster, cfg.ui.edgeSwitch);
+  }
 
   function currentMode() {
-    return 'separate';
+    return inputMaster() ? (inputMaster() === myName ? 'local' : 'remote') : 'separate';
   }
-
-  let modeFromPeer = false;
 
   function setMode(next) {
-    if (!cfg.ui) cfg.ui = {};
-    cfg.ui.inputMode = 'separate';
-    cfg.shareInput = false;
-    cfg.isHost = true;
-    void next;
-    refreshInputMode();
+    if (next === 'separate') setInputMaster('');
+    else if (next === 'local') setInputMaster(myName);
   }
 
-  /** 共用键鼠已移除：不再对外广播键鼠模式 */
   function announceInputMode() {
-    return false;
+    return announceInputMaster();
   }
 
-  /** 收到对端的模式同步：一律回落到 separate，绝不允许对端把本机变成被控端 */
   function applyRemoteInputMode(mode, from) {
-    void mode;
-    void from;
-    modeFromPeer = false;
-    setMode('separate');
+    if (mode === 'separate') applyRemoteInputMaster('');
+    else if (mode === 'local') applyRemoteInputMaster(from);
   }
 
   /* ---------------- 捕获启停 ---------------- */
 
   function refreshInputMode() {
-    // 共用键鼠已移除：永不捕获 / 转发本机键鼠
-    const need = false;
+    const master = inputMaster();
+    const need = !!master && (master === myName);
+    if (!master) {
+      injector.releaseAll();
+    }
     if (need && !capture) {
       try {
         capture = createCapture({
@@ -678,6 +728,7 @@ function createPeer(userConfig, hooks) {
           onDebug: (line) => { if (typeof h.onInputDebug === 'function') h.onInputDebug(line); }
         });
         captureError = '';
+        console.log(`[peer] 本机为主控端 (${myName})，键鼠全局捕获已启动`);
       } catch (e) {
         captureError = e.message;
         console.error('[peer] 键鼠捕获启动失败:', e.message);
@@ -685,6 +736,7 @@ function createPeer(userConfig, hooks) {
     } else if (!need && capture) {
       try { capture.stop(); } catch { /* ignore */ }
       capture = null;
+      console.log(`[peer] 本机非键鼠主控端，全局捕获已停止`);
     }
   }
 
@@ -718,6 +770,9 @@ function createPeer(userConfig, hooks) {
     switchTo: applySwitch,
     refreshInputMode,
     announceInputMode,
+    setInputMaster,
+    announceInputMaster,
+    isCapturing: () => !!capture,
     listPeers,
     neighbors: neighborInfo,
     getArrange: arrangeOrder,

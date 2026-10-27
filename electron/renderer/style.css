@@ -1341,3 +1341,240 @@ textarea.input {
 @media (max-width: 880px) {
   .share-grid { grid-template-columns: 1fr; }
 }
+
+/* ============ 共用键鼠面板 ============ */
+.input-panel-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.input-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, rgba(40, 56, 92, 0.5) 0%, rgba(20, 28, 48, 0.6) 100%);
+  border: 1px solid rgba(110, 150, 245, 0.25);
+  border-radius: 12px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+  transition: all 0.25s ease;
+}
+.input-banner.is-host {
+  background: linear-gradient(135deg, rgba(28, 76, 60, 0.5) 0%, rgba(16, 42, 34, 0.6) 100%);
+  border-color: rgba(62, 207, 142, 0.35);
+}
+.input-banner.is-guest {
+  background: linear-gradient(135deg, rgba(88, 48, 120, 0.5) 0%, rgba(42, 22, 60, 0.6) 100%);
+  border-color: rgba(180, 120, 255, 0.35);
+}
+
+.ib-icon {
+  flex: 0 0 44px;
+  height: 44px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #a5c4ff;
+}
+.input-banner.is-host .ib-icon { color: #5ef0b0; background: rgba(62, 207, 142, 0.15); border-color: rgba(62, 207, 142, 0.3); }
+.input-banner.is-guest .ib-icon { color: #d8a8ff; background: rgba(180, 120, 255, 0.15); border-color: rgba(180, 120, 255, 0.3); }
+
+.ib-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ib-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #f2f6ff;
+  letter-spacing: 0.02em;
+  margin-bottom: 3px;
+}
+.ib-desc {
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+/* 单选卡片容器 */
+.input-master-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.input-master-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 16px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+.input-master-card:hover {
+  background: rgba(255, 255, 255, 0.065);
+  border-color: rgba(255, 255, 255, 0.16);
+  transform: translateY(-1px);
+}
+.input-master-card.is-active {
+  background: linear-gradient(135deg, rgba(80, 130, 240, 0.16) 0%, rgba(40, 70, 160, 0.1) 100%);
+  border-color: rgba(110, 160, 255, 0.75);
+  box-shadow: 0 0 0 1px rgba(110, 160, 255, 0.5), 0 6px 20px rgba(40, 80, 180, 0.25);
+}
+
+.imc-radio {
+  flex: 0 0 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+.input-master-card.is-active .imc-radio {
+  border-color: #5b8cf0;
+  background: #5b8cf0;
+}
+.imc-radio-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0;
+  transform: scale(0.4);
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.input-master-card.is-active .imc-radio-dot {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.imc-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.imc-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.imc-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f0f4ff;
+}
+.imc-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-2);
+}
+.imc-badge.is-local {
+  background: rgba(91, 140, 240, 0.2);
+  color: #8cb4ff;
+  border: 1px solid rgba(91, 140, 240, 0.35);
+}
+.imc-badge.is-active-badge {
+  background: rgba(62, 207, 142, 0.18);
+  color: #4ee0a0;
+  border: 1px solid rgba(62, 207, 142, 0.35);
+}
+.imc-desc {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.45;
+}
+
+/* 参数调节 */
+.input-settings-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 6px 0 10px;
+}
+.input-slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.isr-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: #d8e2f5;
+  font-weight: 500;
+}
+.isr-value {
+  font-size: 12px;
+  color: #8bb2ff;
+  font-weight: 600;
+  background: rgba(91, 140, 240, 0.15);
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.range-slider {
+  width: 100%;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  outline: none;
+}
+.range-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #5b8cf0;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.range-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.input-tips-box {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.itb-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #cbd7ec;
+  margin-bottom: 6px;
+}
+.itb-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.6;
+}
+.itb-list li {
+  margin-bottom: 4px;
+}
+.itb-list b {
+  color: #d6e2f7;
+}
