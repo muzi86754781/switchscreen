@@ -1470,8 +1470,8 @@ function buildSwitchPlan(targetId) {
 
   for (const m of monitorsCache) {
     if (m.internal) continue;
-    if (typeof m.index !== 'number') { unreachable += 1; continue; }
     total += 1;
+    if (typeof m.index !== 'number') { unreachable += 1; continue; }
     const value = portFor(m.id, targetId);
     if (!value) { skipped += 1; missing.push({ id: m.id, name: m.name }); continue; }
     // 这块屏已经切在目标口上了：别再写一次 —— 每写一次显示器都要重新同步信号
@@ -2295,6 +2295,17 @@ async function onSwitchRequest({ input, label, from, index, target }) {
   return r;
 }
 
+/** 对端请求协同切换单块显示器 */
+async function onRemoteSwitchMonitor({ name, target }) {
+  if (!name || !target) return;
+  const m = monitorsCache.find((x) => !x.internal && modelNameHit(x.name, name));
+  if (!m || typeof m.index !== 'number') return;
+  const p = monitorSwitchPlan(m.id, target);
+  if (p && p.ok && !p.already) {
+    await onSwitchRequest({ input: p.value, label: p.label, index: p.index, target, from: deviceInfo(target).name });
+  }
+}
+
 function onSwitch({ result, target, label, detail, missing }) {
   const name = target ? deviceInfo(target).name : '';
   if (result === 'no-input') {
@@ -2408,6 +2419,7 @@ module.exports = {
   onFileUpdate,
   onSwitch,
   onSwitchRequest,
+  onRemoteSwitchMonitor,
   pushStatus,
   rename,
   setHotkey,

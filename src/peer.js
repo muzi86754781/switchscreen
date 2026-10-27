@@ -222,6 +222,11 @@ function createPeer(userConfig, hooks) {
     } else if (plan) {
       label = plan.label || '';
       const hadPlan = !!plan.plan;
+      // 关键双向保障：现实中很多显示器（如 DELL U2414H）在非活动端口（如当前处于 HDMI1，Mac 接在 HDMI2）时，
+      // 会关闭或屏蔽非活动接口的 DDC/CI 通信，导致从非活动端发送的 DDC 命令无效；
+      // 必须由当前正点亮该屏的对端机器（活动信号源）协同下发切换命令，两端同时下发，100% 确保全部显示器切到位。
+      sendToAny({ type: 'switch-target', target });
+
       // 本机直接切自己接线能碰到的每一块屏（DDC 走视频线，与当前画面在哪台无关）
       if (hadPlan && typeof h.onSwitchRequest === 'function') {
         try {
@@ -233,13 +238,7 @@ function createPeer(userConfig, hooks) {
           result = 'failed';
         }
       }
-      // 有几块屏本机够不着（没接这根线 / 本机 DDC 不可用 / 部分切屏失败）时，请对端补一刀：
-      // 对端同样只切它自己连着的屏，用的是它自己的接口配置，不做 index/名字换算
-      const partialFail = detail && (detail.partial || detail.ok === false);
-      const blind = (plan.unreachable > 0 && plan.total > 0) || partialFail || (plan.skipped > 0);
-      if (blind && sendToAny({ type: 'switch-target', target })) {
-        if (result !== 'sent') result = 'relayed';
-      }
+      if (result !== 'sent') result = 'relayed';
       if (!hadPlan && result === 'skipped') result = 'no-input';
       else if (hadPlan && result === 'skipped') result = 'screen-kept';
     } else {
@@ -513,6 +512,15 @@ function createPeer(userConfig, hooks) {
           .catch(() => {});
       }
     }
+    else if (msg.type === 'switch-monitor') {
+      const t = msg.target;
+      const monName = msg.name;
+      if (!t || !monName) return;
+      autoLockUntil = Date.now() + 1500;
+      if (typeof h.onSwitchMonitorRequest === 'function') {
+        h.onSwitchMonitorRequest({ name: monName, target: t });
+      }
+    }
     else if (msg.type === 'ddc') {
       // 对端请求本机执行 DDC 切换（本机才是当前画面输出方）
       // index 有值表示只切某台显示器；input 是对象表示按显示器下发计划
@@ -724,6 +732,8 @@ function createPeer(userConfig, hooks) {
     getCaptureError: () => captureError,
     /** 让指定对端执行一次 DDC（单台显示器切换时用） */
     relayDdc: (target, payload) => sendTo(target, { type: 'ddc', ...payload }),
+    /** 请求对端协同切换单块显示器 */
+    sendMonitorSwitch: (name, target) => sendToAny({ type: 'switch-monitor', name, target }),
     /** 手动切换后暂停自动穿越：避免鼠标一动就把画面又弹回去（切换优先） */
     pauseAutoSwitch: (ms) => {
       const v = Number(ms);

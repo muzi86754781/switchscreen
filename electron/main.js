@@ -335,6 +335,9 @@ async function doSwitchMonitor(monitorId, explicitTarget) {
     index: plan.index
   });
   if (r && r.ok) onSwitchDone();
+  if (peer && typeof peer.sendMonitorSwitch === 'function') {
+    peer.sendMonitorSwitch(plan.name, plan.target);
+  }
   confirmSwitchHint(1800, { publish: true });
   broadcastState();
   return { ok: !!(r && r.ok), error: (r && r.error) || '' };
@@ -789,6 +792,9 @@ app.whenReady().then(() => {
           onSwitchDone();
           return r;
         }).catch(() => ({ ok: false }));
+      },
+      onSwitchMonitorRequest: (info) => {
+        Promise.resolve(services.onRemoteSwitchMonitor(info)).catch(() => {});
       },
       onFileUpdate: (list) => { services.onFileUpdate(list); broadcastStateThrottled(); },
       // 收到文件前询问：接收 / 取消
