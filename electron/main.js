@@ -962,7 +962,14 @@ app.whenReady().then(() => {
   try {
     peer = createPeer(services.cfg, {
       onPeers: (list) => { services.onPeers(list); registerHotkeys(); broadcastState(); },
-      onActive: (t) => { services.onActive(t); broadcastState(); },
+      onActive: (t) => {
+        services.onActive(t);
+        broadcastState();
+        if (services.cfg.ui && services.cfg.ui.inputMaster) {
+          const info = services.deviceInfo(t);
+          showOsdNotice(info.name, t === services.cfg.peerName);
+        }
+      },
       onSwitch: (info) => { services.onSwitch(info); broadcastState(); },
       // 每块屏的接口由服务层算，peer 只负责执行与状态同步
       getSwitchPlan: (target) => services.buildSwitchPlan(target),

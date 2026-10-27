@@ -131,7 +131,7 @@ function bindCaptureOnce() {
   on('keyup', handleKey(true));
 
   /* ---- 鼠标 ---- */
-  on('mousemove', (e) => {
+  const handleMove = (e) => {
     if (!live()) return;
     const o = O();
     const cfg = o.getOptions();
@@ -195,7 +195,10 @@ function bindCaptureOnce() {
         ny: Math.max(0, Math.min(1, (y - scr.y) / Math.max(1, scr.height)))
       });
     }
-  });
+  };
+  on('mousemove', handleMove);
+  on('mousedrag', handleMove);
+  on('drag', handleMove);
 
   const btnName = (b) => (b === 2 ? 'right' : b === 3 ? 'middle' : 'left');
   on('mousedown', (e) => {
@@ -355,12 +358,21 @@ function createInjector() {
     try { ensureRobot().moveMouse(c.x, c.y); } catch { /* ignore */ }
   }
 
+  const pressedButtons = new Set();
+
   function move(dx, dy) {
     const c = ensure();
     c.x += Number(dx) || 0;
     c.y += Number(dy) || 0;
     clamp();
-    try { ensureRobot().moveMouse(c.x, c.y); } catch { /* ignore */ }
+    try {
+      const rb = ensureRobot();
+      if (pressedButtons.has('left') && typeof rb.dragMouse === 'function') {
+        rb.dragMouse(c.x, c.y);
+      } else {
+        rb.moveMouse(c.x, c.y);
+      }
+    } catch { /* ignore */ }
   }
 
   function wheel(dx, dy) {
@@ -378,11 +390,16 @@ function createInjector() {
 
   function button(btn, down) {
     const b = btn === 'right' ? 'right' : btn === 'middle' ? 'middle' : 'left';
+    if (down) pressedButtons.add(b); else pressedButtons.delete(b);
     try { ensureRobot().mouseToggle(down ? 'down' : 'up', b); } catch { /* ignore */ }
   }
 
-  /** 释放所有还按着的修饰键，避免切换后卡住 Shift / ⌘ */
+  /** 释放所有还按着的修饰键与鼠标按键，避免切换后卡住 Shift / ⌘ 或鼠标按键 */
   function releaseAll() {
+    for (const b of pressedButtons) {
+      try { ensureRobot().mouseToggle('up', b); } catch { /* ignore */ }
+    }
+    pressedButtons.clear();
     for (const m of pressed) {
       try { ensureRobot().keyToggle(toRobot(m), 'up'); } catch { /* ignore */ }
     }

@@ -2381,8 +2381,9 @@ async function cycleInputDevice() {
   }
 
   const masterInfo = deviceInfo(masterId);
-  const otherPeers = peersNow.map((p) => p.name).filter((n) => n !== masterId);
-  const candidates = [masterId, ...otherPeers];
+  // 关键修复：参与控制权流转的所有设备 = 主控端 + 本机 + 所有在线对端（去重）
+  const allDevs = [masterId, cfg.peerName, ...peersNow.map((p) => p.name)];
+  const candidates = [...new Set(allDevs)].filter(Boolean);
 
   if (candidates.length <= 1) {
     pushStatus('局域网未发现其他在线设备，无法切换控制权', 'warn');
@@ -2392,7 +2393,8 @@ async function cycleInputDevice() {
   // 当前键鼠控制权正落在哪个设备上（默认在主控端本地）
   const curTarget = activeTarget || masterId;
   const curIdx = candidates.indexOf(curTarget);
-  const nextTarget = candidates[(curIdx + 1) % candidates.length] || masterId;
+  const safeIdx = curIdx >= 0 ? curIdx : candidates.indexOf(masterId);
+  const nextTarget = candidates[(safeIdx + 1) % candidates.length] || masterId;
   const nextInfo = deviceInfo(nextTarget);
 
   await peer.switchInputTo(nextTarget);
