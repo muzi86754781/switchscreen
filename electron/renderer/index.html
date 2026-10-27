@@ -191,25 +191,6 @@
             </div>
           </div>
 
-          <!-- 快捷键切换键鼠（极度实用、零误触） -->
-          <div class="card">
-            <div class="card-label">
-              <span>快捷键切换键鼠控制权</span>
-              <span class="card-note">推荐使用 · 纯按键移交 · 屏幕居中 OSD 悬浮提示</span>
-            </div>
-            <div class="hk-row" style="margin-top: 6px;">
-              <span class="hk-name" style="font-weight: 600;">切换到下一台设备</span>
-              <div class="hk-recorder-group">
-                <button type="button" class="hk-record-btn" id="hotkeyInputCycleBtn" title="点击后直接按下键盘快捷键进行自定义">
-                  <span class="hk-key-text">Alt + Q</span>
-                </button>
-                <button type="button" class="hk-clear-btn" id="hotkeyInputCycleClear" title="清除快捷键">✕</button>
-              </div>
-              <button type="button" class="btn btn-ghost" id="testCycleInputBtn" style="margin-left: 8px;">立即测试切换</button>
-            </div>
-            <div class="hk-tip">点击按键框即可直接按下键盘自定义（例如 Alt+Q、Ctrl+~、F10 等，按 Esc 取消，点 ✕ 清除）。按下时屏幕正上方将弹出半透明悬浮窗提示当前控制权！快捷键切换零误触，不闪烁屏幕，极速流转。</div>
-          </div>
-
           <!-- 模式选择卡片组 -->
           <div class="card">
             <div class="card-label">
@@ -219,6 +200,25 @@
             <div class="input-master-list" id="inputMasterList">
               <!-- 动态渲染：各用各的键鼠 / 共用设备1键鼠 / 共用设备2键鼠... -->
             </div>
+          </div>
+
+          <!-- 快捷键切换键鼠控制权（仅在共用模式下生效） -->
+          <div class="card" id="hotkeyCycleCard">
+            <div class="card-label">
+              <span>快捷键切换键鼠控制权</span>
+              <span class="card-note">共用模式下生效 · 屏幕居中 OSD 悬浮提示</span>
+            </div>
+            <div class="hk-row" style="margin-top: 6px;">
+              <span class="hk-name" style="font-weight: 600;">控制权切换快捷键</span>
+              <div class="hk-recorder-group">
+                <button type="button" class="hk-record-btn" id="hotkeyInputCycleBtn" title="点击后直接按下键盘快捷键进行自定义">
+                  <span class="hk-key-text">Alt + Q</span>
+                </button>
+                <button type="button" class="hk-clear-btn" id="hotkeyInputCycleClear" title="清除快捷键">✕</button>
+              </div>
+              <button type="button" class="btn btn-ghost" id="testCycleInputBtn" style="margin-left: 8px;">立即测试切换</button>
+            </div>
+            <div class="hk-tip" id="hotkeyInputCycleTip">点击按键框即可直接按下键盘自定义（例如 Alt+Q、Ctrl+~、F10 等）。在共用模式下按此键即可让主力键鼠在两台电脑之间秒级切换使用！</div>
           </div>
         </div>
       </section>

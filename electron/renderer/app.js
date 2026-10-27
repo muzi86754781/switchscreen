@@ -361,6 +361,15 @@ function renderInput(s) {
     hkBtn.classList.toggle('has-value', !!label);
     if (hkClear) hkClear.style.visibility = label ? 'visible' : 'hidden';
   }
+
+  const tipEl = $('#hotkeyInputCycleTip');
+  if (tipEl) {
+    if (!input.sharing) {
+      tipEl.textContent = '提示：当前为各用各的键鼠模式，每台电脑独立使用各自物理键鼠，无需切换控制权。在上方选中共用某台电脑键鼠后，按此快捷键即可在两台电脑间流转切换使用。';
+    } else {
+      tipEl.textContent = `提示：当前正在共用「${input.masterName || '主控电脑'}」的物理键鼠。按下快捷键即可在两台电脑之间秒级交接控制权，屏幕正上方将弹出浮窗提示！`;
+    }
+  }
 }
 
 /* ---------------- 设备与显示器 ---------------- */

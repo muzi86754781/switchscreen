@@ -258,16 +258,22 @@ function createOsdWindow() {
   <body>
     <div class="osd-pill">
       <span class="icon">🖱️</span>
-      <span class="text">键鼠已切至：<span class="name" id="name">--</span></span>
+      <span class="text" id="osdText">键鼠控制权：<span class="name" id="name">--</span></span>
       <span class="tag" id="tag" style="display:none;">本机</span>
     </div>
     <script>
       const { ipcRenderer } = require('electron');
-      ipcRenderer.on('show-osd', (_e, { name, local }) => {
-        document.getElementById('name').textContent = name || '电脑';
+      ipcRenderer.on('show-osd', (_e, { name, local, notice }) => {
+        const textEl = document.getElementById('osdText');
         const tag = document.getElementById('tag');
-        if (local) tag.style.display = 'inline-block';
-        else tag.style.display = 'none';
+        if (notice) {
+          textEl.textContent = notice;
+          tag.style.display = 'none';
+        } else {
+          textEl.innerHTML = '键鼠控制权：<span class="name">' + (name || '电脑') + '</span>';
+          if (local) tag.style.display = 'inline-block';
+          else tag.style.display = 'none';
+        }
       });
     </script>
   </body>
@@ -277,10 +283,10 @@ function createOsdWindow() {
   return osdWin;
 }
 
-function showOsdNotice(name, local) {
+function showOsdNotice(name, local, notice) {
   try {
     const ow = createOsdWindow();
-    ow.webContents.send('show-osd', { name, local });
+    ow.webContents.send('show-osd', { name, local, notice });
     ow.showInactive();
     if (osdTimer) clearTimeout(osdTimer);
     osdTimer = setTimeout(() => {
@@ -296,7 +302,7 @@ async function doCycleInput() {
   const result = await services.cycleInputDevice();
   if (result) {
     broadcastState();
-    showOsdNotice(result.name, result.local);
+    showOsdNotice(result.name, result.local, result.notice);
   }
 }
 

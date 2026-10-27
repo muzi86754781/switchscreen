@@ -2365,30 +2365,40 @@ function setHotkey(kind, id, key) {
   persist();
 }
 
-/** 快捷键循环切换键鼠焦点到下一台在线设备（只交接控制权，不动显示器） */
+/**
+ * 快捷键切换键鼠控制权：
+ * 1. 若当前为「各用各的键鼠」，无需也不执行任何控制权切换；
+ * 2. 若当前为「共用某台电脑键鼠」，按下快捷键仅在主控设备与受控设备之间来回交接控制权，
+ *    绝对不改变谁是共用主控端（inputMaster 始终不变）。
+ */
 async function cycleInputDevice() {
   if (!peer) return null;
-  const list = arrangeOrder().filter((id) => id === cfg.peerName || peersNow.some((p) => p.name === id));
-  if (list.length <= 1) {
-    pushStatus('局域网未发现其他在线设备，无法切换键鼠', 'warn');
-    return { name: localLabel(), alone: true };
+
+  const masterId = (cfg.ui && cfg.ui.inputMaster) || '';
+  if (!masterId) {
+    pushStatus('当前为各用各的键鼠模式，无需切换控制权', 'info');
+    return { name: '各用各的键鼠', notice: '各用各的模式 · 无需切换控制权', alone: true };
   }
 
-  // 关键：用户在当前物理机按下快捷键，说明正在使用当前机器的物理键鼠！
-  // 若本机不是主控端，立即将本机激活为主控端并广播全网，启动本地全局键鼠捕获
-  if (!cfg.ui || cfg.ui.inputMaster !== cfg.peerName) {
-    setInputMaster(cfg.peerName, false, 1.0);
+  const masterInfo = deviceInfo(masterId);
+  const otherPeers = peersNow.map((p) => p.name).filter((n) => n !== masterId);
+  const candidates = [masterId, ...otherPeers];
+
+  if (candidates.length <= 1) {
+    pushStatus('局域网未发现其他在线设备，无法切换控制权', 'warn');
+    return { name: masterInfo.name, alone: true };
   }
 
-  const cur = activeTarget || cfg.peerName;
-  const idx = list.indexOf(cur);
-  const next = list[(idx + 1) % list.length] || cfg.peerName;
-  const info = deviceInfo(next);
+  // 当前键鼠控制权正落在哪个设备上（默认在主控端本地）
+  const curTarget = activeTarget || masterId;
+  const curIdx = candidates.indexOf(curTarget);
+  const nextTarget = candidates[(curIdx + 1) % candidates.length] || masterId;
+  const nextInfo = deviceInfo(nextTarget);
 
-  await peer.switchInputTo(next);
-  activeTarget = next;
-  pushStatus(`键鼠已切至「${info.name}」`, 'ok');
-  return { id: next, name: info.name, local: info.local };
+  await peer.switchInputTo(nextTarget);
+  activeTarget = nextTarget;
+  pushStatus(`键鼠控制权已切至「${nextInfo.name}」`, 'ok');
+  return { id: nextTarget, name: nextInfo.name, local: nextTarget === cfg.peerName };
 }
 
 /** 切换共用键鼠的主控端：'' 表示各用各的，masterId 表示由该设备作为主控 */
@@ -2403,6 +2413,10 @@ function setInputMaster(masterId, edgeSwitch, mouseSpeed) {
   cfg.shareInput = !!cleanMaster;
   cfg.isHost = cleanMaster === cfg.peerName;
   cfg.ui.inputMode = cleanMaster ? (cleanMaster === cfg.peerName ? 'local' : 'remote') : 'separate';
+  
+  // 选定共用主控端后，控制权初始默认在该主控端本体
+  activeTarget = cleanMaster || cfg.peerName;
+
   persist();
   if (peer && typeof peer.setInputMaster === 'function') {
     peer.setInputMaster(cleanMaster, cfg.ui.edgeSwitch);
