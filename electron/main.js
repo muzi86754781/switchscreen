@@ -25,11 +25,16 @@ function createWindow() {
   const width = Math.min(1130, Math.max(960, wa.width - 60));
   const height = Math.min(920, Math.max(620, wa.height - 60));
 
+  const iconPng = path.join(__dirname, '..', 'build', 'icon.png');
+  const iconIco = path.join(__dirname, '..', 'build', 'icon.ico');
+  const appIcon = IS_WIN && fs.existsSync(iconIco) ? iconIco : iconPng;
+
   win = new BrowserWindow({
     width,
     height,
     minWidth: 960,
     minHeight: 620,
+    icon: appIcon,
     show: false,
     backgroundColor: '#12151f',
     title: '电脑切换',

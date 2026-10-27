@@ -793,6 +793,9 @@ function ownerOf(m) {
   return '';
 }
 
+// 防重复切换锁：记录每块屏最近切换的目标设备与时间戳，防止短时间连续下发相同指令引起显示器二次黑屏
+const recentSwitchLock = new Map();
+
 /**
  * 刚切成功：直接把缓存里的「当前输入源」改成写进去的值。
  * 不用等下一次重扫（1~1.5 秒），界面立刻就是对的；重扫时再以 DDC 实测为准。
@@ -805,6 +808,7 @@ function applySwitched(targetId, m, value) {
   if (targetId) {
     if (!cfg.ui.ownerMap) cfg.ui.ownerMap = {};
     cfg.ui.ownerMap[portKey(m)] = targetId;
+    recentSwitchLock.set(portKey(m), { target: targetId, at: Date.now() });
     // 本机亲手切成功的，同样钉一会儿：这次写完之后显示器要重新同步信号，
     // 马上回读会拿到切换前的旧值，不能让它推翻刚确认的归属
     pinSettle([{ key: portKey(m), owner: targetId }]);
@@ -1480,6 +1484,9 @@ function buildSwitchPlan(targetId) {
     // 若当前归属还是别的设备（比如在另一台显示中，残存旧读数），绝不能跳过！
     const cur = trustedInput(m);
     if (cur && sameInput(cur, value) && ownerOf(m) === targetId) { already += 1; continue; }
+    // 防重复切换抖动：同一块屏若在 4 秒内刚刚切到过该目标设备，绝不再写第二次（避免亮屏后又黑屏再亮屏）
+    const recent = recentSwitchLock.get(portKey(m));
+    if (recent && recent.target === targetId && Date.now() - recent.at < 4500) { already += 1; continue; }
     if (!label) label = labelForInput(value);
     map[m.index] = value;
     monitors.push({ name: m.name, index: m.index, value, label: labelForInput(value) });

@@ -387,6 +387,9 @@ async function setInput(index, hexValue) {
   return { ok: false, via: 'none', error: `不支持的平台：${process.platform}` };
 }
 
+const hardwareDdcCache = new Map();
+let lastWinApplyAll = { target: '', time: 0 };
+
 /**
  * 把所有检测到的显示器一起切到目标输入源。
  *
@@ -401,11 +404,16 @@ async function setInputAll(target, opts) {
   const o = opts || {};
   const isMap = target && typeof target === 'object';
 
-  // Windows 的统一接口不需要先枚举：直接告诉脚本「所有屏」，这样
-  // 中途有显示器增减也不会切错屏，还省掉一次 PowerShell 启动
+  // Windows 的统一接口不需要先枚举：直接告诉脚本「所有屏」
   if (IS_WIN && !isMap && target) {
+    if (lastWinApplyAll.target === target && Date.now() - lastWinApplyAll.time < 4500) {
+      return { ok: true, total: 1, success: 1, via: 'dxva2', skippedRepeat: true };
+    }
     const all = await winApplyAll(target);
-    if (all.total > 0) return all;
+    if (all.total > 0) {
+      lastWinApplyAll = { target, time: Date.now() };
+      return all;
+    }
   }
 
   const l = await listDisplays();
@@ -421,6 +429,13 @@ async function setInputAll(target, opts) {
     if (IS_MAC && /built-?in|内建|color lcd/i.test(d.name || '')) continue;
     let v = isMap ? (target[d.index] || target[`ddc:${d.index}`]) : target;
     if (!v) continue;
+    // 硬件防重复过滤：同一块显示器 4.5 秒内写入过相同目标输入源，绝不再次写入（杜绝黑屏两次）
+    const key = `${d.index}|${d.name || ''}`;
+    const last = hardwareDdcCache.get(key);
+    if (last && last.hexValue === v && Date.now() - last.time < 4500) {
+      continue;
+    }
+    hardwareDdcCache.set(key, { hexValue: v, time: Date.now() });
     plan.push({ index: d.index, name: d.name, value: v });
   }
   if (!plan.length) {
