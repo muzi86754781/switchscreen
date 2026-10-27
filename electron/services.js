@@ -552,11 +552,21 @@ function importPorts(list) {
   if (!Array.isArray(list)) return 0;
   let n = 0;
   const hasAny = list.length > 0;
+  const extMonitors = monitorsCache.filter((x) => !x.internal);
+  const extList = list.filter((x) => x && !INTERNAL_LABEL.test(x.name || ''));
+
   for (const it of list) {
     const key = normName(it && it.name);
     if (!key || !it.ports) continue;
-    const m = monitorsCache.find((x) => !x.internal && normName(x.name) && (
-      normName(x.name) === key || normName(x.name).includes(key) || key.includes(normName(x.name))));
+    let m = extMonitors.find((x) => modelNameHit(x.name, it.name));
+    if (!m) {
+      m = extMonitors.find((x) => normName(x.name) && (
+        normName(x.name) === key || normName(x.name).includes(key) || key.includes(normName(x.name))));
+    }
+    if (!m && extMonitors.length === extList.length) {
+      const idx = extList.indexOf(it);
+      if (idx >= 0 && extMonitors[idx]) m = extMonitors[idx];
+    }
     if (!m) continue;
     if (!cfg.ui.portMap) cfg.ui.portMap = {};
     const mk = portKey(m);
@@ -607,7 +617,7 @@ function importPorts(list) {
       if (!key) continue;
       const devs = new Set();
       for (const [k, set] of remote) {
-        if (k === key || k.includes(key) || key.includes(k)) for (const d of set) devs.add(d);
+        if (k === key || k.includes(key) || key.includes(k) || modelNameHit(k, key)) for (const d of set) devs.add(d);
       }
       const mk = portKey(m);
       const t = cfg.ui.portMap[mk] || {};
@@ -1465,9 +1475,11 @@ function buildSwitchPlan(targetId) {
     const value = portFor(m.id, targetId);
     if (!value) { skipped += 1; missing.push({ id: m.id, name: m.name }); continue; }
     // 这块屏已经切在目标口上了：别再写一次 —— 每写一次显示器都要重新同步信号
-    // （就是那 1~3 秒黑屏），本来就已经对的屏不该跟着再黑一遍
+    // （就是那 1~3 秒黑屏），本来就已经对的屏不该跟着再黑一遍。
+    // 注意：必须是这块屏此刻确实属于目标设备（ownerOf(m) === targetId）才算真正显示中；
+    // 若当前归属还是别的设备（比如在另一台显示中，残存旧读数），绝不能跳过！
     const cur = trustedInput(m);
-    if (cur && sameInput(cur, value)) { already += 1; continue; }
+    if (cur && sameInput(cur, value) && ownerOf(m) === targetId) { already += 1; continue; }
     if (!label) label = labelForInput(value);
     map[m.index] = value;
     monitors.push({ name: m.name, index: m.index, value, label: labelForInput(value) });
@@ -1773,12 +1785,17 @@ async function detectMonitors() {
       const aligned = friendly.length === ddcList.length;
       list = ddcList.map((d, i) => {
         let f = d.hwid ? (byHwid.get(d.hwid) || null) : null;
+        if (!f && d.name) {
+          f = friendly.find((item) => modelNameHit(item.name, d.name) || (item.serial && d.serial && item.serial === d.serial));
+        }
         if (!f && aligned) f = friendly[i];
+        const isGeneric = (n) => !n || /^显示器\s*\d*$/i.test(String(n).trim());
+        const bestName = (!isGeneric(d.name) ? d.name : (f && !isGeneric(f.name) ? f.name : (d.name || (f && f.name) || `显示器 ${d.index}`)));
         return {
           id: `ddc:${d.index}`,
           index: d.index,
-          name: (f && f.name) || d.name || `显示器 ${d.index + 1}`,
-          serial: (f && f.serial) || '',
+          name: bestName,
+          serial: (f && f.serial) || d.serial || '',
           size: (f && f.size) || '',
           currentInput: d.currentInput || '',
           currentInputLabel: d.currentInputLabel || ''
@@ -2005,16 +2022,23 @@ function getState() {
 
     // 为有内建屏的设备添加专属内建屏（排在最左侧体现相对位置）
     const devMonitors = sharedMonitors.slice();
+    const extWithPos = sharedMonitors.filter((m) => m.pos);
+    const minExtX = extWithPos.length ? Math.min(...extWithPos.map((m) => m.pos.x)) : 0;
+
     if (isThisLocal) {
       const localInternal = rows.find((m) => m.internal);
       if (localInternal) {
+        let intPos = localInternal.pos || null;
+        if (sharedMonitors.length && (!intPos || intPos.x >= minExtX)) {
+          intPos = { x: minExtX - 2040, y: 0, width: 1920, height: 1200 };
+        }
         devMonitors.unshift({
           id: localInternal.id,
           name: localInternal.name,
           internal: true,
           present: true,
-          pos: localInternal.pos || null,
-          letter: letterMap.get(localInternal.id) || 'E',
+          pos: intPos,
+          letter: '内',
           port: '内建',
           hasPort: false,
           here: selfAwake,
@@ -2024,11 +2048,11 @@ function getState() {
     } else {
       const remInt = remoteInternals.get(id);
       if (remInt) {
-        let relPos = remInt.pos;
-        if (!relPos && sharedMonitors.length) {
-          const minX = Math.min(...sharedMonitors.filter((m) => m.pos).map((m) => m.pos.x), 0);
-          relPos = { x: minX - 1980, y: 0, width: 1920, height: 1200 };
-        }
+        // 远端内建屏坐标系是远端自有的，绝不能与本机外接屏的坐标系混同（否则 x: 0 必与外接屏重叠）
+        // 严格定位在所有外接屏的最左侧
+        const intWidth = (remInt.pos && remInt.pos.width) || 1920;
+        const intHeight = (remInt.pos && remInt.pos.height) || 1200;
+        const relPos = { x: minExtX - intWidth - 100, y: 0, width: intWidth, height: intHeight };
         devMonitors.unshift({
           id: `remote-int:${id}`,
           name: remInt.name || '内建视网膜显示器',

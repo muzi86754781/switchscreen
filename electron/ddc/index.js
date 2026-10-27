@@ -306,12 +306,16 @@ function sameName(a, b) {
   const x = String(a || '').toLowerCase().replace(/[\s\-_()（）]/g, '');
   const y = String(b || '').toLowerCase().replace(/[\s\-_()（）]/g, '');
   if (!x || !y) return false;
-  return x === y || x.includes(y) || y.includes(x);
+  if (x === y || x.includes(y) || y.includes(x)) return true;
+  const tx = (String(a || '').toLowerCase().match(/[a-z0-9]{4,}/g) || []).filter((t) => !/^(dell|generic|monitor|display|screen|color|colour|pnpmonitor)$/i.test(t));
+  const ty = (String(b || '').toLowerCase().match(/[a-z0-9]{4,}/g) || []).filter((t) => !/^(dell|generic|monitor|display|screen|color|colour|pnpmonitor)$/i.test(t));
+  return tx.some((t) => ty.includes(t));
 }
 
 /**
- * macOS 上「切走一台后序号整体前移」，所以每次都重新枚举、按名字定位；
- * 写失败或写完还在列表里（没走）就再试一轮。
+ * macOS 上「切走一台后序号整体前移」：
+ * 第一轮（所有显示器还在）直接按初始序号快速下发，避免中间重枚举超时导致第二块屏切不走；
+ * 失败或重试轮次再重新枚举、按名字定位，若只剩 1 块屏则对准当前仅剩的序号。
  */
 async function macSetAll(plan, names) {
   const label = (p) => (names && names[p.index]) || p.name || '';
@@ -320,27 +324,46 @@ async function macSetAll(plan, names) {
   const seen = new Set();
 
   for (let round = 0; round < 3 && queue.length; round++) {
-    if (round) await new Promise((r) => setTimeout(r, 500));
+    if (round) await new Promise((r) => setTimeout(r, 600));
     const next = [];
-    for (const item of queue) {
-      let idx = null;
+
+    // 第一轮显示器都在，直接按计划里的 index 连续快速下发
+    if (round === 0) {
+      for (const item of queue) {
+        const r = await macSet(item.index, item.value);
+        if (r.ok) {
+          if (!seen.has(item.name)) { seen.add(item.name); results.push({ index: item.index, name: item.name, ...r }); }
+        } else {
+          next.push(item);
+        }
+      }
+    } else {
+      // 重试轮次：重新枚举当前还在的显示器列表
+      let list = [];
       try {
         const fresh = await macList();
-        const list = fresh.displays || [];
-        const hit = list.find((d) => sameName(d.name, item.name));
-        if (hit) idx = hit.index;
+        list = fresh.displays || [];
       } catch { /* ignore */ }
-      if (idx === null) {
-        // 名字匹配不到：退回原来的序号
-        idx = item.index;
-      }
-      const r = await macSet(idx, item.value);
-      if (r.ok) {
-        if (!seen.has(item.name)) { seen.add(item.name); results.push({ index: idx, name: item.name, ...r }); }
-      } else if (round === 2 || item.name === '') {
-        if (!seen.has(item.name)) { seen.add(item.name); results.push({ index: idx, name: item.name, ...r }); }
-      } else {
-        next.push({ ...item, index: idx }); // 再试一次
+
+      for (const item of queue) {
+        let idx = null;
+        if (list.length === 1 && queue.length === 1) {
+          // 当前系统仅剩 1 块外接屏，且只剩 1 块待切：它就是第 1 块，绝不传失效的 2
+          idx = list[0].index;
+        } else if (list.length > 0) {
+          const hit = list.find((d) => sameName(d.name, item.name));
+          if (hit) idx = hit.index;
+        }
+        if (idx === null) idx = (list.length === 1 ? list[0].index : item.index);
+
+        const r = await macSet(idx, item.value);
+        if (r.ok) {
+          if (!seen.has(item.name)) { seen.add(item.name); results.push({ index: idx, name: item.name, ...r }); }
+        } else if (round === 2) {
+          if (!seen.has(item.name)) { seen.add(item.name); results.push({ index: idx, name: item.name, ...r }); }
+        } else {
+          next.push({ ...item, index: idx });
+        }
       }
     }
     queue = next;
@@ -394,8 +417,8 @@ async function setInputAll(target, opts) {
 
   const plan = [];
   for (const d of list) {
-    // Mac 自带屏没有 DDC，跟着一起切只会每次都报「部分失败」
-    if (IS_MAC && !isMap && /built-?in|内建|color lcd/i.test(d.name || '')) continue;
+    // Mac 自带屏没有 DDC，绝不参与切屏
+    if (IS_MAC && /built-?in|内建|color lcd/i.test(d.name || '')) continue;
     let v = isMap ? (target[d.index] || target[`ddc:${d.index}`]) : target;
     if (!v) continue;
     plan.push({ index: d.index, name: d.name, value: v });

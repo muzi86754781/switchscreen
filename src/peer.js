@@ -233,9 +233,10 @@ function createPeer(userConfig, hooks) {
           result = 'failed';
         }
       }
-      // 有几块屏本机够不着（没接这根线 / 本机 DDC 不可用）时，请对端补一刀：
+      // 有几块屏本机够不着（没接这根线 / 本机 DDC 不可用 / 部分切屏失败）时，请对端补一刀：
       // 对端同样只切它自己连着的屏，用的是它自己的接口配置，不做 index/名字换算
-      const blind = plan.unreachable > 0 && plan.total > 0;
+      const partialFail = detail && (detail.partial || detail.ok === false);
+      const blind = (plan.unreachable > 0 && plan.total > 0) || partialFail || (plan.skipped > 0);
       if (blind && sendToAny({ type: 'switch-target', target })) {
         if (result !== 'sent') result = 'relayed';
       }

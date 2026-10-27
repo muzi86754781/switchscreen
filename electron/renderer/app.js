@@ -311,26 +311,27 @@ function buildChain(d, letters, color) {
   }
 
   const map = el('div', 'chain-map');
-  let minX = Infinity;
-  let vx = 0;
-  for (const m of items) {
+  const nonInternal = items.filter((m) => !m.internal);
+  let minExtX = Infinity;
+  let maxExtX = -Infinity;
+  for (const m of nonInternal) {
     if (m.pos) {
-      vx = Math.max(vx, m.pos.x + m.pos.width);
-      minX = Math.min(minX, m.pos.x);
+      minExtX = Math.min(minExtX, m.pos.x);
+      maxExtX = Math.max(maxExtX, m.pos.x + m.pos.width);
     }
   }
-  if (!Number.isFinite(minX)) minX = 0;
+  if (!Number.isFinite(minExtX)) { minExtX = 0; maxExtX = 1920; }
 
+  // 保证内建屏（无论本机还是远端上报）严格排在所有外接屏的最左边
   for (const m of items) {
-    if (!m.pos) {
-      if (m.internal) {
-        // 内建屏排在最左侧
-        m.pos = { x: minX - 1980, y: 0, width: 1920, height: 1200 };
-        minX -= 2040;
-      } else {
-        m.pos = { x: vx + 60, y: 0, width: 1920, height: 1080 };
-        vx += 2040;
-      }
+    if (m.internal) {
+      const w = (m.pos && m.pos.width) || 1920;
+      const h = (m.pos && m.pos.height) || 1200;
+      m.pos = { x: minExtX - w - 100, y: 0, width: w, height: h };
+      minExtX -= (w + 100);
+    } else if (!m.pos) {
+      m.pos = { x: maxExtX + 60, y: 0, width: 1920, height: 1080 };
+      maxExtX += 2040;
     }
   }
   for (const m of items) map.appendChild(buildTile(m, d, letters, color));
@@ -362,7 +363,7 @@ function buildTile(m, d, letters, color) {
 
   // 屏幕上写真实型号（DELL U2414H），字母留作快捷键对应的小角标
   const head = el('div', 'cm-head');
-  head.appendChild(el('span', 'cm-key', letters[m.id] || (m.internal ? '内' : '?')));
+  head.appendChild(el('span', 'cm-key', m.internal ? '内' : (letters[m.id] || '?')));
   head.appendChild(el('span', 'cm-name', m.name || (m.internal ? '内建显示器' : '显示器')));
   if (m.internal) {
     head.appendChild(el('span', 'cm-tag', '内建'));
@@ -405,6 +406,7 @@ function buildTile(m, d, letters, color) {
 /**
  * 把每块屏按 system 坐标摆到对应位置。
  * 面板宽度是自适应的，所以先量容器再算比例（窗口缩放时重算）。
+ * 加入物理像素防重叠推开（Collision Avoidance），彻底杜绝任何卡片重合现象。
  */
 function layoutChains() {
   const maps = document.querySelectorAll('.chain-map');
@@ -433,12 +435,24 @@ function layoutChains() {
     const tw = Math.max(1, maxX - minX);
     const th = Math.max(1, maxY - minY);
     const s = Math.min(W / tw, H / th);
-    const offY = Math.max(0, (H - th * s) / 2);
+    const GAP = 8;
+    const MIN_W = 124;
+
+    // 按物理坐标从左到右排序
+    geo.sort((a, b) => a.x - b.x);
+
+    let curLeft = 0;
     for (const g of geo) {
-      g.t.style.left = `${(g.x - minX) * s}px`;
-      g.t.style.top = `${(g.y - minY) * s + offY}px`;
-      g.t.style.width = `${g.w * s}px`;
-      g.t.style.height = `${g.h * s}px`;
+      let left = (g.x - minX) * s;
+      if (left < curLeft) left = curLeft;
+      const tileW = Math.max(MIN_W, g.w * s);
+      const tileH = Math.max(54, Math.min(H, g.h * s));
+      const offY = Math.max(0, (H - tileH) / 2);
+      g.t.style.left = `${left}px`;
+      g.t.style.top = `${offY}px`;
+      g.t.style.width = `${tileW}px`;
+      g.t.style.height = `${tileH}px`;
+      curLeft = left + tileW + GAP;
     }
   }
 }

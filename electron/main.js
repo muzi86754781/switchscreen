@@ -21,13 +21,14 @@ function createWindow() {
   // 适配小屏（13 寸 MacBook 工作区高度约 800）：窗口不超出可用区域
   let wa = { width: 1440, height: 900 };
   try { wa = screen.getPrimaryDisplay().workAreaSize; } catch { /* ignore */ }
-  const width = Math.min(940, Math.max(800, wa.width - 80));
+  // 软件窗口加宽 20%（800->960, 940->1130），让多屏排列有更充裕的展示空间
+  const width = Math.min(1130, Math.max(960, wa.width - 60));
   const height = Math.min(920, Math.max(620, wa.height - 60));
 
   win = new BrowserWindow({
     width,
     height,
-    minWidth: 800,
+    minWidth: 960,
     minHeight: 620,
     show: false,
     backgroundColor: '#12151f',
