@@ -78,9 +78,12 @@
               <span class="box"></span>
               <span class="check-text">登录时启动</span>
             </label>
-          </div>
 
-          <div class="status-block" id="switchStatus"></div>
+            <div class="hk-log-actions" style="margin-top: 10px; display: flex; gap: 8px; align-items: center;">
+              <button type="button" class="btn btn-ghost" id="openLogBtn" title="打开实时运行日志文件（排查切换或按键问题）" style="font-size: 12px; padding: 4px 10px;">📋 查看运行日志</button>
+              <button type="button" class="btn btn-ghost" id="openLogDirBtn" title="打开日志保存目录" style="font-size: 12px; padding: 4px 10px;">📁 打开日志目录</button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -204,11 +207,7 @@
 
           <!-- 快捷键切换键鼠控制权（仅在共用模式下生效） -->
           <div class="card" id="hotkeyCycleCard">
-            <div class="card-label">
-              <span>快捷键切换键鼠控制权</span>
-              <span class="card-note">共用模式下生效 · 屏幕居中 OSD 悬浮提示</span>
-            </div>
-            <div class="hk-row" style="margin-top: 6px;">
+            <div class="hk-row">
               <span class="hk-name" style="font-weight: 600;">控制权切换快捷键</span>
               <div class="hk-recorder-group">
                 <button type="button" class="hk-record-btn" id="hotkeyInputCycleBtn" title="点击后直接按下键盘快捷键进行自定义">
@@ -227,6 +226,7 @@
 
     <footer class="footer">
       <button class="link" id="helpBtn">使用说明 <span class="arrow">↗</span></button>
+      <button class="link" id="footLogBtn" style="margin-left: 14px;">运行日志</button>
       <span class="foot-ver" id="footVer"></span>
     </footer>
   </div>

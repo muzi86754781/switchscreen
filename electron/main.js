@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 
 const services = require('./services');
+const logger = require('./logger');
 const { createPeer } = require('../src/peer');
 
 const IS_MAC = process.platform === 'darwin';
@@ -14,6 +15,7 @@ let win = null;
 let tray = null;
 let peer = null;
 let registeredHotkey = '';
+const registeredGlobalShortcuts = new Set();
 let switching = false;
 
 /* ---------------- 窗口 ---------------- */
@@ -60,22 +62,24 @@ function createWindow() {
     const hk = services.cfg.ui.hotkeys || {};
     if (services.cfg.ui.hotkeyEnabled === false) return;
 
-    if (matchAccel(hk.global, input) && registeredHotkey !== hk.global) {
+    if (hk.global && matchAccel(hk.global, input) && !registeredGlobalShortcuts.has(normalizeKey(hk.global))) {
       e.preventDefault();
       doSwitchAll();
       return;
     }
-    if (hk.inputCycle && matchAccel(hk.inputCycle, input)) {
+    if (hk.inputCycle && matchAccel(hk.inputCycle, input) && !registeredGlobalShortcuts.has(normalizeKey(hk.inputCycle))) {
       e.preventDefault();
       doCycleInput();
       return;
     }
-    const monitors = services.monitorRows();
+    const monitors = services.allMonitors();
     for (const m of monitors) {
-      const key = (hk.monitor || {})[m.id];
-      if (key && matchAccel(key, input)) {
+      if (m.internal) continue;
+      const key = services.hotkeyForMonitor(m);
+      if (key && matchAccel(key, input) && !registeredGlobalShortcuts.has(normalizeKey(key))) {
         e.preventDefault();
-        doSwitchMonitor(m.id);
+        logger.info('HOTKEY', `In-window monitor shortcut pressed: ${key} -> ${m.name} (${m.key || m.id})`);
+        doSwitchMonitor(m.key || m.id);
         return;
       }
     }
@@ -94,9 +98,9 @@ function showWindow() {
 function trayMenu() {
   const cfg = services.cfg;
   const devices = services.getState().devices || [];
-  const monitorItems = (services.monitorRows() || []).map((m, i) => ({
-    label: `显示器 ${String.fromCharCode(65 + i)}（${m.name}）`,
-    click: () => doSwitchMonitor(m.id)
+  const monitorItems = (services.allMonitors() || []).filter((m) => !m.internal).map((m, i) => ({
+    label: `显示器 ${m.letter || String.fromCharCode(65 + i)}（${m.name}）${m.isOffline ? ' [对端]' : ''}`,
+    click: () => doSwitchMonitor(m.key || m.id)
   }));
   return Menu.buildFromTemplate([
     { label: `SwitchScreen · ${services.localLabel()}`, enabled: false },
@@ -308,79 +312,210 @@ async function doCycleInput() {
 
 /* ---------------- 全局快捷键 ---------------- */
 
-// 单按功能键（F1~F12）在不少系统上会被占用，注册失败时按这个顺序回退
-const HOTKEY_FALLBACKS = [
-  'F11', 'F10', 'F9', 'F8',
+// 快捷键冲突备选候选池
+const GLOBAL_HOTKEY_CANDIDATES = [
+  'F12', 'F11', 'F10', 'F9', 'F8', 'F7',
   'CommandOrControl+Shift+F12',
   'CommandOrControl+Alt+F12',
-  'CommandOrControl+Shift+Space'
+  'CommandOrControl+Shift+Space',
+  'Alt+Shift+S',
+  'CommandOrControl+Shift+S'
 ];
+
+const INPUT_CYCLE_CANDIDATES = [
+  'Alt+Q',
+  'Alt+`',
+  'Alt+Z',
+  'Alt+X',
+  'Alt+C',
+  'Alt+Space',
+  'CommandOrControl+Alt+Q',
+  'CommandOrControl+Shift+Q',
+  'CommandOrControl+`',
+  'Alt+W'
+];
+
+function buildMonitorCandidates(i) {
+  const num = (i % 9) + 1;
+  const char = String.fromCharCode(65 + (i % 26));
+  return [
+    `CommandOrControl+Alt+${num}`,
+    `Alt+${num}`,
+    `CommandOrControl+Shift+${num}`,
+    `Alt+Shift+${num}`,
+    `CommandOrControl+Alt+${char}`,
+    `Alt+${char}`,
+    `CommandOrControl+Shift+${char}`,
+    `Alt+Shift+${char}`,
+    `CommandOrControl+Alt+F${num}`,
+    `Alt+F${num}`
+  ];
+}
+
+function normalizeKey(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/\s+/g, '')
+    .split('+')
+    .map(p => {
+      const low = p.toLowerCase();
+      if (low === 'commandorcontrol' || low === 'cmdorctrl') {
+        return IS_MAC ? 'command' : 'control';
+      }
+      if (low === 'ctrl') return 'control';
+      if (low === 'cmd') return 'command';
+      if (low === 'opt' || low === 'option') return 'alt';
+      return low;
+    })
+    .sort()
+    .join('+');
+}
 
 function tryRegister(key, fn) {
   if (!key) return false;
-  try { return globalShortcut.register(key, fn); } catch { return false; }
+  try {
+    const ok = globalShortcut.register(key, fn);
+    logger.debug('HOTKEY', `globalShortcut.register "${key}": ${ok}`);
+    return ok;
+  } catch (e) {
+    logger.warn('HOTKEY', `globalShortcut.register "${key}" threw error: ${e.message}`);
+    return false;
+  }
 }
 
 /**
  * 注册全部快捷键：全局切换 + 键鼠切换 + 每块显示器各自一个。
- * 注册失败不会静默：要么回退到可用的键并写回配置，要么在状态栏说明。
+ * 若与系统或内部其它快捷键冲突，自动寻找不冲突的备选键并持久化更新。
  */
 function registerHotkeys() {
   try { globalShortcut.unregisterAll(); } catch { /* ignore */ }
   registeredHotkey = '';
+  registeredGlobalShortcuts.clear();
+  const usedKeys = new Set();
+
+  function tryRegisterCandidate(key, fn) {
+    if (!key) return false;
+    const norm = normalizeKey(key);
+    if (!norm || usedKeys.has(norm)) return false;
+    const ok = tryRegister(key, fn);
+    if (ok) {
+      usedKeys.add(norm);
+      registeredGlobalShortcuts.add(norm);
+      return true;
+    }
+    return false;
+  }
+
+  function pickAndRegister(primaryKey, fallbackCandidates, handler) {
+    const candidates = [];
+    const cleanPrimary = (primaryKey || '').trim();
+    if (cleanPrimary) candidates.push(cleanPrimary);
+    for (const cand of (fallbackCandidates || [])) {
+      if (!candidates.some(c => normalizeKey(c) === normalizeKey(cand))) {
+        candidates.push(cand);
+      }
+    }
+    for (const cand of candidates) {
+      if (tryRegisterCandidate(cand, handler)) {
+        const wasPrimary = (cleanPrimary && normalizeKey(cleanPrimary) === normalizeKey(cand));
+        return { key: cand, changed: !wasPrimary };
+      }
+    }
+    return { key: '', changed: false };
+  }
+
   const cfg = services.cfg;
-  if (cfg.ui.hotkeyEnabled === false) return;
+  if (cfg.ui.hotkeyEnabled === false) {
+    logger.info('HOTKEY', 'Hotkeys disabled in config');
+    return;
+  }
   if (!cfg.ui.hotkeys) cfg.ui.hotkeys = { global: 'F12', inputCycle: 'Alt+Q', monitor: {} };
 
-  const want = (cfg.ui.hotkeys.global || '').trim();
-  if (!want) {
-    // 全局切换键未设置或已关闭
-  } else if (tryRegister(want, () => doSwitchAll())) {
-    registeredHotkey = want;
+  let configChanged = false;
+
+  // 1. 全局切换快捷键
+  const wantGlobal = (cfg.ui.hotkeys.global || '').trim();
+  if (!wantGlobal) {
+    logger.info('HOTKEY', 'Global switch hotkey not configured or empty');
   } else {
-    // 注册失败：如果是默认的 F12，尝试备用键；如果是用户自定义的快捷键，不随意乱改用户配置，明确提示冲突
-    const isDefault = want === 'F12';
-    if (isDefault) {
-      let picked = '';
-      for (const alt of HOTKEY_FALLBACKS) {
-        if (alt === want) continue;
-        if (tryRegister(alt, () => doSwitchAll())) { picked = alt; break; }
-      }
-      if (picked) {
-        cfg.ui.hotkeys.global = picked;
-        cfg.ui.hotkeyKey = picked;
-        registeredHotkey = picked;
-        services.persist();
-        services.pushStatus(`${want} 被系统占用，全局切换已改用 ${picked}`, 'warn');
-      } else {
-        services.pushStatus(`全局切换键 ${want} 注册失败（可能被其它程序占用）`, 'warn');
+    const res = pickAndRegister(wantGlobal, GLOBAL_HOTKEY_CANDIDATES, () => {
+      logger.info('HOTKEY', `Global switch hotkey pressed: ${registeredHotkey}`);
+      doSwitchAll();
+    });
+    if (res.key) {
+      registeredHotkey = res.key;
+      logger.info('HOTKEY', `Registered global switch hotkey: ${res.key}`);
+      if (res.changed) {
+        cfg.ui.hotkeys.global = res.key;
+        cfg.ui.hotkeyKey = res.key;
+        configChanged = true;
+        logger.warn('HOTKEY', `Global switch hotkey ${wantGlobal} conflicted, auto-resolved to ${res.key}`);
+        services.pushStatus(`全局切换快捷键「${wantGlobal}」被系统占用，已自动调整为「${res.key}」`, 'warn');
       }
     } else {
-      services.pushStatus(`快捷键 ${want} 注册失败（可能已被系统或其它程序占用）`, 'warn');
+      logger.warn('HOTKEY', `All candidates for global switch hotkey failed`);
+      services.pushStatus(`全局切换快捷键「${wantGlobal}」注册失败（所有备选键均被占用）`, 'warn');
     }
   }
 
-  // 键鼠切换快捷键（在多台电脑间移交键鼠控制权，不动显示器）
-  const inputCycleKey = ((cfg.ui.hotkeys && cfg.ui.hotkeys.inputCycle) || '').trim();
-  if (inputCycleKey) {
-    if (!tryRegister(inputCycleKey, () => doCycleInput())) {
-      services.pushStatus(`键鼠切换快捷键 ${inputCycleKey} 注册失败（可能被占用）`, 'warn');
+  // 2. 键鼠切换快捷键（在多台电脑间移交键鼠控制权，不动显示器）
+  const wantInput = ((cfg.ui.hotkeys && cfg.ui.hotkeys.inputCycle) || '').trim();
+  if (wantInput) {
+    const res = pickAndRegister(wantInput, INPUT_CYCLE_CANDIDATES, () => {
+      logger.info('HOTKEY', `Input cycle hotkey pressed: ${cfg.ui.hotkeys.inputCycle}`);
+      doCycleInput();
+    });
+    if (res.key) {
+      logger.info('HOTKEY', `Registered input cycle hotkey: ${res.key}`);
+      if (res.changed) {
+        cfg.ui.hotkeys.inputCycle = res.key;
+        configChanged = true;
+        logger.warn('HOTKEY', `Input cycle hotkey ${wantInput} conflicted, auto-resolved to ${res.key}`);
+        services.pushStatus(`键鼠控制权快捷键「${wantInput}」被系统占用，已自动调整为「${res.key}」`, 'warn');
+      }
+    } else {
+      logger.warn('HOTKEY', `All candidates for input cycle hotkey failed`);
+      services.pushStatus(`键鼠控制权快捷键「${wantInput}」注册失败（所有备选键均被占用）`, 'warn');
     }
   }
 
-  const monitors = services.monitorRows();
+  // 3. 为所有显示器（活跃 + 离线）注册独立快捷键
+  const monitors = services.allMonitors();
   monitors.forEach((m, i) => {
-    const key = ((cfg.ui.hotkeys.monitor || {})[m.id] || '').trim();
-    if (!key) return;
-    const letter = String.fromCharCode(65 + i);
-    if (key === registeredHotkey) {
-      services.pushStatus(`显示器 ${letter} 的快捷键与全局切换重复，已忽略`, 'warn');
-      return;
-    }
-    if (!tryRegister(key, () => doSwitchMonitor(m.id))) {
-      services.pushStatus(`显示器 ${letter} 的快捷键 ${key} 注册失败（可能被占用）`, 'warn');
+    if (m.internal) return;
+    const wantKey = (services.hotkeyForMonitor(m) || '').trim();
+    if (!wantKey) return;
+    const letter = m.letter || String.fromCharCode(65 + i);
+    const targetKey = m.key || m.id;
+    const candidates = buildMonitorCandidates(i);
+
+    const res = pickAndRegister(wantKey, candidates, () => {
+      const activeKey = services.hotkeyForMonitor(m) || wantKey;
+      logger.info('HOTKEY', `Monitor hotkey pressed: ${activeKey} -> target display ${letter} (${m.name}, key=${targetKey})`);
+      doSwitchMonitor(targetKey);
+    });
+
+    if (res.key) {
+      logger.info('HOTKEY', `Registered monitor hotkey: ${res.key} -> display ${letter} (${m.name}, key=${targetKey})`);
+      if (res.changed) {
+        const stableKey = m.key || (services.screenKey ? services.screenKey(m) : '') || m.id;
+        if (!cfg.ui.hotkeys.monitor) cfg.ui.hotkeys.monitor = {};
+        cfg.ui.hotkeys.monitor[m.id] = res.key;
+        if (stableKey) cfg.ui.hotkeys.monitor[stableKey] = res.key;
+        configChanged = true;
+        logger.warn('HOTKEY', `Monitor ${letter} hotkey ${wantKey} conflicted, auto-resolved to ${res.key}`);
+        services.pushStatus(`显示器「${m.name || letter}」快捷键「${wantKey}」冲突，已自动调整为「${res.key}」`, 'warn');
+      }
+    } else {
+      logger.warn('HOTKEY', `Failed to register monitor hotkey for ${m.name}`);
+      services.pushStatus(`显示器 ${letter} 的快捷键 ${wantKey} 注册失败（所有备选键均被占用）`, 'warn');
     }
   });
+
+  if (configChanged) {
+    services.persist();
+    broadcastState();
+  }
 }
 
 function matchAccel(accel, input) {
@@ -432,6 +567,7 @@ function confirmSwitchHint(delay, opts) {
   rescanTimer = setTimeout(() => {
     rescanTimer = null;
     services.detectMonitors().then(() => {
+      registerHotkeys();
       broadcastState();
       if (publish && peer && typeof peer.sendAuthority === 'function') {
         peer.sendAuthority(services.publishAuthority());
@@ -439,7 +575,9 @@ function confirmSwitchHint(delay, opts) {
       if (peer && typeof peer.resendMeta === 'function') {
         peer.resendMeta();
       }
-    }).catch(() => {});
+    }).catch((e) => {
+      logger.warn('MAIN', `confirmSwitchHint detectMonitors error: ${e.message}`);
+    });
   }, typeof delay === 'number' ? delay : 1800);
 }
 
@@ -453,11 +591,13 @@ async function doSwitchAll(explicitTarget) {
   }
   const target = explicitTarget || services.nextDevice();
   const name = services.deviceInfo(target).name;
+  logger.info('SWITCH', `doSwitchAll start: target=${target} (${name})`);
   const plan0 = services.buildSwitchPlan(target);
   const missing = (plan0.missing || []).slice();
   // 所有屏都已经在这台设备上了：一次 DDC 都不写 ——
   // 写一次显示器就要重新同步信号（黑屏 1~3 秒），没必要让本来就对的屏再黑一遍
   if (!plan0.ok && !missing.length && plan0.already > 0) {
+    logger.info('SWITCH', `doSwitchAll: all monitors already showing ${name}`);
     services.pushStatus(`所有显示器都已经在显示 ${name} 了`, 'ok');
     broadcastState();
     return { ok: true, result: 'kept', target };
@@ -468,7 +608,9 @@ async function doSwitchAll(explicitTarget) {
   let result = 'failed';
   try {
     result = await peer.switchTo(target);
+    logger.info('SWITCH', `doSwitchAll peer.switchTo result: ${result}`);
   } catch (e) {
+    logger.error('SWITCH', `doSwitchAll error: ${e.message}`);
     services.pushStatus(`切换出错：${e.message}`, 'warn');
   } finally {
     switching = false;
@@ -499,37 +641,78 @@ async function autoProbePorts(target, missing) {
   }
 }
 
-/** 只切一块显示器：本机直接写这块屏的输入源（DDC 走视频线，与当前画面所属机器无关） */
+/** 只切一块显示器：若本机接线活动则本机下发，若在对端或非活动则请求对端协同切换 */
 async function doSwitchMonitor(monitorId, explicitTarget) {
+  logger.info('SWITCH', `doSwitchMonitor called: monitorId="${monitorId}", explicitTarget="${explicitTarget || 'auto'}"`);
   const plan = explicitTarget
     ? services.monitorSwitchPlan(monitorId, explicitTarget)
     : services.monitorCyclePlan(monitorId);
+
   if (!plan.ok) {
+    logger.warn('SWITCH', `doSwitchMonitor plan failed: ${plan.error}`);
     services.pushStatus(plan.error, 'warn');
     broadcastState();
     return { ok: false, error: plan.error };
   }
+
+  const targetName = (services.deviceInfo(plan.target) && services.deviceInfo(plan.target).name) || plan.target;
+  logger.info('SWITCH', `doSwitchMonitor plan: monitor="${plan.name}" (key=${plan.key}), curOwner="${plan.currentOwner}", target="${plan.target}" (${targetName}), port="${plan.value}" (${plan.label}), canLocalDdc=${plan.canLocalDdc}`);
+
   // 这块屏已经在该口上了：不写（每写一次都要重新同步信号 = 黑屏一下）
   if (plan.already) {
-    services.pushStatus(`「${plan.name || '这台显示器'}」已经在显示 ${services.deviceInfo(plan.target).name} 了`, 'ok');
+    logger.info('SWITCH', `Monitor "${plan.name}" is already showing ${targetName}`);
+    services.pushStatus(`「${plan.name || '这台显示器'}」已经在显示 ${targetName} 了`, 'ok');
     broadcastState();
     return { ok: true, already: true };
   }
-  // 只切这一块屏：本机直接写（DDC 走视频线，跟这块屏当前画面在哪台机器上无关）。
-  // 以前用「当前画面在哪台就转给那台」的做法，一旦两端 index / 名字对不上就会切错屏。
+
   if (peer && peer.pauseAutoSwitch) peer.pauseAutoSwitch(1500);
-  const r = await services.onSwitchRequest({
-    input: plan.value,
-    label: plan.label,
-    index: plan.index
-  });
-  if (r && r.ok) onSwitchDone();
-  if (peer && typeof peer.sendMonitorSwitch === 'function') {
-    peer.sendMonitorSwitch(plan.name, plan.target);
+
+  let localOk = false;
+  let localErr = '';
+
+  // 1. 如果本机能直接通过 DDC 下发，先尝试本机下发
+  if (plan.canLocalDdc && typeof plan.index === 'number') {
+    logger.info('SWITCH', `Executing local DDC for "${plan.name}" (index: ${plan.index}, value: ${plan.value})`);
+    try {
+      const r = await services.onSwitchRequest({
+        input: plan.value,
+        label: plan.label,
+        index: plan.index,
+        target: plan.target
+      });
+      localOk = !!(r && r.ok);
+      if (!localOk) localErr = (r && r.error) || '本地 DDC 执行失败';
+      logger.info('SWITCH', `Local DDC result: ok=${localOk}, error=${localErr}`);
+    } catch (e) {
+      localErr = e.message;
+      logger.error('SWITCH', `Local DDC exception: ${e.message}`);
+    }
+  } else {
+    logger.info('SWITCH', `Local DDC not applicable for "${plan.name}" (monitor is on remote device or offline locally)`);
   }
-  confirmSwitchHint(1800, { publish: true });
+
+  // 2. 协同保障：若对端在线，发送 switch-monitor 协同消息给对端
+  // 现实中很多显示器在非活动端口时屏蔽 DDC 通信，或者当前屏处于对端输出，由当前显示该屏的机器协同下发可确保 100% 生效
+  let peerSent = false;
+  if (peer && typeof peer.sendMonitorSwitch === 'function') {
+    logger.info('PEER', `Sending switch-monitor to peer: name="${plan.name}", key="${plan.key}", target="${plan.target}", port="${plan.value}"`);
+    peerSent = peer.sendMonitorSwitch(plan.name, plan.target, { key: plan.key, port: plan.value });
+  }
+
+  const success = localOk || peerSent;
+  if (success) {
+    onSwitchDone();
+    confirmSwitchHint(1800, { publish: true });
+    services.pushStatus(`已请求将「${plan.name}」切换到 ${targetName}`, 'ok');
+  } else {
+    const errMsg = localErr || '切换失败（本地无法访问该显示器且未连接到其它设备）';
+    logger.warn('SWITCH', errMsg);
+    services.pushStatus(errMsg, 'warn');
+  }
+
   broadcastState();
-  return { ok: !!(r && r.ok), error: (r && r.error) || '' };
+  return { ok: success, error: success ? '' : (localErr || '切换未生效') };
 }
 
 /* ---------------- IPC ---------------- */
@@ -657,14 +840,30 @@ function registerIpc() {
   });
 
   ipcMain.handle('switch:device', async (_e, deviceId) => {
+    logger.info('IPC', `ipc switch:device invoked: ${deviceId}`);
     const r = await doSwitchAll(deviceId);
     return { result: r, state: services.getState() };
   });
 
   ipcMain.handle('switch:monitor', async (_e, { monitorId, deviceId } = {}) => {
+    logger.info('IPC', `ipc switch:monitor invoked: monitorId=${monitorId}, deviceId=${deviceId}`);
     await doSwitchMonitor(monitorId, deviceId || '');
     return services.getState();
   });
+
+  /* ---------- 日志查看 ---------- */
+
+  ipcMain.handle('log:open', async () => {
+    logger.info('IPC', 'ipc log:open invoked');
+    return logger.openLogFile();
+  });
+
+  ipcMain.handle('log:open-dir', async () => {
+    logger.info('IPC', 'ipc log:open-dir invoked');
+    return logger.openLogDir();
+  });
+
+  ipcMain.handle('log:get-path', () => logger.getLogPath());
 
   /* ---------- 快捷键 ---------- */
 
@@ -1050,12 +1249,18 @@ app.whenReady().then(() => {
   }, 30000);
 
   const onDisplayChange = () => {
+    logger.info('MAIN', 'Display configuration changed (display-added/removed/metrics-changed)');
     try {
       services.refreshScreenLayout();
     } catch (e) {
       console.error('[electron] 刷新显示器布局失败:', e.message);
     }
-    broadcastState();
+    services.detectMonitors().then(() => {
+      registerHotkeys();
+      broadcastState();
+    }).catch((e) => {
+      logger.warn('MAIN', `onDisplayChange detect error: ${e.message}`);
+    });
   };
   try {
     screen.on('display-added', onDisplayChange);

@@ -311,9 +311,6 @@ function renderInput(s) {
   const sepMain = el('div', 'imc-main');
   const sepHead = el('div', 'imc-header');
   sepHead.appendChild(el('span', 'imc-title', '各用各的键鼠'));
-  if (!input.sharing) {
-    sepHead.appendChild(el('span', 'imc-badge is-active-badge', '当前生效'));
-  }
   sepMain.appendChild(sepHead);
   sepMain.appendChild(el('div', 'imc-desc', '每台电脑使用各自连接的键盘鼠标，互不影响'));
   sepCard.appendChild(sepMain);
@@ -337,7 +334,6 @@ function renderInput(s) {
     const head = el('div', 'imc-header');
     head.appendChild(el('span', 'imc-title', `共用 ${d.name} 键鼠`));
     if (d.local) head.appendChild(el('span', 'imc-badge is-local', '本机'));
-    if (isActive) head.appendChild(el('span', 'imc-badge is-active-badge', '当前主控'));
     main.appendChild(head);
 
     const desc = el('div', 'imc-desc', `使用 ${d.name} 的键鼠控制所有电脑，按快捷键自由切换`);
@@ -468,14 +464,15 @@ function buildTile(m, d, letters, color) {
 
   // 屏幕上写真实型号（DELL U2414H），字母留作快捷键对应的小角标
   const head = el('div', 'cm-head');
-  head.appendChild(el('span', 'cm-key', m.internal ? '内' : (letters[m.id] || '?')));
-  head.appendChild(el('span', 'cm-name', m.name || (m.internal ? '内建显示器' : '显示器')));
-  if (m.internal) {
-    head.appendChild(el('span', 'cm-tag', '内建'));
+  if (!m.internal) {
+    head.appendChild(el('span', 'cm-key', letters[m.id] || '?'));
   }
+  head.appendChild(el('span', 'cm-name', m.name || (m.internal ? '内建显示器' : '显示器')));
   node.appendChild(head);
 
   if (m.internal) {
+    const bottomTag = el('span', 'cm-tag is-internal-bottom', '内建');
+    node.appendChild(bottomTag);
     node.title = `${m.name}（笔记本自带屏，始终显示此电脑，不参与切换）`;
     return node;
   }
@@ -807,7 +804,7 @@ function chipItems(values) {
 
 function buildHotkeys(s) {
   const hk = s.hotkeys || { enabled: true, global: 'F12', monitor: {} };
-  const monitors = (s.monitors || []).filter((m) => !m.internal && m.present !== false);
+  const monitors = (s.monitors || []).filter((m) => !m.internal);
   const letters = monitorLetters(s);
 
   $('#hotkeyEnabled').checked = !!hk.enabled;
@@ -826,15 +823,17 @@ function buildHotkeys(s) {
   }
 
   const list = $('#hotkeyList');
-  const sig = monitors.map((m) => `${m.id}:${(hk.monitor || {})[m.id]}`).join(',');
+  const sig = monitors.map((m) => `${m.id}:${(hk.monitor || {})[m.id] || ''}`).join(',');
   if (list.dataset.sig !== sig) {
     list.dataset.sig = sig;
     list.innerHTML = '';
     for (const m of monitors) {
       const monKey = (hk.monitor || {})[m.id] || '';
       const row = el('div', 'hk-row');
+      const isOffline = m.present === false;
+      const letter = letters[m.id] || m.letter || '';
       row.appendChild(el('span', 'hk-name',
-        `${m.name || '显示器'}${monitors.filter((x) => x.name === m.name).length > 1 ? `（${letters[m.id]}）` : ''} 切换`));
+        `${m.name || '显示器'}${letter ? `（${letter}）` : ''}${isOffline ? ' [当前在对端]' : ''} 切换`));
 
       const group = el('div', 'hk-recorder-group');
       const btn = document.createElement('button');
@@ -941,11 +940,26 @@ function renderShare(s) {
   renderTransfers(s);
 }
 
+const activeTransferSeen = new Set();
+
 function renderTransfers(s) {
   const f = s.files || { transfers: [], recvDir: '' };
   const list = $('#txList');
   const transfers = f.transfers || [];
   $('#txSummary').textContent = transfers.length ? `最近 ${transfers.length} 条` : '';
+
+  // 当有正在进行或新发起的文件传输时，自动切换到「传输与剪贴板」选项卡
+  const activeTransfers = transfers.filter((t) => t.status === 'sending' || t.status === 'receiving' || t.status === 'waiting');
+  let hasNewActive = false;
+  for (const t of activeTransfers) {
+    if (!activeTransferSeen.has(t.id)) {
+      activeTransferSeen.add(t.id);
+      hasNewActive = true;
+    }
+  }
+  if (hasNewActive) {
+    switchTab('share');
+  }
 
   if (!transfers.length) {
     if (!list.querySelector('.empty')) list.innerHTML = '<div class="empty">还没有传输记录</div>';
@@ -1085,6 +1099,7 @@ function toast(text) {
 
 function renderStatus(s) {
   const block = $('#switchStatus');
+  if (!block) return;
   block.innerHTML = '';
   const lines = (s.statusLines || []).slice(0, 3);
   if (!lines.length) block.appendChild(el('span', '', '准备就绪'));
@@ -1172,6 +1187,13 @@ function bindSwitchPanel() {
   );
 
   $('#launchAtLogin').addEventListener('change', (e) => push(window.api.setLaunchAtLogin(e.target.checked)));
+
+  const openLog = () => { if (window.api && window.api.openLogFile) window.api.openLogFile(); };
+  const openLogDir = () => { if (window.api && window.api.openLogDir) window.api.openLogDir(); };
+  const btn1 = $('#openLogBtn');
+  if (btn1) btn1.addEventListener('click', openLog);
+  const btn2 = $('#openLogDirBtn');
+  if (btn2) btn2.addEventListener('click', openLogDir);
 }
 
 function bindSharePanel() {
@@ -1227,7 +1249,10 @@ function bindSharePanel() {
     e.preventDefault();
     over(false);
     const paths = Array.from(e.dataTransfer.files || []).map((f) => f.path).filter(Boolean);
-    if (paths.length) push(window.api.sendPaths(paths, targets()));
+    if (paths.length) {
+      switchTab('share');
+      push(window.api.sendPaths(paths, targets()));
+    }
   });
   window.addEventListener('dragover', (e) => e.preventDefault());
   window.addEventListener('drop', (e) => e.preventDefault());
@@ -1235,6 +1260,10 @@ function bindSharePanel() {
 
 function bindFooter() {
   $('#helpBtn').addEventListener('click', () => window.api.help());
+  const footLog = $('#footLogBtn');
+  if (footLog) footLog.addEventListener('click', () => {
+    if (window.api && window.api.openLogFile) window.api.openLogFile();
+  });
 }
 
 /* 顶部提示区：点击跳转到共用键鼠 Tab */

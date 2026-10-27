@@ -50,6 +50,9 @@ contextBridge.exposeInMainWorld('api', {
   showText: (payload) => ipcRenderer.invoke('text:show', payload),
 
   help: () => ipcRenderer.invoke('app:help'),
+  openLogFile: () => ipcRenderer.invoke('log:open'),
+  openLogDir: () => ipcRenderer.invoke('log:open-dir'),
+  getLogPath: () => ipcRenderer.invoke('log:get-path'),
   minimize: () => ipcRenderer.invoke('window:minimize'),
   closeWindow: () => ipcRenderer.invoke('window:close')
 });

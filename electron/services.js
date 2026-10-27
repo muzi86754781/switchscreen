@@ -19,6 +19,7 @@ const { app, systemPreferences, shell, screen } = require('electron');
 const { loadConfig, saveConfig } = require('../src/config');
 const { setScreenRect } = require('../src/input');
 const ddc = require('./ddc');
+const logger = require('./logger');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
@@ -317,10 +318,14 @@ function portKey(m) {
   return k;
 }
 
-/** 界面传来的 monitorId（可能是 ddc:N）→ 稳定键；离线行就沿用原值 */
+/** 界面传来的 monitorId（可能是 ddc:N、mem:...、sn:...）→ 稳定键；离线行也正确映射 */
 function portKeyOf(monitorId) {
-  const m = monitorsCache.find((x) => x.id === monitorId);
-  return m ? portKey(m) : monitorId;
+  if (!monitorId) return '';
+  const m = findMonitor(monitorId);
+  if (m) return portKey(m);
+  const alias = (cfg.ui && cfg.ui.portAlias && (cfg.ui.portAlias[monitorId] || cfg.ui.portAlias[String(monitorId).toLowerCase()])) || '';
+  if (alias) return alias;
+  return monitorId;
 }
 
 /** 记下「ddc:N 当时对应哪块屏」——老配置迁移时靠它认人，避免编号错位后错搬 */
@@ -1262,6 +1267,91 @@ function monitorRows() {
   });
 }
 
+/**
+ * 汇总当前所有显示器（活跃外接屏 + 活跃内建屏 + 离线记忆屏）。
+ * 保证界面卡片、快捷键列表、托盘菜单里的显示器代号（A/B/C...）完全一致。
+ */
+function allMonitors() {
+  const active = monitorRows();
+  const offline = offlineRows();
+  const all = active.concat(offline);
+  const letterMap = new Map();
+  let seq = 0;
+  for (const m of all) if (!m.internal) letterMap.set(m.id, String.fromCharCode(65 + (seq++ % 26)));
+  for (const m of all) if (m.internal) letterMap.set(m.id, '内');
+  return all.map((m) => ({
+    ...m,
+    letter: letterMap.get(m.id) || '?'
+  }));
+}
+
+/**
+ * 根据任意标识符（ddc:index、mem:...、sn:...、nm:...、序列号或型号名）
+ * 稳健查找对应的显示器对象，无论该显示器当前在活跃列表还是离线列表。
+ */
+function findMonitor(idOrKey) {
+  if (!idOrKey) return null;
+  const targetStr = String(idOrKey).trim();
+  const targetLower = targetStr.toLowerCase();
+
+  // 1. 优先从活跃的 monitorsCache 查找
+  let hit = monitorsCache.find((x) =>
+    x.id === targetStr ||
+    (x.key && x.key === targetStr) ||
+    screenKey(x) === targetStr ||
+    (x.serial && x.serial.toLowerCase() === targetLower)
+  );
+  if (hit) return { ...hit, isOffline: false, key: hit.key || screenKey(hit) };
+
+  // 2. 从离线记忆行 offlineRows() 查找
+  const off = offlineRows();
+  hit = off.find((x) =>
+    x.id === targetStr ||
+    x.key === targetStr ||
+    (x.key && x.key.toLowerCase() === targetLower) ||
+    (x.serial && x.serial.toLowerCase() === targetLower)
+  );
+  if (hit) return { ...hit, isOffline: true, key: hit.key || screenKey(hit) };
+
+  // 3. 查 portAlias 别名映射
+  const alias = (cfg.ui && cfg.ui.portAlias && (cfg.ui.portAlias[targetStr] || cfg.ui.portAlias[targetLower])) || '';
+  if (alias) {
+    hit = monitorsCache.find((x) => x.id === alias || screenKey(x) === alias || (x.key && x.key === alias));
+    if (hit) return { ...hit, isOffline: false, key: hit.key || screenKey(hit) };
+    hit = off.find((x) => x.id === alias || x.key === alias);
+    if (hit) return { ...hit, isOffline: true, key: hit.key || screenKey(hit) };
+  }
+
+  // 4. 按型号名模糊认领
+  const all = monitorRows().concat(off);
+  hit = all.find((x) => x.name && (modelNameHit(x.name, targetStr) || x.name.toLowerCase() === targetLower));
+  if (hit) {
+    const isAct = monitorsCache.some((x) => x.id === hit.id);
+    return { ...hit, isOffline: !isAct, key: hit.key || screenKey(hit) };
+  }
+
+  return null;
+}
+
+/**
+ * 获取某台显示器配置的独立切换快捷键。
+ * 兼容按稳定键（sn:... / nm:...）或动态 id（ddc:...）存储的历史配置。
+ */
+function hotkeyForMonitor(m) {
+  if (!m) return '';
+  const hotkeys = (cfg.ui.hotkeys && cfg.ui.hotkeys.monitor) || {};
+  if (m.key && hotkeys[m.key]) return hotkeys[m.key];
+  if (m.id && hotkeys[m.id]) return hotkeys[m.id];
+  const sk = screenKey(m);
+  if (sk && hotkeys[sk]) return hotkeys[sk];
+  if (cfg.ui && cfg.ui.portAlias) {
+    for (const [alias, k] of Object.entries(cfg.ui.portAlias)) {
+      if ((k === m.key || k === sk) && hotkeys[alias]) return hotkeys[alias];
+    }
+  }
+  return '';
+}
+
 /* ---------------- 桌面布局（真实显示器排列） ---------------- */
 
 let screenRects = [];
@@ -1493,36 +1583,55 @@ function buildSwitchPlan(targetId) {
 
 /** 单块屏切到某台设备的执行计划 */
 function monitorSwitchPlan(monitorId, targetId) {
-  const m = monitorsCache.find((x) => x.id === monitorId);
+  const m = findMonitor(monitorId);
   if (!m) return { ok: false, error: '找不到这台显示器' };
   if (m.internal) return { ok: false, error: '内建屏无法切换输入源' };
-  if (typeof m.index !== 'number') return { ok: false, error: '这台显示器不支持 DDC，无法单独切换' };
-  const value = portFor(monitorId, targetId);
-  if (!value) return { ok: false, error: '这台显示器还没给这台电脑指定接口' };
-  // 已经在这个口上：不写（写一次就黑一次屏）
-  const already = !!(m.currentInput && sameInput(m.currentInput, value));
+
+  const stableKey = m.key || screenKey(m) || m.id;
+  const value = portFor(stableKey, targetId);
+  if (!value) {
+    const devName = (deviceInfo(targetId) && deviceInfo(targetId).name) || targetId;
+    return { ok: false, error: `「${m.name}」还没为 ${devName} 配置接口` };
+  }
+
+  // 已经在这个口上且已经在显示该设备：不重复写（避免黑屏）
+  const curOwner = ownerOf(m);
+  const already = curOwner === targetId && !!(m.currentInput && sameInput(m.currentInput, value));
+
+  // 本机是否能直接通过 DDC 下发（处于本机活跃枚举中且 index 为数字）
+  const canLocalDdc = typeof m.index === 'number' && !m.isOffline;
+
   return {
     ok: true,
     already,
-    index: m.index,
+    canLocalDdc,
+    index: canLocalDdc ? m.index : null,
     value,
     label: labelForInput(value),
     name: m.name,
-    monitorId,
-    target: targetId
+    key: stableKey,
+    monitorId: m.id,
+    target: targetId,
+    currentOwner: curOwner
   };
 }
 
 /** 单块屏的快捷键：在这块屏上配置过的设备之间轮换 */
 function monitorCyclePlan(monitorId) {
-  const m = monitorsCache.find((x) => x.id === monitorId);
+  const m = findMonitor(monitorId);
   if (!m) return { ok: false, error: '找不到这台显示器' };
-  const ids = deviceIds().filter((id) => portFor(monitorId, id));
-  if (!ids.length) return { ok: false, error: '这台显示器还没配置任何一台电脑的接口' };
+  const stableKey = m.key || screenKey(m) || m.id;
+  const ids = deviceIds().filter((id) => portFor(stableKey, id));
+  if (!ids.length) return { ok: false, error: `「${m.name}」还没配置任何一台电脑的接口` };
   const owner = ownerOf(m);
   const i = ids.indexOf(owner);
-  const target = ids[(i + 1) % ids.length];
-  return monitorSwitchPlan(monitorId, target);
+  let target = '';
+  if (i >= 0) {
+    target = ids[(i + 1) % ids.length];
+  } else {
+    target = ids.find((id) => id !== cfg.peerName) || ids[0];
+  }
+  return monitorSwitchPlan(stableKey, target);
 }
 
 /* ---------------- 自动识别接口 ---------------- */
@@ -1853,14 +1962,21 @@ function ensureMonitorHotkeys() {
   const map = cfg.ui.hotkeys.monitor;
   let changed = false;
   let slot = 0;
-  for (const m of monitorsCache) {
+  const all = allMonitors();
+  for (const m of all) {
     // 内建屏不参与切换，自然也不该占快捷键
-    if (m.internal) {
-      if (map[m.id] === undefined) { map[m.id] = ''; changed = true; }
-      continue;
-    }
-    if (map[m.id] === undefined) {
-      map[m.id] = MONITOR_HOTKEY_DEFAULTS[slot] || '';
+    if (m.internal) continue;
+    const stableKey = m.key || screenKey(m) || m.id;
+    if (map[stableKey] === undefined && map[m.id] === undefined) {
+      const defKey = MONITOR_HOTKEY_DEFAULTS[slot] || '';
+      map[stableKey] = defKey;
+      map[m.id] = defKey;
+      changed = true;
+    } else if (map[m.id] && !map[stableKey]) {
+      map[stableKey] = map[m.id];
+      changed = true;
+    } else if (map[stableKey] && !map[m.id]) {
+      map[m.id] = map[stableKey];
       changed = true;
     }
     slot += 1;
@@ -2099,9 +2215,8 @@ function getState() {
     letter: letterMap.get(m.id) || '?'
   }));
 
-  const hotkeys = (cfg.ui.hotkeys && cfg.ui.hotkeys.monitor) || {};
   const monitorKeys = {};
-  for (const m of monitors) monitorKeys[m.id] = hotkeys[m.id] || '';
+  for (const m of monitors) monitorKeys[m.id] = hotkeyForMonitor(m);
 
   return {
     version: app.getVersion(),
@@ -2227,6 +2342,7 @@ function onFileUpdate(list) {
  * 不再需要跨机器换 index / 名字 —— 每台机器都只切自己接线能碰到的屏。
  */
 async function onSwitchRequest({ input, label, from, index, target }) {
+  logger.info('SWITCH', `onSwitchRequest: index=${index}, input=${JSON.stringify(input)}, label=${label}, target=${target}, from=${from || 'local'}`);
   // 指定了 index = 只切这一台显示器
   if (typeof index === 'number') {
     const value = typeof input === 'string' ? input : Object.values(input || {})[0];
@@ -2235,7 +2351,7 @@ async function onSwitchRequest({ input, label, from, index, target }) {
     if (r.ok) {
       // 亲手切成功 → 这块屏现在归它了（下次读不到当前输入源也能着色）
       const m = monitorsCache.find((x) => x.index === index);
-      if (m) applySwitched(target, m, value);
+      if (m && target) applySwitched(target, m, value);
       if (target && m) {
         const mk = portKey(m);
         if (!cfg.ui.ownerMap) cfg.ui.ownerMap = {};
@@ -2247,9 +2363,11 @@ async function onSwitchRequest({ input, label, from, index, target }) {
         }
         persist();
       }
+      logger.info('SWITCH', `DDC single switch successful: index=${index}, value=${value}, target=${target}`);
       pushStatus(from ? `已由 ${from} 切换 1 台显示器到 ${name}` : `已把这台显示器切换到 ${name}`, 'ok');
       setTimeout(() => { detectMonitors().catch(() => {}); }, 1200);
     } else {
+      logger.warn('SWITCH', `DDC single switch failed: index=${index}, value=${value}, error=${r.error}`);
       pushStatus(`切换失败：${r.error || '未知原因'}`, 'warn');
     }
     return { ok: !!r.ok, error: r.error || '' };
@@ -2282,10 +2400,12 @@ async function onSwitchRequest({ input, label, from, index, target }) {
       }
       persist();
     }
+    logger.info('SWITCH', `switchMonitorInput successful: ${scope} switched to ${name}`);
     pushStatus(from ? `已由 ${from} 把${scope}切换到 ${name}` : `已将${scope}切换到 ${name}`, 'ok');
     if (r.partial) pushStatus(`有显示器未响应：${r.error}（VGA 线和一些转接头不走 DDC，屏幕收不到切换指令，属于正常现象，这根线连的口请在接了 DDC 可用线的那台电脑上切）`, 'warn');
     setTimeout(() => { detectMonitors().catch(() => {}); }, 1500);
   } else {
+    logger.warn('SWITCH', `switchMonitorInput failed: ${r.error || '未知原因'}`);
     pushStatus(`切换到 ${name} 失败`, 'warn');
     pushStatus(`${r.error || '未知原因'}（若显示器经 VGA / 转接头连接，它可能不支持 DDC/CI，无法远程切换）`, 'warn');
   }
@@ -2293,13 +2413,33 @@ async function onSwitchRequest({ input, label, from, index, target }) {
 }
 
 /** 对端请求协同切换单块显示器 */
-async function onRemoteSwitchMonitor({ name, target }) {
-  if (!name || !target) return;
-  const m = monitorsCache.find((x) => !x.internal && modelNameHit(x.name, name));
-  if (!m || typeof m.index !== 'number') return;
-  const p = monitorSwitchPlan(m.id, target);
-  if (p && p.ok && !p.already) {
-    await onSwitchRequest({ input: p.value, label: p.label, index: p.index, target, from: deviceInfo(target).name });
+async function onRemoteSwitchMonitor({ name, target, key, port }) {
+  logger.info('PEER', `onRemoteSwitchMonitor received: name="${name}", target="${target}", key="${key || ''}", port="${port || ''}"`);
+  if (!target) return;
+  const m = findMonitor(key || name);
+  if (!m) {
+    logger.warn('PEER', `onRemoteSwitchMonitor: monitor not found for key="${key}", name="${name}"`);
+    return;
+  }
+  logger.info('PEER', `onRemoteSwitchMonitor matched: name="${m.name}", index=${m.index}, isOffline=${m.isOffline}`);
+  if (typeof m.index === 'number' && !m.isOffline) {
+    const p = monitorSwitchPlan(m.id || m.key, target);
+    if (p && p.ok && !p.already) {
+      logger.info('PEER', `onRemoteSwitchMonitor: executing onSwitchRequest locally on behalf of remote, input=${p.value}`);
+      await onSwitchRequest({
+        input: p.value,
+        label: p.label,
+        index: p.index,
+        target,
+        from: deviceInfo(target).name
+      });
+    } else if (p && p.already) {
+      logger.info('PEER', `onRemoteSwitchMonitor: monitor "${m.name}" is already showing ${target}`);
+    } else if (p && !p.ok) {
+      logger.warn('PEER', `onRemoteSwitchMonitor plan failed: ${p.error}`);
+    }
+  } else {
+    logger.info('PEER', `onRemoteSwitchMonitor: monitor "${m.name}" not active locally, skipping local DDC`);
   }
 }
 
@@ -2350,16 +2490,21 @@ function setHotkey(kind, id, key) {
   if (!cfg.ui.hotkeys) cfg.ui.hotkeys = { global: 'F12', inputCycle: 'Alt+Q', monitor: {} };
   if (!cfg.ui.hotkeys.monitor) cfg.ui.hotkeys.monitor = {};
   const cleanKey = typeof key === 'string' ? key.trim() : '';
+  logger.info('HOTKEY', `setHotkey: kind=${kind}, id=${id}, key="${cleanKey}"`);
   if (kind === 'global') {
     cfg.ui.hotkeys.global = cleanKey;
     cfg.ui.hotkeyKey = cfg.ui.hotkeys.global;
   } else if (kind === 'inputCycle') {
     cfg.ui.hotkeys.inputCycle = cleanKey;
   } else if (kind === 'monitor' && id) {
+    const m = findMonitor(id);
+    const stableKey = m ? (m.key || screenKey(m)) : '';
     if (cleanKey) {
       cfg.ui.hotkeys.monitor[id] = cleanKey;
+      if (stableKey) cfg.ui.hotkeys.monitor[stableKey] = cleanKey;
     } else {
       delete cfg.ui.hotkeys.monitor[id];
+      if (stableKey) delete cfg.ui.hotkeys.monitor[stableKey];
     }
   }
   persist();
@@ -2500,6 +2645,9 @@ module.exports = {
   defaultReceiveDir,
   setClipProgress,
   setActiveTarget: (t) => { activeTarget = t; },
+  findMonitor,
+  allMonitors,
+  hotkeyForMonitor,
   INPUT_PRESETS,
   HOTKEY_CHOICES,
   IS_MAC,

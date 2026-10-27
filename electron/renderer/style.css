@@ -523,25 +523,12 @@ textarea.input {
 }
 .share-col textarea.input + .row { margin-top: 10px; }
 
-/* 切换页底部：左=快捷操作，右=日志流 */
+/* 切换页底部：快捷操作整行显示 */
 .switch-bottom {
-  display: grid;
-  grid-template-columns: minmax(0, 1.02fr) minmax(0, 1fr);
-  gap: 13px;
-  align-items: start;
+  display: block;
+  width: 100%;
 }
 .switch-bottom .card { margin-bottom: 0; }
-.switch-bottom .status-block {
-  margin: 0;
-  max-height: 268px;
-  overflow-y: auto;
-  padding: 13px 15px;
-  background: var(--card);
-  border: 1px solid var(--card-line);
-  border-radius: var(--radius);
-}
-.switch-bottom .status-block::-webkit-scrollbar { width: 6px; }
-.switch-bottom .status-block::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 6px; }
 
 .tx-list { display: flex; flex-direction: column; gap: 9px; }
 .tx {
@@ -895,6 +882,36 @@ textarea.input {
   border-color: var(--dev-line);
   background: var(--dev-soft);
   box-shadow: 0 0 12px -5px var(--dev-line);
+}
+.chain-mon.is-internal .cm-head {
+  align-items: flex-start;
+}
+.chain-mon.is-internal .cm-name {
+  white-space: normal;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.chain-mon .cm-tag.is-internal-bottom {
+  margin-top: auto;
+  align-self: flex-start;
+  font-size: 8px;
+  line-height: 1.35;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #c3d2ea;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+}
+.chain-mon.is-here .cm-tag.is-internal-bottom {
+  color: #eef4ff;
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.35);
 }
 /* 被切到别的电脑上的屏：本机够不到它，淡显出来但可看出归属 */
 .chain-mon.is-away {

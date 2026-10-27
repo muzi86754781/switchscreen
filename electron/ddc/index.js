@@ -14,6 +14,9 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 
+let logger = null;
+try { logger = require('../logger'); } catch { /* ignore */ }
+
 const IS_WIN = process.platform === 'win32';
 const IS_MAC = process.platform === 'darwin';
 
@@ -43,6 +46,13 @@ function winErrText(code) {
 function run(cmd, args, timeout = 20000) {
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout, windowsHide: true }, (err, stdout, stderr) => {
+      if (logger) {
+        if (err) {
+          logger.warn('DDC-EXEC', `Command failed: ${cmd} ${(args || []).join(' ')} -> code=${err.code || 0}, err=${(stderr || err.message || '').trim()}`);
+        } else {
+          logger.debug('DDC-EXEC', `Command done: ${cmd} ${(args || []).join(' ')}`);
+        }
+      }
       resolve({
         ok: !err,
         out: String(stdout || ''),
@@ -108,6 +118,7 @@ async function winList() {
  */
 async function winApply(planStr) {
   const script = psScriptPath();
+  if (logger) logger.info('DDC', `winApply start: plan="${planStr}"`);
   const r = await run('powershell.exe', psArgs(script, ['-Action', 'setplan', '-Plan', planStr]));
   const results = [];
   let count = 0;
@@ -128,11 +139,16 @@ async function winApply(planStr) {
   }
   const sum = summarize(results, 'dxva2', r.err);
   sum.enumerated = count;
+  if (logger) {
+    if (sum.ok) logger.info('DDC', `winApply result: ok (${sum.success}/${sum.total} displays)`, sum);
+    else logger.warn('DDC', `winApply result: failed (${sum.error || r.err})`, sum);
+  }
   return sum;
 }
 
 /** 单块显示器切换（index 来自 listDisplays 的枚举顺序） */
 async function winSet(index, hexValue) {
+  if (logger) logger.info('DDC', `winSet: index=${index}, hexValue=${hexValue}`);
   return winApply(`${index}=${parseInt(hexValue, 16)}`);
 }
 
@@ -282,24 +298,35 @@ async function macList() {
 
 async function macSet(index, hexValue) {
   const tool = await macTool();
-  if (!tool) return { ok: false, via: 'none', error: '未找到 m1ddc/ddcctl' };
+  if (!tool) {
+    if (logger) logger.warn('DDC', 'macSet failed: m1ddc/ddcctl not found');
+    return { ok: false, via: 'none', error: '未找到 m1ddc/ddcctl' };
+  }
   const base = path.basename(tool);
   // ddcctl 的 -i 只接受 1-18 的十进制值，传 0x11 会被判为参数错误（打印 Usage）
   const decimal = String(parseInt(hexValue, 16));
+  if (logger) logger.info('DDC', `macSet: index=${index}, hex=${hexValue} (${decimal}), tool=${base}`);
   const r = base === 'm1ddc'
     ? await run(tool, ['display', String(index), 'set', 'input', decimal])
     : await run(tool, ['-d', String(index), '-i', decimal]);
 
   const blob = `${r.out}\n${r.err}`;
   if (/Usage:\s*ddcctl/i.test(blob)) {
+    const err = `ddcctl 参数被拒绝（输入源必须是 1-18 的十进制，当前值 ${hexValue} → ${decimal}）`;
+    if (logger) logger.warn('DDC', err);
     return {
       ok: false,
       via: base,
-      error: `ddcctl 参数被拒绝（输入源必须是 1-18 的十进制，当前值 ${hexValue} → ${decimal}）`
+      error: err
     };
   }
-  if (r.ok) return { ok: true, via: base };
-  return { ok: false, via: base, error: (r.err || r.out || '切换失败').trim().slice(0, 200) };
+  if (r.ok) {
+    if (logger) logger.info('DDC', `macSet success: index=${index}, tool=${base}`);
+    return { ok: true, via: base };
+  }
+  const err = (r.err || r.out || '切换失败').trim().slice(0, 200);
+  if (logger) logger.warn('DDC', `macSet error: index=${index}, err=${err}`);
+  return { ok: false, via: base, error: err };
 }
 
 function sameName(a, b) {

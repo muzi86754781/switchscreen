@@ -527,7 +527,7 @@ function createPeer(userConfig, hooks) {
       if (!t || !monName) return;
       autoLockUntil = Date.now() + 1500;
       if (typeof h.onSwitchMonitorRequest === 'function') {
-        h.onSwitchMonitorRequest({ name: monName, target: t });
+        h.onSwitchMonitorRequest({ name: monName, target: t, key: msg.key, port: msg.port || msg.input });
       }
     }
     else if (msg.type === 'ddc') {
@@ -804,7 +804,7 @@ function createPeer(userConfig, hooks) {
     /** 让指定对端执行一次 DDC（单台显示器切换时用） */
     relayDdc: (target, payload) => sendTo(target, { type: 'ddc', ...payload }),
     /** 请求对端协同切换单块显示器 */
-    sendMonitorSwitch: (name, target) => sendToAny({ type: 'switch-monitor', name, target }),
+    sendMonitorSwitch: (name, target, extra) => sendToAny({ type: 'switch-monitor', name, target, ...(extra || {}) }),
     /** 手动切换后暂停自动穿越：避免鼠标一动就把画面又弹回去（切换优先） */
     pauseAutoSwitch: (ms) => {
       const v = Number(ms);
