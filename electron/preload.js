@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld('api', {
 
   // 文件 / 文本：targets 是设备身份数组，支持一次发给多台
   pickFiles: (targets) => ipcRenderer.invoke('files:pick', targets),
+  selectFiles: (mode) => ipcRenderer.invoke('files:select', mode),
+  inspectFiles: (paths) => ipcRenderer.invoke('files:inspect', paths),
   sendPaths: (paths, targets) => ipcRenderer.invoke('files:send-paths', { paths, targets }),
   cancelTransfer: (id) => ipcRenderer.invoke('files:cancel', id),
   removeTransfer: (id) => ipcRenderer.invoke('files:remove', id),

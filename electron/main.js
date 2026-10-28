@@ -17,6 +17,8 @@ let peer = null;
 let registeredHotkey = '';
 const registeredGlobalShortcuts = new Set();
 let switching = false;
+let isQuitting = false;
+app.on('before-quit', () => { isQuitting = true; });
 
 // 单实例锁：防止多开，已有实例运行时激活主窗口
 const gotTheLock = app.requestSingleInstanceLock();
@@ -70,7 +72,14 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.once('ready-to-show', () => {
     if (!isSilentLaunch) {
+      if (IS_MAC && app.dock && app.dock.show) {
+        try { app.dock.show(); } catch { /* ignore */ }
+      }
       win.show();
+    } else {
+      if (IS_MAC && app.dock && app.dock.hide) {
+        try { app.dock.hide(); } catch { /* ignore */ }
+      }
     }
   });
 
@@ -104,12 +113,30 @@ function createWindow() {
     }
   });
 
+  // 关闭窗口时隐藏至托盘；macOS 同时退出程序坞，仅常驻顶部菜单栏图标
+  win.on('close', (e) => {
+    if (!isQuitting && !app.isQuitting) {
+      e.preventDefault();
+      win.hide();
+      if (IS_MAC && app.dock && app.dock.hide) {
+        try { app.dock.hide(); } catch { /* ignore */ }
+      }
+    }
+  });
+
   win.on('closed', () => { win = null; });
 }
 
 function showWindow() {
-  if (!win) createWindow();
-  else { win.show(); win.focus(); }
+  if (IS_MAC && app.dock && app.dock.show) {
+    try { app.dock.show(); } catch { /* ignore */ }
+  }
+  if (!win) {
+    createWindow();
+  } else {
+    win.show();
+    win.focus();
+  }
 }
 
 /* ---------------- 托盘 ---------------- */
@@ -977,49 +1004,11 @@ function registerIpc() {
     return [online[0]];
   }
 
-  /** 统计待发送的总字节（用于「超过 1GB 发送前询问」） */
-  async function totalBytes(paths) {
-    const fsp = require('fs/promises');
-    let sum = 0;
-    const walk = async (p) => {
-      let st;
-      try { st = await fsp.stat(p); } catch { return; }
-      if (st.isFile()) { sum += st.size; return; }
-      if (!st.isDirectory()) return;
-      let entries = [];
-      try { entries = await fsp.readdir(p, { withFileTypes: true }); } catch { return; }
-      for (const e of entries) await walk(path.join(p, e.name));
-    };
-    for (const p of paths) await walk(p);
-    return sum;
-  }
-
   async function sendPaths(paths, explicitTargets) {
     if (!peer) { services.pushStatus('网络层未启动', 'warn'); return services.getState(); }
     const targets = resolveTargets(explicitTargets);
     if (!targets.length) { services.pushStatus('未连接其它设备，无法发送', 'warn'); return services.getState(); }
     if (!paths || !paths.length) return services.getState();
-
-    // 超过 1GB 且开启了询问：先确认
-    if (services.cfg.ui.askLarge !== false) {
-      const total = await totalBytes(paths);
-      if (total > 1024 * 1024 * 1024) {
-        const names = targets.map((n) => services.deviceInfo(n).name).join('、');
-        const r = await dialog.showMessageBox(win, {
-          type: 'question',
-          buttons: ['继续发送', '取消'],
-          defaultId: 1,
-          cancelId: 1,
-          title: '确认发送大文件',
-          message: `将向 ${names} 发送 ${fmtSize(total)}`,
-          detail: `${paths.length} 项内容，超过 1GB，发送会占用较多网络带宽。`
-        });
-        if (r.response !== 0) {
-          services.pushStatus('已取消发送', 'info');
-          return services.getState();
-        }
-      }
-    }
 
     for (const target of targets) {
       const res = await peer.offerFiles(paths, target);
@@ -1029,13 +1018,54 @@ function registerIpc() {
     return services.getState();
   }
 
+  ipcMain.handle('files:select', async (_e, mode) => {
+    const isDir = mode === 'dir';
+    const properties = isDir
+      ? ['openDirectory', 'multiSelections']
+      : ['openFile', 'multiSelections'];
+    const r = await dialog.showOpenDialog(win, {
+      properties,
+      title: isDir ? '选择要发送的文件夹' : '选择要发送的文件'
+    });
+    if (r.canceled || !r.filePaths.length) return [];
+    return r.filePaths;
+  });
+
+  ipcMain.handle('files:inspect', async (_e, filePaths) => {
+    const fsp = require('fs/promises');
+    const items = [];
+    let totalSize = 0;
+    for (const fp of filePaths || []) {
+      try {
+        const st = await fsp.stat(fp);
+        const isDir = st.isDirectory();
+        const size = isDir ? 0 : st.size;
+        totalSize += size;
+        items.push({
+          path: fp,
+          name: path.basename(fp),
+          isDir,
+          size
+        });
+      } catch {
+        items.push({
+          path: fp,
+          name: path.basename(fp),
+          isDir: false,
+          size: 0
+        });
+      }
+    }
+    return { items, totalSize };
+  });
+
   ipcMain.handle('files:pick', async (_e, targets) => {
     const r = await dialog.showOpenDialog(win, {
       properties: ['openFile', 'multiSelections', 'openDirectory'],
       title: '选择要发送的文件或文件夹'
     });
-    if (r.canceled || !r.filePaths.length) return services.getState();
-    return sendPaths(r.filePaths, targets);
+    if (r.canceled || !r.filePaths.length) return [];
+    return r.filePaths;
   });
 
   ipcMain.handle('files:send-paths', (_e, { paths, targets } = {}) => sendPaths(paths || [], targets));

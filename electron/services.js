@@ -2258,7 +2258,6 @@ function getState() {
     clipboard: {
       enabled: !!cfg.clipboardSync,
       receiveDir: cfg.ui.receiveDir,
-      askLarge: cfg.ui.askLarge !== false,
       progress: clipProgress,
       percent: clipPercent
     },

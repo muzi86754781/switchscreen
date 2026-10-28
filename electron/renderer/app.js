@@ -924,9 +924,6 @@ function renderPeers(s) {
     const p = peers.find((x) => x.name === n);
     return p ? (p.label || p.name) : n;
   });
-  $('#dzPeer').textContent = names.length
-    ? `当前接收方：${names.join('、')}（文件和文字都会发给他们）`
-    : '';
   $('#targetNote').textContent = names.length > 1 ? `已选 ${names.length} 台` : '';
 }
 
@@ -936,7 +933,6 @@ function renderShare(s) {
 
   $('#clipEnabled').checked = !!c.enabled;
   $('#fileRecvDir').value = f.recvDir || '';
-  $('#askLarge').checked = c.askLarge !== false;
   $('#autoAccept').checked = !!f.autoAccept;
 
   renderPeers(s);
@@ -1199,9 +1195,63 @@ function bindSwitchPanel() {
   if (btn2) btn2.addEventListener('click', openLogDir);
 }
 
+let stagedPaths = [];
+
+async function renderStagedFiles() {
+  const wrap = $('#stagedWrap');
+  const list = $('#stagedList');
+  const btn = $('#sendFilesBtn');
+  const summary = $('#stagedSummary');
+  if (!wrap || !list || !btn) return;
+
+  if (!stagedPaths.length) {
+    wrap.hidden = true;
+    btn.disabled = true;
+    list.innerHTML = '';
+    return;
+  }
+
+  wrap.hidden = false;
+  btn.disabled = false;
+
+  let info = { items: [], totalSize: 0 };
+  try {
+    if (window.api && window.api.inspectFiles) {
+      info = await window.api.inspectFiles(stagedPaths);
+    }
+  } catch (e) {
+    console.error('[ui] inspectFiles error', e);
+  }
+
+  const items = (info && info.items && info.items.length) ? info.items : stagedPaths.map((p) => ({
+    path: p,
+    name: p.split(/[/\\]/).pop() || p,
+    isDir: false,
+    size: 0
+  }));
+
+  if (summary) {
+    summary.textContent = `已选择 ${items.length} 项${info && info.totalSize > 0 ? `（共 ${fmtSize(info.totalSize)}）` : ''}`;
+  }
+
+  list.innerHTML = '';
+  for (const item of items) {
+    const row = el('div', 'staged-item');
+    row.innerHTML = `<span class="si-icon">${item.isDir ? '📁' : '📄'}</span>`
+      + `<span class="si-name" title="${item.path}">${item.name}</span>`
+      + `<span class="si-size">${item.isDir ? '文件夹' : fmtSize(item.size)}</span>`
+      + `<button type="button" class="si-del" title="移除此项">✕</button>`;
+    row.querySelector('.si-del').addEventListener('click', (e) => {
+      e.stopPropagation();
+      stagedPaths = stagedPaths.filter((p) => p !== item.path);
+      renderStagedFiles();
+    });
+    list.appendChild(row);
+  }
+}
+
 function bindSharePanel() {
   $('#clipEnabled').addEventListener('change', (e) => push(window.api.setClipboardSync(e.target.checked)));
-  $('#askLarge').addEventListener('change', (e) => push(window.api.setAskLarge(e.target.checked)));
   $('#autoAccept').addEventListener('change', (e) => push(window.api.setAutoAccept(e.target.checked)));
 
   $('#txClear').addEventListener('click', () => push(window.api.clearTransfers()));
@@ -1229,10 +1279,69 @@ function bindSharePanel() {
 
   const targets = () => targetsOf(S || {});
 
-  $('#pickFiles').addEventListener('click', (e) => {
+  const addStagedPaths = (paths) => {
+    if (!paths || !paths.length) return;
+    let added = 0;
+    for (const p of paths) {
+      if (!stagedPaths.includes(p)) {
+        stagedPaths.push(p);
+        added++;
+      }
+    }
+    if (added > 0) {
+      renderStagedFiles();
+      toast(`已选择 ${stagedPaths.length} 项，点击「发送文件」即可发送`);
+    }
+  };
+
+  const clearStaged = $('#stagedClearBtn');
+  if (clearStaged) {
+    clearStaged.addEventListener('click', () => {
+      stagedPaths = [];
+      renderStagedFiles();
+    });
+  }
+
+  $('#pickFiles').addEventListener('click', async (e) => {
     e.stopPropagation();
-    push(window.api.pickFiles(targets()));
+    try {
+      const files = await window.api.selectFiles('file');
+      addStagedPaths(files);
+    } catch (e) {
+      console.error('[ui] selectFiles error', e);
+    }
   });
+
+  const pickFolderBtn = $('#pickFolder');
+  if (pickFolderBtn) {
+    pickFolderBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        const dirs = await window.api.selectFiles('dir');
+        addStagedPaths(dirs);
+      } catch (e) {
+        console.error('[ui] selectFolder error', e);
+      }
+    });
+  }
+
+  const sendFilesBtn = $('#sendFilesBtn');
+  if (sendFilesBtn) {
+    sendFilesBtn.addEventListener('click', () => {
+      if (!stagedPaths.length) return;
+      const t = targets();
+      if (!t.length) {
+        toast('未连接其它设备或未勾选接收方');
+        return;
+      }
+      const pathsToSend = [...stagedPaths];
+      stagedPaths = [];
+      renderStagedFiles();
+      switchTab('share');
+      push(window.api.sendPaths(pathsToSend, t));
+      toast(`已发起发送 ${pathsToSend.length} 项`);
+    });
+  }
 
   const sendTextNow = () => {
     const input = $('#textInput');
@@ -1255,8 +1364,7 @@ function bindSharePanel() {
     over(false);
     const paths = Array.from(e.dataTransfer.files || []).map((f) => f.path).filter(Boolean);
     if (paths.length) {
-      switchTab('share');
-      push(window.api.sendPaths(paths, targets()));
+      addStagedPaths(paths);
     }
   });
   window.addEventListener('dragover', (e) => e.preventDefault());

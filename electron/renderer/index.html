@@ -99,7 +99,6 @@
                 <span class="card-note" id="targetNote"></span>
               </div>
               <div class="peers" id="peerChips"></div>
-              <div class="hint" id="dzPeer"></div>
             </div>
 
             <!-- 发文件 -->
@@ -114,14 +113,21 @@
                   </svg>
                 </div>
                 <div class="dz-title">把文件拖到这里</div>
-                <div class="dz-sub">或 <button class="link-inline" id="pickFiles">选择文件</button> · 支持多选与整个文件夹</div>
+                <div class="dz-sub">或 <button type="button" class="link-inline" id="pickFiles">选择文件</button> · <button type="button" class="link-inline" id="pickFolder">选择文件夹</button></div>
               </div>
 
-              <label class="check-row check-row-sm">
-                <input type="checkbox" id="askLarge" />
-                <span class="box"></span>
-                <span class="check-text">超过 1GB，发送前询问</span>
-              </label>
+              <!-- 待发送文件预览列表 -->
+              <div class="staged-wrap" id="stagedWrap" hidden>
+                <div class="staged-head">
+                  <span class="staged-summary" id="stagedSummary">已选择 0 项</span>
+                  <button type="button" class="btn btn-ghost btn-mini" id="stagedClearBtn">清空</button>
+                </div>
+                <div class="staged-list" id="stagedList"></div>
+              </div>
+
+              <div class="row row-actions" style="margin-top: 10px;">
+                <button type="button" class="btn btn-primary" id="sendFilesBtn" disabled>发送文件</button>
+              </div>
             </div>
 
             <!-- 发文本 -->
