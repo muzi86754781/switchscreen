@@ -18,6 +18,21 @@ let registeredHotkey = '';
 const registeredGlobalShortcuts = new Set();
 let switching = false;
 
+// 单实例锁：防止多开，已有实例运行时激活主窗口
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    showWindow();
+  });
+}
+
+// 登录时开机自启检测：静默启动至系统托盘，不弹出主界面
+const isSilentLaunch = process.argv.includes('--hidden') ||
+                       process.argv.includes('--minimized') ||
+                       Boolean(app.getLoginItemSettings && app.getLoginItemSettings().wasOpenedAsHidden);
+
 /* ---------------- 窗口 ---------------- */
 
 function createWindow() {
@@ -53,7 +68,11 @@ function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => {
+    if (!isSilentLaunch) {
+      win.show();
+    }
+  });
 
   // 窗口聚焦时也响应切换键：全局快捷键被系统占用时（F12 常被开发者工具抢占）
   // 至少还能在窗口里按键生效。全局已注册的情况下不重复触发。
@@ -889,8 +908,14 @@ function registerIpc() {
   ipcMain.handle('launch:set', (_e, open) => {
     services.cfg.ui.launchAtLogin = !!open;
     services.persist();
-    try { app.setLoginItemSettings({ openAtLogin: !!open }); } catch { /* ignore */ }
-    services.pushStatus(open ? '已设置登录时启动' : '已关闭登录时启动', 'info');
+    try {
+      app.setLoginItemSettings({
+        openAtLogin: !!open,
+        openAsHidden: true,
+        args: ['--hidden']
+      });
+    } catch { /* ignore */ }
+    services.pushStatus(open ? '已设置登录时启动（开机静默运行至托盘）' : '已关闭登录时启动', 'info');
     return services.getState();
   });
 
@@ -1141,6 +1166,17 @@ app.whenReady().then(() => {
     tray.on('click', () => showWindow());
   } catch (e) {
     console.error('[electron] 托盘创建失败:', e.message);
+  }
+
+  // 确保系统开机自启项与配置文件保持同步
+  if (services.cfg.ui) {
+    try {
+      app.setLoginItemSettings({
+        openAtLogin: !!services.cfg.ui.launchAtLogin,
+        openAsHidden: true,
+        args: ['--hidden']
+      });
+    } catch { /* ignore */ }
   }
 
   createWindow();

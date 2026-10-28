@@ -809,6 +809,9 @@ function buildHotkeys(s) {
 
   $('#hotkeyEnabled').checked = !!hk.enabled;
 
+  const launchEl = $('#launchAtLogin');
+  if (launchEl) launchEl.checked = !!s.launchAtLogin;
+
   const globalBtn = $('#hotkeyGlobalBtn');
   const globalClear = $('#hotkeyGlobalClear');
   if (globalBtn) {
@@ -923,7 +926,7 @@ function renderPeers(s) {
   });
   $('#dzPeer').textContent = names.length
     ? `当前接收方：${names.join('、')}（文件和文字都会发给他们）`
-    : '点上面的设备选一台（可多选）';
+    : '';
   $('#targetNote').textContent = names.length > 1 ? `已选 ${names.length} 台` : '';
 }
 

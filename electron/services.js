@@ -2254,7 +2254,7 @@ function getState() {
       monitor: monitorKeys,
       choices: HOTKEY_CHOICES
     },
-    launchAtLogin: (() => { try { return app.getLoginItemSettings().openAtLogin; } catch { return false; } })(),
+    launchAtLogin: !!(cfg.ui && cfg.ui.launchAtLogin),
     clipboard: {
       enabled: !!cfg.clipboardSync,
       receiveDir: cfg.ui.receiveDir,

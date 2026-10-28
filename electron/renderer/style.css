@@ -317,8 +317,12 @@ body.win .brand { padding-left: 0; }
 }
 .peer-chip .tag { font-size: 10px; color: var(--text-3); font-weight: 400; }
 .peer-chip .tick { display: none; font-size: 11px; color: var(--green); }
-.peer-chip.is-on .tick { display: inline; }
-.peers-empty { font-size: 12px; color: var(--text-3); }
+.peers-empty {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.5;
+  padding: 4px 0;
+}
 
 .sub-note { font-size: 11px; color: var(--text-3); margin-left: 2px; }
 
@@ -513,6 +517,7 @@ body.win .brand { padding-left: 0; }
 .share-col .dropzone { margin-bottom: 0; }
 .share-col .dropzone + .check-row,
 .share-col .peers + .hint { margin-top: 10px; }
+#dzPeer:empty { display: none; margin: 0; }
 textarea.input {
   display: block;
   width: 100%;
@@ -599,7 +604,12 @@ textarea.input {
 }
 .tx:hover .tx-del { opacity: 1; }
 .tx-del:hover { background: rgba(215, 106, 106, 0.22); color: #ffb3b3; }
-.empty { font-size: 12px; color: var(--text-3); padding: 6px 2px; }
+.empty {
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 8px 0;
+  line-height: 1.5;
+}
 
 /* ============ 文本查看弹窗 / 轻提示 ============ */
 .modal {
