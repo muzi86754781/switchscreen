@@ -530,6 +530,12 @@ function createPeer(userConfig, hooks) {
         h.onSwitchMonitorRequest({ name: monName, target: t, key: msg.key, port: msg.port || msg.input });
       }
     }
+    else if (msg.type === 'wake-monitor') {
+      const monName = msg.name;
+      if (typeof h.onWakeMonitorRequest === 'function') {
+        h.onWakeMonitorRequest({ name: monName, target: msg.target, key: msg.key, port: msg.port || msg.input });
+      }
+    }
     else if (msg.type === 'ddc') {
       // 对端请求本机执行 DDC 切换（本机才是当前画面输出方）
       // index 有值表示只切某台显示器；input 是对象表示按显示器下发计划
@@ -805,6 +811,8 @@ function createPeer(userConfig, hooks) {
     relayDdc: (target, payload) => sendTo(target, { type: 'ddc', ...payload }),
     /** 请求对端协同切换单块显示器 */
     sendMonitorSwitch: (name, target, extra) => sendToAny({ type: 'switch-monitor', name, target, ...(extra || {}) }),
+    /** 请求对端协同唤醒单块显示器 */
+    sendMonitorWake: (name, target, extra) => sendToAny({ type: 'wake-monitor', name, target, ...(extra || {}) }),
     /** 手动切换后暂停自动穿越：避免鼠标一动就把画面又弹回去（切换优先） */
     pauseAutoSwitch: (ms) => {
       const v = Number(ms);

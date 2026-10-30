@@ -1822,3 +1822,63 @@ textarea.input {
 .itb-list b {
   color: #d6e2f7;
 }
+
+
+/* 显示器底部容器与强制唤醒按钮 */
+.cm-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 4px;
+}
+.cm-wake-btn {
+  appearance: none;
+  font-family: inherit;
+  font-size: 8px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: #a8cdfc;
+  background: rgba(91, 140, 240, 0.2);
+  border: 1px solid rgba(130, 175, 255, 0.35);
+  border-radius: 4px;
+  padding: 0 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: none;
+  transition: all 0.16s ease;
+}
+.cm-wake-btn:hover {
+  color: #fff;
+  background: rgba(91, 140, 240, 0.45);
+  border-color: rgba(160, 200, 255, 0.7);
+  box-shadow: 0 0 8px rgba(91, 140, 240, 0.4);
+}
+.chain-mon.is-here .cm-wake-btn {
+  color: #eaf2ff;
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.12);
+}
+.chain-mon.is-here .cm-wake-btn:hover {
+  background: rgba(255, 255, 255, 0.26);
+  border-color: rgba(255, 255, 255, 0.65);
+}
+.chain-mon.is-here {
+  cursor: pointer;
+  background: var(--dev-soft);
+  border-color: var(--dev-line);
+  box-shadow: 0 0 14px -4px var(--dev-line);
+  transition: all 0.18s ease;
+}
+.chain-mon.is-here:hover {
+  border-color: #fff;
+  box-shadow: 0 0 18px -2px var(--dev-line);
+}
+.chain-mon.is-waking {
+  animation: pulse-wake 1.2s infinite ease-in-out;
+}
+@keyframes pulse-wake {
+  0% { box-shadow: 0 0 0 0 rgba(91, 140, 240, 0.7); }
+  50% { box-shadow: 0 0 20px 4px rgba(91, 180, 255, 0.9); border-color: #8ec3ff; }
+  100% { box-shadow: 0 0 0 0 rgba(91, 140, 240, 0); }
+}

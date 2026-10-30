@@ -2424,6 +2424,91 @@ async function onSwitchRequest({ input, label, from, index, target }) {
 }
 
 /** 对端请求协同切换单块显示器 */
+
+/** 强制唤醒单台显示器：唤醒系统视频管道、写入 DDC 电源模式 0xD6=1 并强制重下发输入源 0x60 进行信号握手 */
+async function wakeMonitor(monitorId, targetDeviceId) {
+  const m = findMonitor(monitorId);
+  if (!m) {
+    logger.warn('WAKE', `wakeMonitor failed: monitor not found for "${monitorId}"`);
+    return { ok: false, error: '找不到这台显示器' };
+  }
+  if (m.internal) {
+    return { ok: false, error: '内建显示器无需唤醒' };
+  }
+
+  const targetId = targetDeviceId || ownerOf(m) || cfg.peerName;
+  const targetName = (deviceInfo(targetId) && deviceInfo(targetId).name) || targetId;
+  const stableKey = m.key || screenKey(m) || m.id;
+  const port = portFor(stableKey, targetId);
+
+  logger.info('WAKE', `wakeMonitor started: monitor="${m.name}" (key=${stableKey}), target="${targetId}" (${targetName}), port="${port || ''}", index=${m.index}, isOffline=${m.isOffline}`);
+
+  let localOk = false;
+  let localErr = '';
+
+  // 1. 如果本机能直接通过 DDC 访问显示器，或者在本机有该物理屏，执行本地显卡/系统唤醒 + DDC 唤醒
+  if (typeof m.index === 'number' && !m.isOffline) {
+    try {
+      const res = await ddc.wakeDisplay(m.index, port);
+      localOk = !!(res && res.ok);
+      if (!localOk) localErr = (res && res.error) || '本地唤醒指令未被响应';
+      logger.info('WAKE', `Local wakeDisplay result: ok=${localOk}, error=${localErr}`);
+    } catch (e) {
+      localErr = e.message;
+      logger.error('WAKE', `Local wakeDisplay exception: ${e.message}`);
+    }
+  } else {
+    // 即使该显示器离线或不确定 index，如果 targetId 是本机，依然执行一次系统级唤醒
+    if (targetId === cfg.peerName) {
+      try {
+        await ddc.wakeDisplay(-1, port);
+        localOk = true;
+      } catch (e) {
+        logger.warn('WAKE', `Fallback system wake exception: ${e.message}`);
+      }
+    }
+  }
+
+  // 2. 协同保障：若多机连接且有 peer 在线，通知对端也执行一次协同唤醒（确保双向信号重置）
+  let peerSent = false;
+  if (peer && typeof peer.sendMonitorWake === 'function') {
+    logger.info('PEER', `Sending wake-monitor to peer: name="${m.name}", key="${stableKey}", target="${targetId}", port="${port || ''}"`);
+    peerSent = peer.sendMonitorWake(m.name, targetId, { key: stableKey, port });
+  }
+
+  const success = localOk || peerSent;
+  if (success) {
+    pushStatus(`已向「${m.name}」发送强制唤醒与信号重握手指令`, 'ok');
+  } else {
+    pushStatus(`唤醒「${m.name}」失败：${localErr || '本地未连接该显示器且未连接到其它设备'}`, 'warn');
+  }
+
+  // 触发轻量级显示器状态刷新
+  detectMonitors().catch(() => {});
+
+  return { ok: success, error: success ? '' : localErr };
+}
+
+/** 对端请求协同唤醒单块显示器 */
+async function onRemoteWakeMonitor({ name, target, key, port }) {
+  logger.info('PEER', `onRemoteWakeMonitor received: name="${name}", target="${target}", key="${key || ''}", port="${port || ''}"`);
+  const m = findMonitor(key || name);
+  const targetPort = port || (m ? portFor(m.key || screenKey(m), target || cfg.peerName) : '');
+
+  if (m && typeof m.index === 'number' && !m.isOffline) {
+    logger.info('PEER', `onRemoteWakeMonitor: executing wakeDisplay locally on index=${m.index}, port=${targetPort}`);
+    try {
+      await ddc.wakeDisplay(m.index, targetPort);
+    } catch (e) {
+      logger.warn('PEER', `onRemoteWakeMonitor error: ${e.message}`);
+    }
+  } else {
+    try {
+      await ddc.wakeDisplay(-1, targetPort);
+    } catch {}
+  }
+}
+
 async function onRemoteSwitchMonitor({ name, target, key, port }) {
   logger.info('PEER', `onRemoteSwitchMonitor received: name="${name}", target="${target}", key="${key || ''}", port="${port || ''}"`);
   if (!target) return;
@@ -2649,6 +2734,8 @@ module.exports = {
   onFileUpdate,
   onSwitch,
   onSwitchRequest,
+  wakeMonitor,
+  onRemoteWakeMonitor,
   onRemoteSwitchMonitor,
   pushStatus,
   rename,

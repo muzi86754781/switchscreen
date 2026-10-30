@@ -896,6 +896,12 @@ function registerIpc() {
     await doSwitchMonitor(monitorId, deviceId || '');
     return services.getState();
   });
+  ipcMain.handle('monitor:wake', async (_e, { monitorId, deviceId } = {}) => {
+    logger.info('IPC', `ipc monitor:wake invoked: monitorId=${monitorId}, deviceId=${deviceId}`);
+    const r = await services.wakeMonitor(monitorId, deviceId);
+    broadcastState();
+    return r;
+  });
 
   /* ---------- 日志查看 ---------- */
 
@@ -1266,6 +1272,9 @@ app.whenReady().then(() => {
       },
       onSwitchMonitorRequest: (info) => {
         Promise.resolve(services.onRemoteSwitchMonitor(info)).catch(() => {});
+      },
+      onWakeMonitorRequest: (info) => {
+        Promise.resolve(services.onRemoteWakeMonitor(info)).catch(() => {});
       },
       onFileUpdate: (list) => { services.onFileUpdate(list); broadcastStateThrottled(); },
       // 收到文件前询问：接收 / 取消

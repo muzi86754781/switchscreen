@@ -477,6 +477,7 @@ function buildTile(m, d, letters, color) {
     return node;
   }
 
+  const foot = el('div', 'cm-foot');
   const port = el('button', 'cm-port' + (m.hasPort ? '' : ' is-unset'), m.hasPort ? m.port : '设置接口');
   port.type = 'button';
   port.title = `设置「${m.name}」上 ${d.name} 的接口`;
@@ -484,10 +485,21 @@ function buildTile(m, d, letters, color) {
     e.stopPropagation();
     openPortMenu(port, m.id, d.id);
   });
-  node.appendChild(port);
+  foot.appendChild(port);
+
+  const wakeBtn = el('button', 'cm-wake-btn', '⚡ 唤醒');
+  wakeBtn.type = 'button';
+  wakeBtn.title = `强制唤醒「${m.name}」（发送显卡激活、DDC 0xD6 电源唤醒与信号重握手指令）`;
+  wakeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    doWakeMonitor(m.id, d.id, node, wakeBtn, m.name);
+  });
+  foot.appendChild(wakeBtn);
+
+  node.appendChild(foot);
 
   node.title = here
-    ? `${d.name} 正在这块屏上显示（${m.port || '未设置接口'}）`
+    ? `${d.name} 正在这块屏上显示（${m.port || '未设置接口'}） · 点击显示器可强制唤醒`
     : m.hasPort
       ? `把「${m.name}」切到 ${d.name}（${m.port}）`
       : `先给这块屏设置 ${d.name} 的接口`;
@@ -500,6 +512,15 @@ function buildTile(m, d, letters, color) {
     node.addEventListener('click', go);
     node.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+    });
+  } else {
+    // 选中状态下：点击显示器卡片主体直接执行强制唤醒
+    const goWake = () => {
+      doWakeMonitor(m.id, d.id, node, wakeBtn, m.name);
+    };
+    node.addEventListener('click', goWake);
+    node.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goWake(); }
     });
   }
   return node;
@@ -1155,6 +1176,34 @@ async function switchToDevice(deviceId) {
     if (r && r.state) apply(r.state);
   } catch (e) {
     console.error('[ui] switch', e);
+  }
+}
+
+
+async function doWakeMonitor(monitorId, deviceId, tile, wakeBtn, monName) {
+  if (tile) tile.classList.add('is-waking');
+  if (wakeBtn) {
+    wakeBtn.disabled = true;
+    wakeBtn.textContent = '⚡ 唤醒中…';
+  }
+  toast(`⚡ 正在向「${monName || '显示器'}」发送强制唤醒与信号重握手指令…`);
+  try {
+    const r = await window.api.wakeMonitor(monitorId, deviceId);
+    if (r && r.ok) {
+      toast(`✓ 已向「${monName || '显示器'}」发送强制唤醒指令`);
+    } else if (r && r.error) {
+      toast(`唤醒提示：${r.error}`);
+    }
+  } catch (e) {
+    console.error('[ui] wakeMonitor error', e);
+  } finally {
+    setTimeout(() => {
+      if (tile) tile.classList.remove('is-waking');
+      if (wakeBtn) {
+        wakeBtn.disabled = false;
+        wakeBtn.textContent = '⚡ 唤醒';
+      }
+    }, 1200);
   }
 }
 

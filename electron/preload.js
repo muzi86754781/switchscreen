@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('api', {
   probePort: (monitorId, deviceId) => ipcRenderer.invoke('monitor:probe', { monitorId, deviceId }),
   switchDevice: (deviceId) => ipcRenderer.invoke('switch:device', deviceId),
   switchMonitor: (monitorId, deviceId) => ipcRenderer.invoke('switch:monitor', { monitorId, deviceId }),
+  wakeMonitor: (monitorId, deviceId) => ipcRenderer.invoke('monitor:wake', { monitorId, deviceId }),
 
   // 快捷键 / 启动
   setHotkey: (enabled, kind, id, key) => ipcRenderer.invoke('hotkey:set', { enabled, kind, id, key }),

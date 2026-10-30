@@ -152,6 +152,24 @@ async function winSet(index, hexValue) {
   return winApply(`${index}=${parseInt(hexValue, 16)}`);
 }
 
+async function winWake(index, hexValue) {
+  const script = psScriptPath();
+  const args = ['-Action', 'wake'];
+  if (typeof index === 'number') args.push('-Index', String(index));
+  if (hexValue) args.push('-Value', String(parseInt(hexValue, 16)));
+  if (logger) logger.info('DDC', `winWake: index=${index}, hexValue=${hexValue}`);
+  const r = await run('powershell.exe', psArgs(script, args));
+  const results = [];
+  for (const line of r.out.split(/\r?\n/)) {
+    const m = line.trim().match(/^MON=(\d+)\|(True|False)\|(\d+)$/i);
+    if (!m) continue;
+    const ok = m[2].toUpperCase() === 'TRUE';
+    results.push({ index: Number(m[1]), ok, via: 'dxva2', error: ok ? '' : winErrText(m[3]) });
+  }
+  return summarize(results, 'dxva2', r.err);
+}
+
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -329,6 +347,36 @@ async function macSet(index, hexValue) {
   return { ok: false, via: base, error: err };
 }
 
+async function macWake(index, hexValue) {
+  try {
+    await run('/usr/bin/caffeinate', ['-u', '-t', '2'], 3000);
+  } catch { /* ignore */ }
+
+  const tool = await macTool();
+  if (!tool) {
+    return { ok: true, via: 'caffeinate', total: 1, success: 1, error: '' };
+  }
+  const base = path.basename(tool);
+  const idx = typeof index === 'number' ? index : 1;
+  const decimal = hexValue ? String(parseInt(hexValue, 16)) : '';
+
+  if (base === 'm1ddc') {
+    await run(tool, ['display', String(idx), 'set', 'power', '1'], 4000);
+    if (decimal) {
+      await run(tool, ['display', String(idx), 'set', 'input', decimal], 4000);
+    }
+    return { ok: true, via: 'm1ddc', total: 1, success: 1, error: '' };
+  } else if (base === 'ddcctl') {
+    await run(tool, ['-d', String(idx), '-p', '1'], 4000);
+    if (decimal) {
+      await run(tool, ['-d', String(idx), '-i', decimal], 4000);
+    }
+    return { ok: true, via: 'ddcctl', total: 1, success: 1, error: '' };
+  }
+  return { ok: true, via: 'system', total: 1, success: 1, error: '' };
+}
+
+
 function sameName(a, b) {
   const x = String(a || '').toLowerCase().replace(/[\s\-_()（）]/g, '');
   const y = String(b || '').toLowerCase().replace(/[\s\-_()（）]/g, '');
@@ -414,6 +462,15 @@ async function setInput(index, hexValue) {
   return { ok: false, via: 'none', error: `不支持的平台：${process.platform}` };
 }
 
+async function wakeDisplay(index, hexValue) {
+  hardwareDdcCache.clear();
+  lastWinApplyAll = { target: '', time: 0 };
+  if (IS_WIN) return winWake(index, hexValue);
+  if (IS_MAC) return macWake(index, hexValue);
+  return { ok: false, via: 'none', error: `不支持的平台：${process.platform}` };
+}
+
+
 const hardwareDdcCache = new Map();
 let lastWinApplyAll = { target: '', time: 0 };
 
@@ -496,4 +553,4 @@ async function setInputAll(target, opts) {
   return summarize(results, l.via, '');
 }
 
-module.exports = { listDisplays, setInput, setInputAll, labelOf, INPUT_LABELS, IS_WIN, IS_MAC };
+module.exports = { wakeDisplay, listDisplays, setInput, setInputAll, labelOf, INPUT_LABELS, IS_WIN, IS_MAC };

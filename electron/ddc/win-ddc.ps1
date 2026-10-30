@@ -78,6 +78,18 @@ public class SsDdc
     [DllImport("dxva2.dll", SetLastError = true)]
     public static extern bool GetVCPFeatureAndVCPFeatureReply(IntPtr hMonitor, byte bVCPCode, IntPtr pvct, ref uint pdwCurrentValue, ref uint pdwMaximumValue);
 
+    [DllImport("user32.dll")]
+    public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+
+    [DllImport("kernel32.dll")]
+    public static extern uint SetThreadExecutionState(uint esFlags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int ChangeDisplaySettingsEx(string lpszDeviceName, IntPtr lpDevMode, IntPtr hwnd, uint dwflags, IntPtr lParam);
+
     // One physical monitor: DDC handle + DXVA2 description + the GDI device
     // (\\.\DISPLAY1) and its friendly model name (e.g. "DELL U2414H").
     // The friendly name is what makes index<->model mapping exact: DXVA2 often
@@ -348,6 +360,39 @@ public class SsDdc
         }
         return sb.ToString();
     }
+
+    public static string Wake(int targetIndex, uint targetValue)
+    {
+        try
+        {
+            SendMessage(new IntPtr(0xFFFF), 0x0112, new IntPtr(0xF170), new IntPtr(-1));
+            mouse_event(0x0001, 0, 1, 0, UIntPtr.Zero);
+            mouse_event(0x0001, 0, unchecked((uint)-1), 0, UIntPtr.Zero);
+            SetThreadExecutionState(0x80000000 | 0x00000002 | 0x00000001);
+            ChangeDisplaySettingsEx(null, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero);
+        }
+        catch {}
+
+        List<SsMon> all = Enum();
+        StringBuilder sb = new StringBuilder();
+        sb.Append("COUNT=" + all.Count + "\n");
+        for (int i = 0; i < all.Count; i++)
+        {
+            if (targetIndex >= 0 && i != targetIndex) continue;
+            IntPtr h = all[i].pm.hPhysicalMonitor;
+            bool pwrOk = SetVCPFeature(h, 0xD6, 1);
+            bool inputOk = true;
+            if (targetValue > 0)
+            {
+                inputOk = SetVCPFeature(h, 0x60, targetValue);
+            }
+            Thread.Sleep(80);
+            SetVCPFeature(h, 0xD6, 1);
+            bool ok = pwrOk || inputOk;
+            sb.Append("MON=" + i + "|" + (ok ? "True" : "False") + "|0\n");
+        }
+        return sb.ToString();
+    }
 }
 "@ -ErrorAction Stop
 
@@ -363,6 +408,9 @@ switch ($Action) {
   }
   "setplan" {
     Write-Output ([SsDdc]::SetPlan($Plan))
+  }
+  "wake" {
+    Write-Output ([SsDdc]::Wake($Index, $Value))
   }
   default { Write-Output "ERR=unknown-action" }
 }
