@@ -303,14 +303,11 @@ async function macList() {
     }
     return { ok: false, via: 'm1ddc', displays: [], error: r.err || 'm1ddc 未返回显示器列表' };
   }
-  // ddcctl 无稳定 list 输出，按 1..2 探测
+  // ddcctl 自身无 list 命令，坚决不伪造假显示器，老实返回空数组交由系统层（system_profiler）枚举真实外接屏
   return {
     ok: true,
     via: 'ddcctl',
-    displays: [
-      { index: 1, name: '显示器 1', currentInput: '', currentInputLabel: '' },
-      { index: 2, name: '显示器 2', currentInput: '', currentInputLabel: '' }
-    ]
+    displays: []
   };
 }
 

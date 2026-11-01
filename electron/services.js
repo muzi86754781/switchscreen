@@ -114,8 +114,91 @@ function defaultReceiveDir() {
 
 /* ---------------- 配置 ---------------- */
 
+
+function cleanAuthorityAndMemos() {
+  let changed = false;
+
+  // 1. 清理并正规化 authority.screens
+  if (cfg.ui && cfg.ui.authority && Array.isArray(cfg.ui.authority.screens)) {
+    const list = cfg.ui.authority.screens;
+    const cleanList = [];
+    const aliasMap = cfg.ui.portAlias || {};
+
+    for (const item of list) {
+      if (!item || !item.key) continue;
+      // 过滤通用占位名（显示器 1/2、默认显示器等幽灵屏）
+      if (isGenericName(item.name) || /^(显示器|默认显示器)\s*\d*$/i.test(String(item.name).trim())) {
+        changed = true;
+        continue;
+      }
+      // 检查 alias 映射：如果是别名且目标也在列表中，跳过别名
+      const targetKey = aliasMap[item.key];
+      if (targetKey && targetKey !== item.key && list.some(x => x && x.key === targetKey)) {
+        changed = true;
+        continue;
+      }
+      // 检查型号重复：优先保留 sn:，删除旧格式 nm:
+      const norm = normName(item.name);
+      if (norm) {
+        const existing = cleanList.find(x => modelNameHit(x.name, item.name));
+        if (existing) {
+          if (!existing.key.startsWith('sn:') && item.key.startsWith('sn:')) {
+            existing.key = item.key;
+            existing.name = item.name;
+          }
+          if (item.ports) {
+            existing.ports = Object.assign({}, item.ports, existing.ports || {});
+          }
+          changed = true;
+          continue;
+        }
+      }
+      cleanList.push(item);
+    }
+    if (cleanList.length !== list.length) changed = true;
+    cfg.ui.authority.screens = cleanList;
+  }
+
+  // 2. 清理 screenMemo
+  if (cfg.ui && cfg.ui.screenMemo) {
+    const memo = cfg.ui.screenMemo;
+    const cleanMemo = {};
+    const seenMemoModels = new Set();
+    // 优先保留 sn: 开头的真实条目
+    const keys = Object.keys(memo).sort((a, b) => {
+      const aIsSn = a.startsWith('sn:') ? 1 : 0;
+      const bIsSn = b.startsWith('sn:') ? 1 : 0;
+      return bIsSn - aIsSn;
+    });
+    for (const k of keys) {
+      const item = memo[k];
+      if (!item) continue;
+      if (isGenericName(item.name) || /^(显示器|默认显示器)\s*\d*$/i.test(String(item.name).trim())) {
+        changed = true;
+        continue;
+      }
+      const norm = normName(item.name);
+      if (norm) {
+        if (seenMemoModels.has(norm)) {
+          changed = true;
+          continue;
+        }
+        seenMemoModels.add(norm);
+      }
+      cleanMemo[k] = item;
+    }
+    if (Object.keys(cleanMemo).length !== Object.keys(memo).length) changed = true;
+    cfg.ui.screenMemo = cleanMemo;
+  }
+
+  if (changed) {
+    persist();
+  }
+}
+
 function ensureDefaults() {
   if (!cfg.ui) cfg.ui = {};
+  cleanAuthorityAndMemos();
   const ui = cfg.ui;
   if (!ui.receiveDir) ui.receiveDir = defaultReceiveDir();
   if (typeof ui.mouseSpeed !== 'number') ui.mouseSpeed = 1;
@@ -1097,6 +1180,7 @@ function buildAuthority() {
   const byKey = new Map(prev.filter((s) => s && s.key).map((s) => [s.key, { ...s }]));
   for (const m of monitorsCache) {
     if (m.internal) continue;
+    if (isGenericName(m.name) || /^(显示器|默认显示器)\s*\d*$/i.test(String(m.name).trim())) continue;
     const k = screenKey(m);
     const old = byKey.get(k) || {};
     const ps = portsOfKey(portKey(m));
@@ -1108,7 +1192,27 @@ function buildAuthority() {
       ports: Object.keys(ps).length ? ps : (old.ports || {})
     });
   }
-  return { rev: Date.now(), at: cfg.peerName, screens: [...byKey.values()] };
+  const cleanList = [];
+  for (const item of byKey.values()) {
+    if (!item || !item.key) continue;
+    if (isGenericName(item.name) || /^(显示器|默认显示器)\s*\d*$/i.test(String(item.name).trim())) continue;
+    const norm = normName(item.name);
+    if (norm) {
+      const existing = cleanList.find((x) => modelNameHit(x.name, item.name));
+      if (existing) {
+        if (!existing.key.startsWith('sn:') && item.key.startsWith('sn:')) {
+          existing.key = item.key;
+          existing.name = item.name;
+        }
+        if (item.ports) {
+          existing.ports = Object.assign({}, item.ports, existing.ports || {});
+        }
+        continue;
+      }
+    }
+    cleanList.push(item);
+  }
+  return { rev: Date.now(), at: cfg.peerName, screens: cleanList };
 }
 
 /**
@@ -1197,8 +1301,8 @@ function offlineRows() {
   const out = [];
   for (const s of a.screens) {
     if (!s || !s.key) continue;
-    // 忽略通用占位名（显示器 1/2、Generic 等幽灵屏）
-    if (isGenericName(s.name)) continue;
+    // 忽略通用占位名（显示器 1/2、默认显示器等幽灵屏）
+    if (isGenericName(s.name) || /^(显示器|默认显示器)\s*\d*$/i.test(String(s.name).trim())) continue;
     if (have.has(s.key)) continue;
 
     // 键对不上、但能认领到本机的屏：不是离线屏，绝不补成重复的一行
@@ -1207,10 +1311,15 @@ function offlineRows() {
     // 只补「本机真的见过、且有真实型号名的屏」
     const memo = (cfg.ui.screenMemo && cfg.ui.screenMemo[s.key]) || {};
     if (!memo.name && !memo.pos) continue;
-    if (isGenericName(memo.name)) continue;
+    if (isGenericName(memo.name) || /^(显示器|默认显示器)\s*\d*$/i.test(String(memo.name).trim())) continue;
 
+    const sName = memo.name || s.name;
     // 如果这块屏的名字与本地已有某块外接屏型号一致，说明只是稳定键口径不同，绝不重复生成
-    if (monitorsCache.some((m) => !m.internal && modelNameHit(m.name, memo.name || s.name))) {
+    if (monitorsCache.some((m) => !m.internal && modelNameHit(m.name, sName))) {
+      continue;
+    }
+    // 自身已添加的离线列表中若已有同型号，坚决不重复生成！
+    if (out.some((item) => modelNameHit(item.name, sName))) {
       continue;
     }
 
@@ -1877,51 +1986,66 @@ async function doDetectMonitors() {
   let list = [];
   let via = 'sys';
   try {
-    // 优先走原生 DDC（可拿到 index 和当前输入源），再叠加系统友好名
-    const r = await ddc.listDisplays();
-    if (r.ok && r.displays.length) {
-      via = r.via;
-      const friendlyAll = IS_MAC ? await detectMac() : IS_WIN ? await detectWin() : [];
-      lastFriendly = friendlyAll;
-      // Mac 的系统枚举把内建屏一起算进来，DDC 只数外接屏 —— 先把内建屏摘出去再对齐，
-      // 否则数量永远差一个，型号名和序列号全都安不上（屏就变成「显示器 1/2」，跨机器对不上号）
-      const friendly = IS_MAC ? friendlyAll.filter((f) => !f.internal) : friendlyAll;
-      // ddcctl 没有可靠的列表输出，探测数量可能多于实际，用系统枚举结果裁剪
-      let ddcList = r.displays;
-      if (friendly.length && friendly.length < ddcList.length) ddcList = ddcList.slice(0, friendly.length);
-      // 优先按硬件 ID 精确配对（Windows 的 dxva2 枚举顺序和 WMI 顺序不一定一致，
-      // 按顺序对会把两块屏的型号弄反，进而切错屏）；没有硬件 ID 时才退回顺序对齐
-      const byHwid = new Map();
-      for (const f of friendly) if (f.hwid) byHwid.set(f.hwid, f);
-      const aligned = friendly.length === ddcList.length;
-      list = ddcList.map((d, i) => {
-        let f = d.hwid ? (byHwid.get(d.hwid) || null) : null;
-        if (!f && d.name) {
-          f = friendly.find((item) => modelNameHit(item.name, d.name) || (item.serial && d.serial && item.serial === d.serial));
-        }
-        if (!f && aligned) f = friendly[i];
-        const isGeneric = (n) => !n || /^显示器\s*\d*$/i.test(String(n).trim());
-        const bestName = (!isGeneric(d.name) ? d.name : (f && !isGeneric(f.name) ? f.name : (d.name || (f && f.name) || `显示器 ${d.index}`)));
-        return {
-          id: `ddc:${d.index}`,
-          index: d.index,
-          name: bestName,
-          serial: (f && f.serial) || d.serial || '',
-          size: (f && f.size) || '',
-          currentInput: d.currentInput || '',
-          currentInputLabel: d.currentInputLabel || ''
-        };
-      });
-    } else {
-      const sys = IS_MAC ? await detectMac() : IS_WIN ? await detectWin() : [];
-      list = sys.map((m, i) => ({
-        ...m,
-        index: null,
-        id: m.id || `sys:${i}`,
-        currentInput: '',
-        currentInputLabel: ''
-      }));
-      if (r.error) ddcError = r.error;
+    cleanAuthorityAndMemos();
+    const friendlyAll = IS_MAC ? await detectMac() : IS_WIN ? await detectWin() : [];
+    lastFriendly = friendlyAll;
+    const friendly = IS_MAC ? friendlyAll.filter((f) => !f.internal) : friendlyAll;
+    const internals = IS_MAC ? friendlyAll.filter((f) => f.internal) : [];
+
+    // 若系统物理枚举显示没有任何外接屏（friendly.length === 0），外接屏强制为 0
+    if (friendly.length > 0) {
+      const r = await ddc.listDisplays();
+      if (r.ok && r.displays.length) {
+        via = r.via;
+        let ddcList = r.displays;
+        if (friendly.length < ddcList.length) ddcList = ddcList.slice(0, friendly.length);
+        const byHwid = new Map();
+        for (const f of friendly) if (f.hwid) byHwid.set(f.hwid, f);
+        const aligned = friendly.length === ddcList.length;
+        list = ddcList.map((d, i) => {
+          let f = d.hwid ? (byHwid.get(d.hwid) || null) : null;
+          if (!f && d.name) {
+            f = friendly.find((item) => modelNameHit(item.name, d.name) || (item.serial && d.serial && item.serial === d.serial));
+          }
+          if (!f && aligned) f = friendly[i];
+          const isGeneric = (n) => !n || /^(显示器|默认显示器)\s*\d*$/i.test(String(n).trim());
+          const bestName = (!isGeneric(d.name) ? d.name : (f && !isGeneric(f.name) ? f.name : (d.name || (f && f.name) || `显示器 ${d.index}`)));
+          return {
+            id: `ddc:${d.index}`,
+            index: d.index,
+            name: bestName,
+            serial: (f && f.serial) || d.serial || '',
+            size: (f && f.size) || '',
+            internal: false,
+            currentInput: d.currentInput || '',
+            currentInputLabel: d.currentInputLabel || ''
+          };
+        });
+      } else {
+        if (r && r.error) ddcError = r.error;
+        list = friendly.map((m, i) => ({
+          ...m,
+          index: null,
+          id: m.id || `sys:${i}`,
+          internal: false,
+          currentInput: '',
+          currentInputLabel: ''
+        }));
+      }
+    }
+
+    // 将笔记本自带的内建屏加入 list
+    for (const intItem of internals) {
+      if (!list.some((x) => x.internal || x.id === intItem.id || x.name === intItem.name)) {
+        list.push({
+          ...intItem,
+          index: null,
+          id: intItem.id || 'internal',
+          internal: true,
+          currentInput: '',
+          currentInputLabel: ''
+        });
+      }
     }
   } catch (e) {
     ddcError = e.message;
@@ -1929,13 +2053,14 @@ async function doDetectMonitors() {
   }
 
   if (!list.length) {
-    // 检测失败也让界面可用：保留已保存的名字
+    // 只有在连内建屏都没有、且系统检测彻底失败时，保留已保存的名字作为极值兜底
     list = [{
       id: cfg.ui.monitorId || 'default',
       index: null,
       name: cfg.ui.monitorName || '默认显示器',
       serial: '',
       size: '',
+      internal: false,
       currentInput: '',
       currentInputLabel: ''
     }];
@@ -2140,9 +2265,13 @@ function getState() {
       ownerId: m.ownerId
     }));
 
+    // 本机若物理上没有外接屏且处于单机状态（无任何对端在线），本机拓扑只展示内建屏
+    const localExtPresent = monitorsCache.some((m) => !m.internal);
+    const shouldAttachShared = !(isThisLocal && !localExtPresent && peersNow.length === 0);
+
     // 为有内建屏的设备添加专属内建屏（排在最左侧体现相对位置）
-    const devMonitors = sharedMonitors.slice();
-    const extWithPos = sharedMonitors.filter((m) => m.pos);
+    const devMonitors = shouldAttachShared ? sharedMonitors.slice() : [];
+    const extWithPos = devMonitors.filter((m) => m.pos);
     const minExtX = extWithPos.length ? Math.min(...extWithPos.map((m) => m.pos.x)) : 0;
 
     if (isThisLocal) {

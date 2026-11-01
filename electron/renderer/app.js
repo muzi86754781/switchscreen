@@ -638,9 +638,19 @@ function buildWorkbench(s) {
     idBox.appendChild(nameLine);
 
     const total = shared.length;
-    const sub = d.local
-      ? `本机${total ? ` · 接 ${total} 块屏${hereCount ? `（正在显示 ${hereCount} 块）` : ''}` : ''}`
-      : `${d.online ? '已连接 · 同局域网' : '离线'}${total ? ` · 接 ${total} 块屏${hereCount ? `（正在显示 ${hereCount} 块）` : ''}` : ''}`;
+    const connectedExt = shared.filter((m) => m.present !== false).length;
+    let sub = '';
+    if (d.local) {
+      if (connectedExt > 0) {
+        sub = `本机 · 接 ${connectedExt} 块屏${hereCount ? `（正在显示 ${hereCount} 块）` : ''}`;
+      } else if ((d.monitors || []).some((m) => m.internal)) {
+        sub = '本机 · 仅内建屏（未连接外接屏）';
+      } else {
+        sub = '本机 · 未连接显示器';
+      }
+    } else {
+      sub = `${d.online ? '已连接 · 同局域网' : '离线'}${total ? ` · 接 ${total} 块屏${hereCount ? `（正在显示 ${hereCount} 块）` : ''}` : ''}`;
+    }
     idBox.appendChild(el('div', 'wb-sub', sub));
     head.appendChild(idBox);
     left.appendChild(head);
@@ -665,12 +675,17 @@ function buildWorkbench(s) {
   });
 
   const extMonitors = monitors.filter((m) => !m.internal);
+  const hasInternal = monitors.some((m) => m.internal);
   const n = extMonitors.length;
   const devs = devices.length;
   const onlineOthers = devices.filter((d) => !d.local && d.online).length;
-  $('#wbNote').textContent = n
-    ? `${devs} 台设备 · ${n} 块屏${onlineOthers ? '' : ' · 没有其它设备在线'}`
-    : '未检测到显示器';
+  if (n > 0) {
+    $('#wbNote').textContent = `${devs} 台设备 · ${n} 块屏${onlineOthers ? '' : ' · 没有其它设备在线'}`;
+  } else if (hasInternal) {
+    $('#wbNote').textContent = `${devs} 台设备 · 仅内建屏${onlineOthers ? '' : ' · 没有其它设备在线'}`;
+  } else {
+    $('#wbNote').textContent = '未检测到显示器';
+  }
   layoutChains();
 }
 

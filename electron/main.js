@@ -30,10 +30,22 @@ if (!gotTheLock) {
   });
 }
 
-// 登录时开机自启检测：静默启动至系统托盘，不弹出主界面
-const isSilentLaunch = process.argv.includes('--hidden') ||
-                       process.argv.includes('--minimized') ||
-                       Boolean(app.getLoginItemSettings && app.getLoginItemSettings().wasOpenedAsHidden);
+// 登录时开机自启检测：静默启动至系统托盘，不弹出主界面，macOS 退出程序坞
+let isSilentLaunch = process.argv.includes('--hidden') ||
+                     process.argv.includes('--minimized');
+try {
+  if (app.getLoginItemSettings) {
+    const loginItem = app.getLoginItemSettings();
+    if (loginItem.wasOpenedAsHidden || loginItem.wasOpenedAtLogin) {
+      isSilentLaunch = true;
+    }
+  }
+} catch { /* ignore */ }
+
+// macOS 开机静默启动时：在最顶层立即隐藏 Dock 图标，杜绝 Dock 栏弹跳与图标闪现
+if (isSilentLaunch && IS_MAC && app.dock && app.dock.hide) {
+  try { app.dock.hide(); } catch { /* ignore */ }
+}
 
 /* ---------------- 窗口 ---------------- */
 
@@ -1190,6 +1202,9 @@ function checkNativeModules() {
 }
 
 app.whenReady().then(() => {
+  if (isSilentLaunch && IS_MAC && app.dock && app.dock.hide) {
+    try { app.dock.hide(); } catch { /* ignore */ }
+  }
   services.ensureDefaults();
   registerIpc();
   checkNativeModules();
