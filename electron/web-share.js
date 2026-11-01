@@ -4,7 +4,12 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { clipboard } = require('electron');
+let clipboard = null;
+if (process.versions && process.versions.electron) {
+  try {
+    clipboard = require('electron').clipboard;
+  } catch {}
+}
 const { generateQrSvg } = require('./qrcode');
 const logger = require('./logger');
 
@@ -610,7 +615,7 @@ function getShareInfo() {
   const recommendedIp = recommended ? recommended.ip : '127.0.0.1';
 
   // 优先用用户手动选定的有效 IP，否则默认选中推荐的第一名物理网卡 IP
-  if (userChosenIp && ifaces.some(i => i.ip === userChosenIp && !i.isVirtual)) {
+  if (userChosenIp && ifaces.some(i => i.ip === userChosenIp)) {
     currentIp = userChosenIp;
   } else {
     currentIp = recommendedIp;

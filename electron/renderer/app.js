@@ -1008,7 +1008,7 @@ function renderWebShare(s) {
       ifaceSelect.innerHTML = optionsHtml;
       ifaceSelect.dataset.lastHtml = optionsHtml;
     }
-    if (activeIp && ifaceSelect.value !== activeIp) {
+    if (activeIp) {
       ifaceSelect.value = activeIp;
     }
     ifaceSelect.disabled = !isRunning;

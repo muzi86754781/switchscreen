@@ -682,26 +682,59 @@ button.ws-toggle-btn.is-stopped:hover {
 .ws-iface-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 7px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 .ws-iface-label {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--text-2);
   white-space: nowrap;
   flex-shrink: 0;
 }
+select.ws-iface-select,
 .ws-iface-select {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
-  height: 25px;
-  padding: 1px 6px;
-  font-size: 11px;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 5px;
-  color: var(--text-1);
+  box-sizing: border-box !important;
+  height: 28px !important;
+  padding: 0 28px 0 9px !important;
+  margin: 0 !important;
+  font-size: 11.5px !important;
+  font-family: inherit !important;
+  line-height: 26px !important;
+  color: #eef2fb !important;
+  background-color: rgba(18, 24, 38, 0.95) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-radius: 6px !important;
+  background-image: url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2398a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 8px center !important;
+  background-size: 10px !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
   cursor: pointer;
+  outline: none;
+  display: block !important;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+select.ws-iface-select:focus,
+.ws-iface-select:focus {
+  border-color: rgba(110, 150, 245, 0.7) !important;
+  box-shadow: 0 0 0 2px rgba(91, 140, 240, 0.16) !important;
+}
+select.ws-iface-select:disabled,
+.ws-iface-select:disabled {
+  opacity: 0.5 !important;
+  cursor: not-allowed !important;
+}
+select.ws-iface-select option,
+.ws-iface-select option {
+  background-color: #161b26 !important;
+  color: #eef2fb !important;
+  padding: 6px 10px !important;
+  font-size: 12px !important;
 }
 .ws-url-line { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
 .ws-url-input {
