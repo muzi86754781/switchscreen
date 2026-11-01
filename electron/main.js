@@ -1269,7 +1269,7 @@ function registerIpc() {
     return true;
   });
 
-  ipcMain.handle('web-share:send-files', async (_e, paths) => {
+  ipcMain.handle('web-share:send-files', async (_e, paths, target) => {
     let filePaths = paths;
     if (!filePaths || !filePaths.length) {
       const res = await dialog.showOpenDialog(win, {
@@ -1279,7 +1279,7 @@ function registerIpc() {
       if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
       filePaths = res.filePaths;
     }
-    const added = webShare.addSharedFiles(filePaths);
+    const added = webShare.addSharedFiles(filePaths, target || 'all');
     if (win && !win.isDestroyed()) {
       win.webContents.send('toast', `已共享 ${added.length} 个文件给手机，手机扫码即可下载`);
     }
@@ -1287,10 +1287,10 @@ function registerIpc() {
     return { ok: true, count: added.length };
   });
 
-  ipcMain.handle('web-share:send-text', async (_e, text) => {
+  ipcMain.handle('web-share:send-text', async (_e, text, target) => {
     const clean = String(text || '').trim();
     if (!clean) return { ok: false };
-    webShare.addSharedText(clean);
+    webShare.addSharedText(clean, target || 'all');
     if (win && !win.isDestroyed()) {
       win.webContents.send('toast', '已将文字共享给手机，手机网页端已同步展示');
     }
@@ -1298,14 +1298,14 @@ function registerIpc() {
     return { ok: true };
   });
 
-  ipcMain.handle('web-share:send-clipboard', async () => {
+  ipcMain.handle('web-share:send-clipboard', async (_e, target) => {
     let text = '';
     try { text = clipboard.readText(); } catch {}
     if (!text || !text.trim()) {
       if (win && !win.isDestroyed()) win.webContents.send('toast', '当前电脑剪贴板中没有文字内容');
       return { ok: false, reason: 'empty' };
     }
-    webShare.addSharedText(text.trim());
+    webShare.addSharedText(text.trim(), target || 'all');
     if (win && !win.isDestroyed()) {
       win.webContents.send('toast', '已将电脑剪贴板文字共享给手机！');
     }

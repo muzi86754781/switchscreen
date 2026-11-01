@@ -73,6 +73,8 @@
             <div class="hk-list" id="hotkeyList"></div>
             <div class="hk-tip">点击按键框即可直接按下键盘自定义（支持任意单键或 Ctrl / Alt / Shift / ⌘ 组合键，按 Esc 取消，点 ✕ 或按 Delete 清除）</div>
 
+            <hr class="card-divider" />
+
             <label class="check-row check-row-sm">
               <input type="checkbox" id="launchAtLogin" />
               <span class="box"></span>
@@ -90,53 +92,71 @@
       <!-- ============ 传输与剪贴板 ============ -->
       <section class="panel" data-panel="share">
         <div class="share-grid">
-          <!-- 左：从上到下：发送到、发送文件、发送文本、剪贴板与接收、接收目录 -->
+          <!-- 左：从上到下：统一发送卡片（选项卡切换文件/文本 + 下方发送到设备）、剪贴板与接收、接收目录 -->
           <div class="share-col">
-            <!-- 1. 发送到 -->
-            <div class="card">
-              <div class="card-label">
-                <span>发送到</span>
-                <span class="card-note" id="targetNote"></span>
-              </div>
-              <div class="peers" id="peerChips"></div>
-            </div>
-
-            <!-- 2. 发送文件 -->
-            <div class="card">
-              <div class="card-label"><span>发送文件</span></div>
-              <div class="dropzone" id="dropzone" tabindex="0">
-                <div class="dz-icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 16V4" />
-                    <path d="M7 9l5-5 5 5" />
-                    <path d="M20 15v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3" />
-                  </svg>
+            <!-- 1. 发送区域（发送文件/发送文本 选项卡 + 下方发送到） -->
+            <div class="card send-unified-card">
+              <!-- 上方：选项卡 -->
+              <div class="send-tabs-bar">
+                <div class="send-tabs-nav">
+                  <button type="button" class="send-tab-btn is-active" id="tabBtnSendFile" data-send-tab="file">
+                    <svg class="tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                      <polyline points="13 2 13 9 20 9"></polyline>
+                    </svg>
+                    <span>发送文件</span>
+                  </button>
+                  <button type="button" class="send-tab-btn" id="tabBtnSendText" data-send-tab="text">
+                    <svg class="tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="4" y1="7" x2="20" y2="7"></line>
+                      <line x1="4" y1="12" x2="16" y2="12"></line>
+                      <line x1="4" y1="17" x2="11" y2="17"></line>
+                    </svg>
+                    <span>发送文本</span>
+                  </button>
                 </div>
-                <div class="dz-title">把文件拖到这里，或直接粘贴图片（Ctrl / ⌘ + V）</div>
-                <div class="dz-sub">或 <button type="button" class="link-inline" id="pickFiles">选择文件</button> · <button type="button" class="link-inline" id="pickFolder">选择文件夹</button></div>
               </div>
 
-              <!-- 待发送文件预览列表 -->
-              <div class="staged-wrap" id="stagedWrap" hidden>
-                <div class="staged-head">
-                  <span class="staged-summary" id="stagedSummary">已选择 0 项</span>
-                  <button type="button" class="btn btn-ghost btn-mini" id="stagedClearBtn">清空</button>
+              <!-- 选项卡内容区 -->
+              <div class="send-tabs-content">
+                <!-- 选项卡 1：发送文件 -->
+                <div class="send-tab-pane is-active" id="sendPaneFile">
+                  <div class="dropzone" id="dropzone" tabindex="0">
+                    <div class="dz-icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 16V4" />
+                        <path d="M7 9l5-5 5 5" />
+                        <path d="M20 15v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3" />
+                      </svg>
+                    </div>
+                    <div class="dz-title">把文件拖到这里，或直接粘贴图片（Ctrl / ⌘ + V）</div>
+                    <div class="dz-sub">或 <button type="button" class="link-inline" id="pickFiles">选择文件</button> · <button type="button" class="link-inline" id="pickFolder">选择文件夹</button></div>
+                  </div>
+
+                  <!-- 待发送文件预览列表 -->
+                  <div class="staged-wrap" id="stagedWrap" hidden>
+                    <div class="staged-head">
+                      <span class="staged-summary" id="stagedSummary">已选择 0 项</span>
+                      <button type="button" class="btn btn-ghost btn-mini" id="stagedClearBtn">清空</button>
+                    </div>
+                    <div class="staged-list" id="stagedList"></div>
+                  </div>
                 </div>
-                <div class="staged-list" id="stagedList"></div>
+
+                <!-- 选项卡 2：发送文本 -->
+                <div class="send-tab-pane" id="sendPaneText" hidden>
+                  <textarea class="input send-textarea" id="textInput" rows="4" placeholder="粘贴或输入一段文字，点击下方设备名即可直接发送…"></textarea>
+                </div>
               </div>
 
-              <div class="row row-actions" style="margin-top: 10px;">
-                <button type="button" class="btn btn-primary" id="sendFilesBtn" disabled>发送文件</button>
-              </div>
-            </div>
-
-            <!-- 3. 发送文本 -->
-            <div class="card">
-              <div class="card-label"><span>发送文本</span></div>
-              <textarea class="input" id="textInput" rows="4" placeholder="粘贴一段文字直接发过去…（可多行，Ctrl / ⌘ + Enter 发送）"></textarea>
-              <div class="row row-actions">
-                <button class="btn btn-primary" id="sendTextBtn">发送文字</button>
-                <span class="hint">Ctrl / ⌘ + Enter 发送</span>
+              <!-- 下方：发送到 -->
+              <div class="send-target-bar">
+                <div class="send-target-label">
+                  <span class="target-title">发送到：</span>
+                  <span class="target-subhint">点击设备名即发送</span>
+                  <span class="card-note" id="targetNote" style="margin-left: auto;"></span>
+                </div>
+                <div class="peers" id="peerChips"></div>
               </div>
             </div>
 
@@ -195,9 +215,22 @@
                     手机连同一 Wi-Fi，用微信或自带相机扫码，免装 App 即可互传照片与文字。
                     <div class="ws-proxy-hint">提示：服务已自动跳过代理虚拟网卡；若手机开着 VPN/代理软件，设为「绕过局域网」即可秒连。</div>
                   </div>
+                  <!-- 扫码在线设备状态 -->
+                  <div class="ws-clients-line" id="wsClientsLine">
+                    <span class="ws-clients-icon">📱</span>
+                    <span class="ws-clients-text" id="wsClientsText">等待手机扫码连接…</span>
+                  </div>
                   <!-- 电脑发送到手机快捷操作区 -->
                   <div class="ws-send-box" id="webShareSendBox">
-                    <div class="ws-send-title">电脑发给手机：</div>
+                    <div class="ws-send-head">
+                      <div class="ws-send-title">电脑发给手机：</div>
+                      <div class="ws-send-target" id="wsSendTargetWrap" style="display: none;">
+                        <span class="ws-target-label">目标:</span>
+                        <select class="ws-target-select" id="wsTargetSelect">
+                          <option value="all">📢 全部已连手机</option>
+                        </select>
+                      </div>
+                    </div>
                     <div class="ws-send-actions">
                       <button type="button" class="btn btn-sm btn-primary" id="wsSendFileBtn" title="选择电脑文件/照片，手机扫码即可下载">📤 选文件发给手机</button>
                       <button type="button" class="btn btn-sm" id="wsSendTextBtn" title="输入文字发给手机">📝 发文字</button>

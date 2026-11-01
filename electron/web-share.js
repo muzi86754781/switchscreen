@@ -23,8 +23,50 @@ let notifyCallback = null;
 
 const sharedFilesToPhone = new Map();
 let sharedTextToPhone = null;
+const activeClients = new Map();
 
-function addSharedFiles(filePaths) {
+function recordClientActive(id, name, ip, ua) {
+  if (!id) return;
+  const now = Date.now();
+  const existing = activeClients.get(id);
+  const isNew = !existing || (now - existing.lastSeen > 12000);
+  activeClients.set(id, {
+    id,
+    name: name || (existing ? existing.name : '手机'),
+    ip: ip || (existing ? existing.ip : ''),
+    ua: ua || (existing ? existing.ua : ''),
+    lastSeen: now
+  });
+  if (isNew && broadcastCallback) {
+    try { broadcastCallback(); } catch {}
+  }
+}
+
+function getOnlineClients() {
+  const now = Date.now();
+  const list = [];
+  for (const [id, c] of activeClients.entries()) {
+    if (now - c.lastSeen < 10000) {
+      list.push({
+        id: c.id,
+        name: c.name,
+        ip: c.ip,
+        label: `${c.name} (${c.ip})`
+      });
+    } else if (now - c.lastSeen > 60000) {
+      activeClients.delete(id);
+    }
+  }
+  return list;
+}
+
+function addSharedFiles(filePaths, target = 'all') {
+  const online = getOnlineClients();
+  let targetName = '所有已连手机';
+  if (target && target !== 'all') {
+    const found = online.find(c => c.id === target);
+    if (found) targetName = found.name;
+  }
   const added = [];
   for (const fp of filePaths || []) {
     try {
@@ -35,6 +77,8 @@ function addSharedFiles(filePaths) {
           const name = path.basename(fp);
           const item = {
             id,
+            target: target || 'all',
+            targetName,
             name,
             originalPath: fp,
             size: st.size,
@@ -52,7 +96,7 @@ function addSharedFiles(filePaths) {
               size: st.size,
               done: st.size,
               status: 'done',
-              peer: '手机网页端',
+              peer: (target === 'all' || !target) ? (online.length > 1 ? `全部手机(${online.length}台)` : '手机网页端') : targetName,
               path: fp,
               at: Date.now()
             });
@@ -65,12 +109,20 @@ function addSharedFiles(filePaths) {
   return added;
 }
 
-function addSharedText(text) {
+function addSharedText(text, target = 'all') {
   const clean = String(text || '').trim();
   if (!clean) return null;
+  const online = getOnlineClients();
+  let targetName = '所有已连手机';
+  if (target && target !== 'all') {
+    const found = online.find(c => c.id === target);
+    if (found) targetName = found.name;
+  }
   const id = 'ws_out_t_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
   sharedTextToPhone = {
     id,
+    target: target || 'all',
+    targetName,
     text: clean,
     at: Date.now()
   };
@@ -82,7 +134,7 @@ function addSharedText(text) {
       size: Buffer.byteLength(clean, 'utf8'),
       done: Buffer.byteLength(clean, 'utf8'),
       status: 'done',
-      peer: '手机网页端',
+      peer: (target === 'all' || !target) ? (online.length > 1 ? `全部手机(${online.length}台)` : '手机网页端') : targetName,
       text: clean,
       at: Date.now()
     });
@@ -477,6 +529,31 @@ function buildWebHtml(pcName) {
   <div class="toast" id="toast"></div>
 
   <script>
+    function detectDeviceName() {
+      var ua = navigator.userAgent || '';
+      if (/iPad/i.test(ua)) return 'iPad';
+      if (/iPhone/i.test(ua)) return 'iPhone';
+      if (/Huawei|Honor/i.test(ua)) return '华为手机';
+      if (/Xiaomi|Redmi/i.test(ua)) return '小米手机';
+      if (/OPPO/i.test(ua)) return 'OPPO手机';
+      if (/vivo/i.test(ua)) return 'vivo手机';
+      if (/Android/i.test(ua)) return 'Android手机';
+      if (/Macintosh/i.test(ua)) return 'Mac网页端';
+      if (/Windows/i.test(ua)) return 'Win网页端';
+      return '手机设备';
+    }
+    var myClientId = '';
+    try {
+      myClientId = localStorage.getItem('ss_ws_cid');
+      if (!myClientId) {
+        myClientId = 'c_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+        localStorage.setItem('ss_ws_cid', myClientId);
+      }
+    } catch (e) {
+      myClientId = 'c_' + Date.now().toString(36);
+    }
+    var myDeviceName = detectDeviceName();
+
     function showToast(msg) {
       const t = document.getElementById('toast');
       t.innerText = msg;
@@ -523,7 +600,7 @@ function buildWebHtml(pcName) {
           showToast('正在上传: ' + file.name + ' (' + (i + 1) + '/' + files.length + ')');
           await new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
-            xhr.open('POST', '/api/upload?name=' + encodeURIComponent(file.name), true);
+            xhr.open('POST', '/api/upload?name=' + encodeURIComponent(file.name) + '&cid=' + encodeURIComponent(myClientId) + '&deviceName=' + encodeURIComponent(myDeviceName), true);
             xhr.upload.onprogress = (ev) => {
               if (ev.lengthComputable) {
                 const percent = Math.round((ev.loaded / ev.total) * 100);
@@ -559,7 +636,7 @@ function buildWebHtml(pcName) {
         const res = await fetch('/api/text', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text })
+          body: JSON.stringify({ text: text, cid: myClientId, deviceName: myDeviceName })
         });
         if (res.ok) {
           textInput.value = '';
@@ -590,7 +667,7 @@ function buildWebHtml(pcName) {
 
     async function pollPcContent() {
       try {
-        const res = await fetch('/api/poll');
+        const res = await fetch('/api/poll?cid=' + encodeURIComponent(myClientId) + '&name=' + encodeURIComponent(myDeviceName));
         if (!res.ok) return;
         const data = await res.json();
 
@@ -661,10 +738,29 @@ function handleRequest(req, res) {
 
   // 2. 手机轮询电脑发来的内容（文字 + 文件）
   if (req.method === 'GET' && pathname === '/api/poll') {
+    const rawIp = req.socket.remoteAddress || '';
+    const ip = rawIp.replace(/^.*:/, '') || '127.0.0.1';
+    const cid = urlObj.searchParams.get('cid') || ('ip_' + ip);
+    const name = urlObj.searchParams.get('name') || '手机';
+    const ua = req.headers['user-agent'] || '';
+
+    recordClientActive(cid, name, ip, ua);
+
+    let textForClient = null;
+    if (sharedTextToPhone) {
+      if (!sharedTextToPhone.target || sharedTextToPhone.target === 'all' || sharedTextToPhone.target === cid) {
+        textForClient = sharedTextToPhone;
+      }
+    }
+
+    const filesForClient = Array.from(sharedFilesToPhone.values()).filter(f => {
+      return !f.target || f.target === 'all' || f.target === cid;
+    });
+
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({
-      text: sharedTextToPhone,
-      files: Array.from(sharedFilesToPhone.values())
+      text: textForClient,
+      files: filesForClient
     }));
     return;
   }
@@ -673,6 +769,13 @@ function handleRequest(req, res) {
   if (req.method === 'POST' && pathname === '/api/upload') {
     const rawName = urlObj.searchParams.get('name') || 'upload_' + Date.now();
     const filename = sanitizeFilename(rawName);
+    const rawIp = req.socket.remoteAddress || '';
+    const ip = rawIp.replace(/^.*:/, '') || '127.0.0.1';
+    const cid = urlObj.searchParams.get('cid') || ('ip_' + ip);
+    const deviceName = urlObj.searchParams.get('deviceName') || '手机';
+    recordClientActive(cid, deviceName, ip);
+    const peerName = `${deviceName} (${ip})`;
+
     const recvDir = getReceiveDir();
     const savePath = uniquePath(recvDir, filename);
 
@@ -686,7 +789,7 @@ function handleRequest(req, res) {
       const finalName = path.basename(savePath);
       let fileSize = 0;
       try { fileSize = fs.statSync(savePath).size; } catch {}
-      logger.info('WEB-SHARE', `Received file from mobile: ${finalName} (${fileSize} bytes)`);
+      logger.info('WEB-SHARE', `Received file from mobile (${peerName}): ${finalName} (${fileSize} bytes)`);
 
       if (servicesRef && servicesRef.addWebShareTransfer) {
         servicesRef.addWebShareTransfer({
@@ -696,18 +799,18 @@ function handleRequest(req, res) {
           size: fileSize,
           done: fileSize,
           status: 'done',
-          peer: '手机网页端',
+          peer: peerName,
           path: savePath,
           at: Date.now()
         });
       }
 
       if (servicesRef && servicesRef.pushStatus) {
-        servicesRef.pushStatus(`手机端已送达文件：${finalName}`, 'ok');
+        servicesRef.pushStatus(`来自【${deviceName}】的文件已送达：${finalName}`, 'ok');
       }
 
       if (notifyCallback) {
-        notifyCallback('收到手机快传文件', `${finalName} (${formatBytes(fileSize)})`);
+        notifyCallback(`收到来自 ${deviceName} 的文件`, `${finalName} (${formatBytes(fileSize)})`);
       }
 
       if (broadcastCallback) broadcastCallback();
@@ -728,6 +831,13 @@ function handleRequest(req, res) {
       try {
         const data = JSON.parse(body || '{}');
         const text = String(data.text || '').trim();
+        const rawIp = req.socket.remoteAddress || '';
+        const ip = rawIp.replace(/^.*:/, '') || '127.0.0.1';
+        const cid = data.cid || ('ip_' + ip);
+        const deviceName = data.deviceName || '手机';
+        recordClientActive(cid, deviceName, ip);
+        const peerName = `${deviceName} (${ip})`;
+
         if (text) {
           if (clipboard) {
             try { clipboard.writeText(text); } catch {}
@@ -742,18 +852,18 @@ function handleRequest(req, res) {
               size: Buffer.byteLength(text, 'utf8'),
               done: Buffer.byteLength(text, 'utf8'),
               status: 'done',
-              peer: '手机网页端',
+              peer: peerName,
               text,
               at: Date.now()
             });
           }
 
           if (servicesRef && servicesRef.pushStatus) {
-            servicesRef.pushStatus('已收到手机发送的文字并拷贝到剪贴板', 'ok');
+            servicesRef.pushStatus(`已收到【${deviceName}】发送的文字并拷贝到剪贴板`, 'ok');
           }
 
           if (notifyCallback) {
-            notifyCallback('收到手机快传文字', `已写入剪贴板：${text.slice(0, 60)}`);
+            notifyCallback(`收到来自 ${deviceName} 的文字`, `已写入剪贴板：${text.slice(0, 60)}`);
           }
 
           if (broadcastCallback) broadcastCallback();
@@ -883,6 +993,7 @@ function getShareInfo() {
       logger.warn('WEB-SHARE', `Failed to generate QR SVG: ${e.message}`);
     }
   }
+  const onlineClients = getOnlineClients();
   return {
     enabled: isRunning,
     port: currentPort,
@@ -891,7 +1002,9 @@ function getShareInfo() {
     url: isRunning ? url : '',
     localUrl: isRunning ? localUrl : '',
     interfaces: ifaces,
-    qrSvg
+    qrSvg,
+    clients: onlineClients,
+    clientCount: onlineClients.length
   };
 }
 

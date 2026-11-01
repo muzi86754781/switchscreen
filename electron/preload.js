@@ -59,9 +59,9 @@ contextBridge.exposeInMainWorld('api', {
   toggleWebShare: (enable) => ipcRenderer.invoke('web-share:toggle', enable),
   setWebShareIp: (ip) => ipcRenderer.invoke('web-share:set-ip', ip),
   openWebShareUrl: (url) => ipcRenderer.invoke('web-share:open', url),
-  sendWebShareFiles: (paths) => ipcRenderer.invoke('web-share:send-files', paths),
-  sendWebShareText: (text) => ipcRenderer.invoke('web-share:send-text', text),
-  sendWebShareClipboard: () => ipcRenderer.invoke('web-share:send-clipboard'),
+  sendWebShareFiles: (paths, target) => ipcRenderer.invoke('web-share:send-files', paths, target),
+  sendWebShareText: (text, target) => ipcRenderer.invoke('web-share:send-text', text, target),
+  sendWebShareClipboard: (target) => ipcRenderer.invoke('web-share:send-clipboard', target),
   onToast: (cb) => ipcRenderer.on('toast', (_e, msg) => cb(msg)),
 
   help: () => ipcRenderer.invoke('app:help'),

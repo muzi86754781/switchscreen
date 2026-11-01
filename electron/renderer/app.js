@@ -927,47 +927,131 @@ const STATUS_TEXT = {
   rejected: '对方已拒绝'
 };
 
+let activeSendTab = 'file';
+
+async function handleSendToTarget(type, targetId, targetDisplayName) {
+  if (activeSendTab === 'file') {
+    if (!stagedPaths.length) {
+      toast('请先在上方拖入或选择要发送的文件');
+      return;
+    }
+    if (type === 'pc') {
+      const pathsToSend = [...stagedPaths];
+      stagedPaths = [];
+      renderStagedFiles();
+      push(window.api.sendPaths(pathsToSend, [targetId]));
+      toast(`正在发送 ${pathsToSend.length} 项到 ${targetDisplayName}...`);
+    } else if (type === 'mobile') {
+      if (window.api && window.api.sendWebShareFiles) {
+        const pathsToSend = [...stagedPaths];
+        const res = await window.api.sendWebShareFiles(pathsToSend, targetId);
+        if (res && res.ok) {
+          toast(`已共享 ${res.count || pathsToSend.length} 个文件给【${targetDisplayName}】`);
+          stagedPaths = [];
+          renderStagedFiles();
+        }
+      }
+    }
+  } else {
+    const input = $('#textInput');
+    const text = (input ? input.value : '').trim();
+    if (!text) {
+      toast('请先在上方输入要发送的文字');
+      return;
+    }
+    if (type === 'pc') {
+      input.value = '';
+      push(window.api.sendText(text, [targetId]));
+      toast(`已发送文字到 ${targetDisplayName}`);
+    } else if (type === 'mobile') {
+      if (window.api && window.api.sendWebShareText) {
+        const res = await window.api.sendWebShareText(text, targetId);
+        if (res && res.ok) {
+          toast(`已发送文字给【${targetDisplayName}】，手机端已同步展示`);
+          if (input) input.value = '';
+        }
+      }
+    }
+  }
+}
+
 function targetsOf(s) {
   return (s.files && s.files.targets) || [];
 }
 
 function renderPeers(s) {
   const box = $('#peerChips');
+  if (!box) return;
+
   const peers = (s.connection && s.connection.peers) || [];
-  const targets = targetsOf(s);
-  const sig = peers.map((p) => `${p.name}:${p.label}`).join(',') + '|' + targets.join(',');
+  const ws = s.webShare || {};
+  const mobileClients = ws.clients || [];
+
+  const sig = peers.map((p) => `${p.name}:${p.label}`).join(',') + '||' +
+              mobileClients.map((m) => `${m.id}:${m.name}`).join(',');
+
   if (box.dataset.sig !== sig) {
     box.innerHTML = '';
-    if (!peers.length) {
-      box.appendChild(el('div', 'peers-empty', '未连接 · 让其它电脑也打开本软件，同一局域网会自动发现'));
+
+    if (!peers.length && !mobileClients.length) {
+      box.appendChild(el('div', 'peers-empty', '未连接设备 · 让其它电脑打开本软件，或用手机扫右侧二维码连接'));
     } else {
+      // 1. 渲染电脑设备 (LAN Peers)
       for (const p of peers) {
-        const b = el('button', 'peer-chip');
+        const b = el('button', 'peer-chip peer-chip-action');
         b.type = 'button';
+        b.dataset.type = 'pc';
         b.dataset.name = p.name;
-        if (targets.includes(p.name)) b.classList.add('is-on');
-        b.innerHTML = '<span class="dot"></span><span class="nm"></span><span class="tag"></span><span class="tick">✓</span>';
+        b.title = `点击将当前内容发送给电脑：${p.label || p.name}`;
+        b.innerHTML = '<span class="dot"></span><span class="nm"></span><span class="tag"></span><span class="action-arrow">➔ 发送</span>';
         b.querySelector('.nm').textContent = p.label || p.name;
-        b.querySelector('.tag').textContent = p.platform === 'darwin' ? 'Mac' : p.platform === 'win32' ? 'Windows' : '';
-        b.addEventListener('click', () => {
-          const next = targets.includes(p.name)
-            ? targets.filter((n) => n !== p.name)
-            : targets.concat(p.name);
-          push(window.api.setTargets(next));
+        b.querySelector('.tag').textContent = p.platform === 'darwin' ? 'Mac' : p.platform === 'win32' ? 'Win' : '电脑';
+
+        b.addEventListener('click', async () => {
+          await handleSendToTarget('pc', p.name, p.label || p.name);
+        });
+        box.appendChild(b);
+      }
+
+      // 2. 渲染已扫码连接的手机/网页设备
+      if (mobileClients.length > 1) {
+        const bAll = el('button', 'peer-chip peer-chip-action peer-chip-mobile');
+        bAll.type = 'button';
+        bAll.dataset.type = 'mobile';
+        bAll.dataset.target = 'all';
+        bAll.title = `点击将当前内容同时广播给全部已连手机（${mobileClients.length}台）`;
+        bAll.innerHTML = '<span class="dot dot-mobile"></span><span class="nm"></span><span class="tag">广播</span><span class="action-arrow">➔ 发送</span>';
+        bAll.querySelector('.nm').textContent = `全部手机 (${mobileClients.length}台)`;
+        bAll.addEventListener('click', async () => {
+          await handleSendToTarget('mobile', 'all', `全部已连手机(${mobileClients.length}台)`);
+        });
+        box.appendChild(bAll);
+      }
+
+      for (const m of mobileClients) {
+        const b = el('button', 'peer-chip peer-chip-action peer-chip-mobile');
+        b.type = 'button';
+        b.dataset.type = 'mobile';
+        b.dataset.target = m.id;
+        b.title = `点击将当前内容发送给手机：${m.name} (${m.ip})`;
+        b.innerHTML = '<span class="dot dot-mobile"></span><span class="nm"></span><span class="tag">手机</span><span class="action-arrow">➔ 发送</span>';
+        b.querySelector('.nm').textContent = m.name;
+        b.addEventListener('click', async () => {
+          await handleSendToTarget('mobile', m.id, m.name);
         });
         box.appendChild(b);
       }
     }
+
     box.dataset.sig = sig;
   }
 
-  const names = targets.map((n) => {
-    const p = peers.find((x) => x.name === n);
-    return p ? (p.label || p.name) : n;
-  });
-  $('#targetNote').textContent = names.length > 1 ? `已选 ${names.length} 台` : '';
+  const targetNote = $('#targetNote');
+  if (targetNote) {
+    const totalOnline = peers.length + mobileClients.length;
+    targetNote.textContent = totalOnline > 0 ? `当前在线 ${totalOnline} 台` : '';
+  }
 }
-
 
 let currentWebShareState = null;
 
@@ -1037,6 +1121,43 @@ function renderWebShare(s) {
 
   if (qrTip) {
     qrTip.textContent = isRunning ? '手机扫码直达' : '未开启';
+  }
+
+  // 手机设备在线状态与目标选择下拉框渲染
+  const clients = ws.clients || [];
+  const clientsText = $('#wsClientsText');
+  const targetWrap = $('#wsSendTargetWrap');
+  const targetSelect = $('#wsTargetSelect');
+
+  if (clientsText) {
+    if (!isRunning) {
+      clientsText.textContent = '快传服务已停止';
+    } else if (clients.length === 0) {
+      clientsText.textContent = '等待手机扫码连接…';
+    } else if (clients.length === 1) {
+      clientsText.innerHTML = `🟢 已连接 1 台设备：<strong>${escapeHtml(clients[0].name)}</strong> <span style="opacity:0.75">(${clients[0].ip})</span>`;
+    } else {
+      const names = clients.map((c) => escapeHtml(c.name)).join(' · ');
+      clientsText.innerHTML = `🟢 已连接 <strong>${clients.length}</strong> 台设备：${names}`;
+    }
+  }
+
+  if (targetWrap && targetSelect) {
+    if (clients.length > 1) {
+      targetWrap.style.display = 'flex';
+      const curVal = targetSelect.value || 'all';
+      let html = '<option value="all">📢 全部已连手机</option>';
+      for (const c of clients) {
+        html += `<option value="${c.id}">${escapeHtml(c.name)} (${c.ip})</option>`;
+      }
+      if (targetSelect.dataset.lastHtml !== html) {
+        targetSelect.innerHTML = html;
+        targetSelect.dataset.lastHtml = html;
+        targetSelect.value = clients.some(c => c.id === curVal) ? curVal : 'all';
+      }
+    } else {
+      targetWrap.style.display = 'none';
+    }
   }
 }
 
@@ -1342,19 +1463,16 @@ let stagedPaths = [];
 async function renderStagedFiles() {
   const wrap = $('#stagedWrap');
   const list = $('#stagedList');
-  const btn = $('#sendFilesBtn');
   const summary = $('#stagedSummary');
-  if (!wrap || !list || !btn) return;
+  if (!wrap || !list) return;
 
   if (!stagedPaths.length) {
     wrap.hidden = true;
-    btn.disabled = true;
     list.innerHTML = '';
     return;
   }
 
   wrap.hidden = false;
-  btn.disabled = false;
 
   let info = { items: [], totalSize: 0 };
   try {
@@ -1393,6 +1511,27 @@ async function renderStagedFiles() {
 }
 
 function bindSharePanel() {
+  // 选项卡切换：发送文件 / 发送文本
+  const tabBtnFile = $('#tabBtnSendFile');
+  const tabBtnText = $('#tabBtnSendText');
+  const paneFile = $('#sendPaneFile');
+  const paneText = $('#sendPaneText');
+  if (tabBtnFile && tabBtnText) {
+    tabBtnFile.addEventListener('click', () => {
+      activeSendTab = 'file';
+      tabBtnFile.classList.add('is-active');
+      tabBtnText.classList.remove('is-active');
+      if (paneFile) { paneFile.classList.add('is-active'); paneFile.hidden = false; }
+      if (paneText) { paneText.classList.remove('is-active'); paneText.hidden = true; }
+    });
+    tabBtnText.addEventListener('click', () => {
+      activeSendTab = 'text';
+      tabBtnText.classList.add('is-active');
+      tabBtnFile.classList.remove('is-active');
+      if (paneText) { paneText.classList.add('is-active'); paneText.hidden = false; }
+      if (paneFile) { paneFile.classList.remove('is-active'); paneFile.hidden = true; }
+    });
+  }
   $('#clipEnabled').addEventListener('change', (e) => push(window.api.setClipboardSync(e.target.checked)));
   $('#autoAccept').addEventListener('change', (e) => push(window.api.setAutoAccept(e.target.checked)));
 
@@ -1432,7 +1571,7 @@ function bindSharePanel() {
     }
     if (added > 0) {
       renderStagedFiles();
-      toast(`已选择 ${stagedPaths.length} 项，点击「发送文件」即可发送`);
+      toast(`已添加 ${stagedPaths.length} 项，点击下方设备名即可直接发送`);
     }
   };
 
@@ -1467,35 +1606,20 @@ function bindSharePanel() {
     });
   }
 
-  const sendFilesBtn = $('#sendFilesBtn');
-  if (sendFilesBtn) {
-    sendFilesBtn.addEventListener('click', () => {
-      if (!stagedPaths.length) return;
-      const t = targets();
-      if (!t.length) {
-        toast('未连接其它设备或未勾选接收方');
-        return;
+  // 文本框快捷键支持：Ctrl/Cmd + Enter 快速发给第一个在线设备
+  const textInputEl = $('#textInput');
+  if (textInputEl) {
+    textInputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        const firstTarget = $('#peerChips .peer-chip-action');
+        if (firstTarget) {
+          firstTarget.click();
+        } else {
+          toast('请先连接其它电脑或手机扫码连接');
+        }
       }
-      const pathsToSend = [...stagedPaths];
-      stagedPaths = [];
-      renderStagedFiles();
-      switchTab('share');
-      push(window.api.sendPaths(pathsToSend, t));
-      toast(`已发起发送 ${pathsToSend.length} 项`);
     });
   }
-
-  const sendTextNow = () => {
-    const input = $('#textInput');
-    const text = input.value.trim();
-    if (!text) return;
-    input.value = '';
-    push(window.api.sendText(text, targets()));
-  };
-  $('#sendTextBtn').addEventListener('click', sendTextNow);
-  $('#textInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendTextNow();
-  });
 
   const dz = $('#dropzone');
   const over = (v) => dz.classList.toggle('is-over', v);
@@ -1545,7 +1669,7 @@ function bindSharePanel() {
           e.preventDefault();
           addStagedPaths(res.paths);
           if (res.type === 'image') {
-            toast('已粘贴图片，点击「发送文件」即可发送');
+            toast('已粘贴图片，点击下方设备名即可直接发送');
           } else {
             toast(`已粘贴 ${res.paths.length} 项`);
           }
@@ -1609,11 +1733,21 @@ function bindSharePanel() {
   }
 
   // 电脑发送到手机
+  const getSelectedWebShareTarget = () => {
+    const targetWrap = $('#wsSendTargetWrap');
+    const targetSelect = $('#wsTargetSelect');
+    if (targetWrap && targetSelect && targetWrap.style.display !== 'none') {
+      return targetSelect.value || 'all';
+    }
+    return 'all';
+  };
+
   const wsSendFileBtn = $('#wsSendFileBtn');
   if (wsSendFileBtn) {
     wsSendFileBtn.addEventListener('click', async () => {
       if (window.api && window.api.sendWebShareFiles) {
-        const res = await window.api.sendWebShareFiles();
+        const target = getSelectedWebShareTarget();
+        const res = await window.api.sendWebShareFiles(null, target);
         if (res && res.ok) {
           toast(`已共享 ${res.count} 个文件给手机，手机扫码即可下载`);
         }
@@ -1631,8 +1765,9 @@ function bindSharePanel() {
       }
       if (text && text.trim()) {
         if (window.api && window.api.sendWebShareText) {
-          await window.api.sendWebShareText(text.trim());
-          toast('文字已成功发送给手机！手机网页端已同步展示');
+          const target = getSelectedWebShareTarget();
+          await window.api.sendWebShareText(text.trim(), target);
+          toast('文字已成功发送给手机！手机端已同步展示');
           if (inputEl) inputEl.value = '';
         }
       }
@@ -1643,7 +1778,8 @@ function bindSharePanel() {
   if (wsSendClipBtn) {
     wsSendClipBtn.addEventListener('click', async () => {
       if (window.api && window.api.sendWebShareClipboard) {
-        const res = await window.api.sendWebShareClipboard();
+        const target = getSelectedWebShareTarget();
+        const res = await window.api.sendWebShareClipboard(target);
         if (res && res.ok) {
           toast('已将电脑剪贴板文字发送给手机！');
         }

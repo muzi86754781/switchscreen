@@ -2232,8 +2232,7 @@ function openInputMonitoringSettings() {
 function targetPeerNames() {
   const saved = Array.isArray(cfg.ui.targetPeers) ? cfg.ui.targetPeers : [];
   const online = saved.filter((n) => peersNow.some((p) => p.name === n));
-  if (online.length) return online;
-  return peersNow[0] ? [peersNow[0].name] : [];
+  return online;
 }
 
 function setTargetPeers(names) {

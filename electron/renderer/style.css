@@ -310,6 +310,60 @@ body.win .brand { padding-left: 0; }
   background: rgba(91, 140, 240, 0.22);
   border-color: rgba(150, 182, 255, 0.5);
 }
+.card-divider {
+  border: none;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 14px 0;
+  width: 100%;
+}
+.peer-chip-action {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 8px 12px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+  user-select: none;
+}
+.peer-chip-action:hover {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(96, 165, 250, 0.55);
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(37, 99, 235, 0.2);
+}
+.peer-chip-action:active {
+  transform: translateY(0);
+  background: rgba(59, 130, 246, 0.32);
+}
+.peer-chip-action .action-arrow {
+  font-size: 11px;
+  color: #60a5fa;
+  margin-left: 3px;
+  font-weight: 600;
+  opacity: 0.85;
+  transition: transform 0.15s, opacity 0.15s;
+}
+.peer-chip-action:hover .action-arrow {
+  opacity: 1;
+  transform: translateX(2px);
+}
+.peer-chip-mobile {
+  border-color: rgba(16, 185, 129, 0.25);
+}
+.peer-chip-mobile:hover {
+  background: rgba(16, 185, 129, 0.18);
+  border-color: rgba(52, 211, 153, 0.55);
+  box-shadow: 0 3px 10px rgba(16, 185, 129, 0.2);
+}
+.peer-chip-mobile .action-arrow {
+  color: #34d399;
+}
+.peer-chip .dot.dot-mobile {
+  background: #10b981;
+  box-shadow: 0 0 0 2.5px rgba(16, 185, 129, 0.22);
+}
 .peer-chip .dot {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--green);
@@ -599,6 +653,96 @@ body.win .brand { padding-left: 0; }
 .share-col .peers + .hint { margin-top: 10px; }
 #dzPeer:empty { display: none; margin: 0; }
 
+/* 统一发送卡片 */
+.send-unified-card {
+  padding: 0 !important;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.send-tabs-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+.send-tabs-nav {
+  display: flex;
+  gap: 6px;
+}
+.send-tab-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 0.15s, border-bottom-color 0.15s;
+  font-family: inherit;
+}
+.send-tab-btn .tab-svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+}
+.send-tab-btn:hover {
+  color: var(--text-1);
+}
+.send-tab-btn.is-active {
+  color: #60a5fa;
+  border-bottom-color: #3b82f6;
+  font-weight: 600;
+}
+.send-tabs-content {
+  padding: 14px 14px 12px;
+}
+.send-tab-pane {
+  display: none;
+}
+.send-tab-pane.is-active {
+  display: block;
+}
+.send-textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  line-height: 1.55;
+  box-sizing: border-box;
+}
+/* 发送到设备区域 */
+.send-target-bar {
+  padding: 12px 14px 14px;
+  background: rgba(0, 0, 0, 0.16);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.send-target-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+.target-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.target-subhint {
+  font-size: 11px;
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.12);
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
 /* 手机网页快传卡片 */
 .web-share-card { position: relative; }
 .ws-status-badge {
@@ -753,18 +897,62 @@ select.ws-iface-select option,
   color: #8b9bb4;
   opacity: 0.9;
 }
-.ws-send-box {
+.ws-clients-line {
   margin-top: 10px;
-  padding: 8px 10px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.ws-clients-icon { font-size: 13px; }
+.ws-clients-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-send-box {
+  margin-top: 8px;
+  padding: 9px 10px;
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 8px;
 }
+.ws-send-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
 .ws-send-title {
   font-size: 11px;
   color: var(--text-2);
-  margin-bottom: 6px;
   font-weight: 500;
+}
+.ws-send-target {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.ws-target-label {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.ws-target-select {
+  appearance: none;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #93c5fd;
+  border-radius: 5px;
+  font-size: 11px;
+  padding: 2px 7px;
+  outline: none;
+  cursor: pointer;
+  max-width: 150px;
 }
 .ws-send-actions {
   display: flex;
