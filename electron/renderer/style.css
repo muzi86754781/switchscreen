@@ -473,7 +473,14 @@ body.win .brand { padding-left: 0; }
   text-align: center;
   background: rgba(22, 27, 40, 0.5);
   margin-bottom: 13px;
-  transition: border-color 0.16s, background 0.16s;
+  cursor: pointer;
+  transition: border-color 0.16s, background 0.16s, box-shadow 0.16s;
+}
+.dropzone:focus {
+  outline: none;
+  border-color: rgba(91, 155, 255, 0.7);
+  background: rgba(91, 155, 255, 0.08);
+  box-shadow: 0 0 0 2px rgba(91, 155, 255, 0.2);
 }
 .dropzone.is-over {
   border-color: rgba(110, 150, 245, 0.85);

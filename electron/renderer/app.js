@@ -1433,6 +1433,46 @@ function bindSharePanel() {
   });
   window.addEventListener('dragover', (e) => e.preventDefault());
   window.addEventListener('drop', (e) => e.preventDefault());
+
+  // 粘贴图片或文件到发送框（支持 Ctrl/Cmd + V 粘贴截图或复制的文件）
+  const handlePaste = async (e) => {
+    const panel = $('#tab-share');
+    if (!panel || panel.classList.contains('hidden') || panel.style.display === 'none') {
+      return;
+    }
+
+    const activeEl = document.activeElement;
+    // 如果焦点在文本发送框（#textInput），且剪贴板含有纯文本且无文件，优先往文本框粘贴文字
+    if (activeEl && activeEl.id === 'textInput') {
+      const types = (e.clipboardData && e.clipboardData.types) || [];
+      if (!types.includes('Files')) return;
+    }
+
+    // 1. 剪贴板里包含文件（如在文件管理器中复制的文件或文件夹）
+    const files = Array.from((e.clipboardData && e.clipboardData.files) || []);
+    const paths = files.map((f) => f.path).filter(Boolean);
+    if (paths.length) {
+      e.preventDefault();
+      addStagedPaths(paths);
+      toast(`已粘贴 ${paths.length} 个文件/文件夹`);
+      return;
+    }
+
+    // 2. 剪贴板里包含图片数据（如微信/QQ/系统截图）
+    if (window.api && window.api.saveClipboardImage) {
+      try {
+        const imgPath = await window.api.saveClipboardImage();
+        if (imgPath) {
+          e.preventDefault();
+          addStagedPaths([imgPath]);
+          toast('已粘贴图片，点击「发送文件」即可发送');
+        }
+      } catch (err) {
+        console.warn('[ui] saveClipboardImage error', err);
+      }
+    }
+  };
+  window.addEventListener('paste', handlePaste);
 }
 
 function bindFooter() {

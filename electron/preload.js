@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld('api', {
   setRecvDir: () => ipcRenderer.invoke('files:set-dir'),
   revealFile: (p) => ipcRenderer.invoke('files:reveal', p),
   copyText: (text) => ipcRenderer.invoke('clip:write', text),
+  saveClipboardImage: () => ipcRenderer.invoke('clip:save-image'),
   showText: (payload) => ipcRenderer.invoke('text:show', payload),
 
   help: () => ipcRenderer.invoke('app:help'),

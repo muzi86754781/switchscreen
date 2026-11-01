@@ -1113,6 +1113,27 @@ function registerIpc() {
     return services.getState();
   });
 
+  // 读取剪贴板图片并暂存为本地图片文件（用于发送文件框直接粘贴图片）
+  ipcMain.handle('clip:save-image', async () => {
+    try {
+      const img = clipboard.readImage();
+      if (!img || img.isEmpty()) return null;
+      const png = img.toPNG();
+      if (!png || !png.length) return null;
+      const tmpDir = path.join(app.getPath('temp'), 'SwitchScreen', 'pasted');
+      if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const timeStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      const filePath = path.join(tmpDir, `截图_${timeStr}.png`);
+      fs.writeFileSync(filePath, png);
+      return filePath;
+    } catch (e) {
+      logger.warn('CLIP', `Failed to save clipboard image: ${e.message}`);
+      return null;
+    }
+  });
+
   // 查看一段记录里的完整文本（系统弹窗，可选中复制）
   ipcMain.handle('text:show', (_e, { text, from, title } = {}) => {
     showIncomingText({ text: text || '', from: from || '', title });
