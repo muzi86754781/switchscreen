@@ -92,6 +92,33 @@
         <div class="share-grid">
           <!-- 左：发送 -->
           <div class="share-col">
+            <!-- 手机 / 网页快传 -->
+            <div class="card web-share-card">
+              <div class="card-label">
+                <span>手机 / 网页快传</span>
+                <span class="card-note" id="webShareNote">免装 App · 手机扫码即传</span>
+              </div>
+              <div class="web-share-body">
+                <div class="ws-left">
+                  <div class="ws-url-line">
+                    <input class="input ws-url-input" id="webShareUrl" readonly placeholder="http://..." />
+                    <button type="button" class="btn btn-sm" id="webShareCopyBtn">复制网址</button>
+                    <button type="button" class="btn btn-sm btn-ghost" id="webShareOpenBtn" title="在系统浏览器打开">打开</button>
+                  </div>
+                  <div class="ws-tip">手机连同一 Wi-Fi，用微信或自带相机扫码，免装 App 即可直接向电脑互传照片、文件与文本。</div>
+                  <label class="check-row check-row-sm" style="margin-top: 8px;">
+                    <input type="checkbox" id="webShareToggle" checked />
+                    <span class="box"></span>
+                    <span class="check-text">开启网页快传服务</span>
+                  </label>
+                </div>
+                <div class="ws-right">
+                  <div class="ws-qr" id="webShareQr"></div>
+                  <div class="ws-qr-tip">手机扫码直达</div>
+                </div>
+              </div>
+            </div>
+
             <!-- 接收方 -->
             <div class="card">
               <div class="card-label">

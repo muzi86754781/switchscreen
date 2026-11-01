@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 
 const services = require('./services');
+const webShare = require('./web-share');
 const logger = require('./logger');
 const { createPeer } = require('../src/peer');
 
@@ -1134,6 +1135,56 @@ function registerIpc() {
     }
   });
 
+  // 读取剪贴板内容（支持截图图片、复制的文件/文件夹）
+  ipcMain.handle('clip:read-staged', async () => {
+    // 1. 优先读取剪贴板里的文件或文件夹
+    const filePaths = [];
+    if (IS_WIN) {
+      try {
+        const buf = clipboard.readBuffer('FileNameW');
+        if (buf && buf.length > 0) {
+          const str = buf.toString('utf16le');
+          const list = str.split('\0').map((s) => s.trim()).filter((s) => s.length > 0 && fs.existsSync(s));
+          filePaths.push(...list);
+        }
+      } catch { /* ignore */ }
+    } else if (IS_MAC) {
+      try {
+        const fileUrl = clipboard.read('public.file-url');
+        if (fileUrl) {
+          const p = decodeURIComponent(new URL(fileUrl).pathname);
+          if (p && fs.existsSync(p)) filePaths.push(p);
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (filePaths.length > 0) {
+      return { type: 'files', paths: filePaths };
+    }
+
+    // 2. 检查是否有图片（微信截图、QQ截图、截图工具、复制图像）
+    try {
+      const img = clipboard.readImage();
+      if (img && !img.isEmpty()) {
+        const png = img.toPNG();
+        if (png && png.length > 0) {
+          const tmpDir = path.join(app.getPath('temp'), 'SwitchScreen', 'pasted');
+          if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+          const now = new Date();
+          const pad = (n) => String(n).padStart(2, '0');
+          const timeStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+          const filePath = path.join(tmpDir, `截图_${timeStr}.png`);
+          fs.writeFileSync(filePath, png);
+          return { type: 'image', paths: [filePath] };
+        }
+      }
+    } catch (e) {
+      logger.warn('CLIP', `clip:read-staged error: ${e.message}`);
+    }
+
+    return null;
+  });
+
   // 查看一段记录里的完整文本（系统弹窗，可选中复制）
   ipcMain.handle('text:show', (_e, { text, from, title } = {}) => {
     showIncomingText({ text: text || '', from: from || '', title });
@@ -1227,6 +1278,12 @@ app.whenReady().then(() => {
     try { app.dock.hide(); } catch { /* ignore */ }
   }
   services.ensureDefaults();
+  try {
+    services.setWebShareGetter(() => webShare.getShareInfo());
+    webShare.init(services, () => broadcastState());
+  } catch (e) {
+    logger.warn('WEB-SHARE', `Init web-share error: ${e.message}`);
+  }
   registerIpc();
   checkNativeModules();
 

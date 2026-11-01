@@ -51,7 +51,13 @@ contextBridge.exposeInMainWorld('api', {
   revealFile: (p) => ipcRenderer.invoke('files:reveal', p),
   copyText: (text) => ipcRenderer.invoke('clip:write', text),
   saveClipboardImage: () => ipcRenderer.invoke('clip:save-image'),
+  readClipboardStaged: () => ipcRenderer.invoke('clip:read-staged'),
   showText: (payload) => ipcRenderer.invoke('text:show', payload),
+
+  // 手机 / 网页快传
+  getWebShare: () => ipcRenderer.invoke('web-share:get'),
+  toggleWebShare: (enable) => ipcRenderer.invoke('web-share:toggle', enable),
+  openWebShareUrl: (url) => ipcRenderer.invoke('web-share:open', url),
 
   help: () => ipcRenderer.invoke('app:help'),
   openLogFile: () => ipcRenderer.invoke('log:open'),

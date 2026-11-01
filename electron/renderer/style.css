@@ -598,6 +598,36 @@ body.win .brand { padding-left: 0; }
 .share-col .dropzone + .check-row,
 .share-col .peers + .hint { margin-top: 10px; }
 #dzPeer:empty { display: none; margin: 0; }
+
+/* 手机网页快传卡片 */
+.web-share-card { position: relative; }
+.web-share-body { display: flex; align-items: center; gap: 16px; }
+.ws-left { flex: 1; min-width: 0; }
+.ws-url-line { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
+.ws-url-input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.28);
+  padding: 5px 8px;
+  color: #72a3ff;
+}
+.ws-tip { font-size: 11.5px; color: var(--text-3); line-height: 1.5; }
+.ws-right { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; }
+.ws-qr {
+  width: 86px;
+  height: 86px;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ws-qr svg { width: 100%; height: 100%; display: block; }
+.ws-qr-tip { font-size: 10.5px; color: var(--text-3); margin-top: 4px; }
 textarea.input {
   display: block;
   width: 100%;

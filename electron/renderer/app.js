@@ -963,6 +963,25 @@ function renderPeers(s) {
   $('#targetNote').textContent = names.length > 1 ? `已选 ${names.length} 台` : '';
 }
 
+
+function renderWebShare(s) {
+  const ws = s.webShare || {};
+  const urlInput = $('#webShareUrl');
+  const qrBox = $('#webShareQr');
+  const toggle = $('#webShareToggle');
+  const note = $('#webShareNote');
+
+  if (toggle) toggle.checked = !!ws.enabled;
+  if (urlInput) urlInput.value = ws.url || '';
+  if (qrBox) {
+    qrBox.innerHTML = ws.qrSvg || '<span style="font-size:11px;color:#999;">无网络</span>';
+  }
+  if (note) {
+    note.textContent = ws.enabled ? '服务运行中 · 扫码即传' : '服务已暂停';
+    note.style.color = ws.enabled ? '#48c9a1' : 'var(--text-3)';
+  }
+}
+
 function renderShare(s) {
   const c = s.clipboard || {};
   const f = s.files || { transfers: [], recvDir: '' };
@@ -973,6 +992,7 @@ function renderShare(s) {
 
   renderPeers(s);
   renderTransfers(s);
+  renderWebShare(s);
 }
 
 const activeTransferSeen = new Set();
@@ -1434,10 +1454,11 @@ function bindSharePanel() {
   window.addEventListener('dragover', (e) => e.preventDefault());
   window.addEventListener('drop', (e) => e.preventDefault());
 
-  // 粘贴图片或文件到发送框（支持 Ctrl/Cmd + V 粘贴截图或复制的文件）
+  // 粘贴图片或文件到发送框（支持 Ctrl/Cmd + V 粘贴截图或复制的文件/文件夹）
   const handlePaste = async (e) => {
-    const panel = $('#tab-share');
-    if (!panel || panel.classList.contains('hidden') || panel.style.display === 'none') {
+    // 检查是否处于传输（share）面板
+    const panel = document.querySelector('.panel[data-panel="share"]');
+    if (!panel || !panel.classList.contains('is-active')) {
       return;
     }
 
@@ -1448,31 +1469,68 @@ function bindSharePanel() {
       if (!types.includes('Files')) return;
     }
 
-    // 1. 剪贴板里包含文件（如在文件管理器中复制的文件或文件夹）
+    // 1. 尝试从浏览器事件中的 e.clipboardData.files 提取文件/文件夹
     const files = Array.from((e.clipboardData && e.clipboardData.files) || []);
-    const paths = files.map((f) => f.path).filter(Boolean);
-    if (paths.length) {
+    const directPaths = files.map((f) => f.path).filter(Boolean);
+    if (directPaths.length > 0) {
       e.preventDefault();
-      addStagedPaths(paths);
-      toast(`已粘贴 ${paths.length} 个文件/文件夹`);
+      addStagedPaths(directPaths);
+      toast(`已粘贴 ${directPaths.length} 个文件/文件夹`);
       return;
     }
 
-    // 2. 剪贴板里包含图片数据（如微信/QQ/系统截图）
-    if (window.api && window.api.saveClipboardImage) {
+    // 2. 调用主进程深度读取系统底层剪贴板（支持复制文件/文件夹、截图图片）
+    if (window.api && window.api.readClipboardStaged) {
       try {
-        const imgPath = await window.api.saveClipboardImage();
-        if (imgPath) {
+        const res = await window.api.readClipboardStaged();
+        if (res && Array.isArray(res.paths) && res.paths.length > 0) {
           e.preventDefault();
-          addStagedPaths([imgPath]);
-          toast('已粘贴图片，点击「发送文件」即可发送');
+          addStagedPaths(res.paths);
+          if (res.type === 'image') {
+            toast('已粘贴图片，点击「发送文件」即可发送');
+          } else {
+            toast(`已粘贴 ${res.paths.length} 项`);
+          }
+          return;
         }
       } catch (err) {
-        console.warn('[ui] saveClipboardImage error', err);
+        console.warn('[ui] readClipboardStaged error', err);
       }
     }
   };
   window.addEventListener('paste', handlePaste);
+
+  // 手机网页快传事件绑定
+  const copyWsBtn = $('#webShareCopyBtn');
+  if (copyWsBtn) {
+    copyWsBtn.addEventListener('click', () => {
+      const url = $('#webShareUrl').value;
+      if (url) {
+        if (window.api && window.api.copyText) window.api.copyText(url);
+        toast('快传网址已复制到剪贴板');
+      }
+    });
+  }
+
+  const openWsBtn = $('#webShareOpenBtn');
+  if (openWsBtn) {
+    openWsBtn.addEventListener('click', () => {
+      const url = $('#webShareUrl').value;
+      if (url && window.api && window.api.openWebShareUrl) {
+        window.api.openWebShareUrl(url);
+      }
+    });
+  }
+
+  const toggleWs = $('#webShareToggle');
+  if (toggleWs) {
+    toggleWs.addEventListener('change', async (e) => {
+      if (window.api && window.api.toggleWebShare) {
+        await window.api.toggleWebShare(e.target.checked);
+        toast(e.target.checked ? '网页快传服务已启动' : '网页快传服务已停止');
+      }
+    });
+  }
 }
 
 function bindFooter() {

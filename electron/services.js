@@ -1969,6 +1969,9 @@ function detectWin() {
   });
 }
 
+let webShareGetter = null;
+function setWebShareGetter(getter) { webShareGetter = getter; }
+
 let detectMonitorsInFlight = null;
 function detectMonitors() {
   if (detectMonitorsInFlight) return detectMonitorsInFlight;
@@ -2409,6 +2412,7 @@ function getState() {
       targets: targetPeerNames()
     },
     permission: { accessibility: accessibilityGranted() },
+    webShare: webShareGetter ? webShareGetter() : null,
     active: activeTarget === cfg.peerName ? 'local' : 'remote',
     activeTarget,
     activeName: deviceInfo(activeTarget).name,
@@ -2869,6 +2873,7 @@ module.exports = {
   pushStatus,
   rename,
   setHotkey,
+  setWebShareGetter,
   defaultReceiveDir,
   setClipProgress,
   setActiveTarget: (t) => { activeTarget = t; },
