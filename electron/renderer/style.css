@@ -601,8 +601,68 @@ body.win .brand { padding-left: 0; }
 
 /* 手机网页快传卡片 */
 .web-share-card { position: relative; }
+.ws-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.12);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  font-weight: 500;
+}
+.ws-status-badge.is-stopped {
+  background: rgba(148, 163, 184, 0.1);
+  color: #94a3b8;
+  border-color: rgba(148, 163, 184, 0.2);
+}
+.ws-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74, 222, 128, 0.6);
+  flex-shrink: 0;
+}
+.ws-status-badge.is-stopped .ws-dot {
+  background: #64748b;
+  box-shadow: none;
+}
+.ws-toggle-btn {
+  margin-left: auto;
+  font-size: 11.5px;
+  padding: 2px 9px;
+  height: 24px;
+  line-height: 22px;
+}
 .web-share-body { display: flex; align-items: center; gap: 16px; }
 .ws-left { flex: 1; min-width: 0; }
+.ws-iface-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 7px;
+}
+.ws-iface-label {
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.ws-iface-select {
+  flex: 1;
+  min-width: 0;
+  height: 25px;
+  padding: 1px 6px;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  color: var(--text-1);
+  cursor: pointer;
+}
 .ws-url-line { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
 .ws-url-input {
   flex: 1;
@@ -614,6 +674,12 @@ body.win .brand { padding-left: 0; }
   color: #72a3ff;
 }
 .ws-tip { font-size: 11.5px; color: var(--text-3); line-height: 1.5; }
+.ws-proxy-hint {
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: #8b9bb4;
+  opacity: 0.9;
+}
 .ws-right { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; }
 .ws-qr {
   width: 86px;
@@ -627,6 +693,14 @@ body.win .brand { padding-left: 0; }
   justify-content: center;
 }
 .ws-qr svg { width: 100%; height: 100%; display: block; }
+.ws-qr.is-stopped {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  color: var(--text-3);
+  box-shadow: none;
+  font-size: 11px;
+  text-align: center;
+}
 .ws-qr-tip { font-size: 10.5px; color: var(--text-3); margin-top: 4px; }
 textarea.input {
   display: block;

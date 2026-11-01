@@ -481,3 +481,4 @@ function generateQrSvg(text, margin = 2, dark = '#1a1f2c', light = '#ffffff') {
 module.exports = {
   generateQrSvg
 };
+

@@ -23,6 +23,11 @@ function hotkeyLabel(v) {
     .replace(/\+/g, ' + ');
 }
 
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+}
+
 let activeRecorderCleanup = null;
 
 function normalizeKeyName(e) {
@@ -964,21 +969,74 @@ function renderPeers(s) {
 }
 
 
+let currentWebShareState = null;
+
 function renderWebShare(s) {
   const ws = s.webShare || {};
-  const urlInput = $('#webShareUrl');
-  const qrBox = $('#webShareQr');
-  const toggle = $('#webShareToggle');
-  const note = $('#webShareNote');
+  currentWebShareState = ws;
 
-  if (toggle) toggle.checked = !!ws.enabled;
-  if (urlInput) urlInput.value = ws.url || '';
-  if (qrBox) {
-    qrBox.innerHTML = ws.qrSvg || '<span style="font-size:11px;color:#999;">无网络</span>';
+  const badge = $('#webShareBadge');
+  const statusText = $('#webShareStatusText');
+  const toggleBtn = $('#webShareToggleBtn');
+  const ifaceSelect = $('#webShareIfaceSelect');
+  const urlInput = $('#webShareUrl');
+  const openBtn = $('#webShareOpenBtn');
+  const qrBox = $('#webShareQr');
+  const qrTip = $('#webShareQrTip');
+
+  const isRunning = !!ws.enabled;
+
+  if (badge) {
+    badge.classList.toggle('is-stopped', !isRunning);
   }
-  if (note) {
-    note.textContent = ws.enabled ? '服务运行中 · 扫码即传' : '服务已暂停';
-    note.style.color = ws.enabled ? '#48c9a1' : 'var(--text-3)';
+  if (statusText) {
+    statusText.textContent = isRunning ? '运行中' : '已停止';
+  }
+  if (toggleBtn) {
+    toggleBtn.textContent = isRunning ? '停止服务' : '启动服务';
+    toggleBtn.className = isRunning ? 'btn btn-sm btn-ghost ws-toggle-btn' : 'btn btn-sm btn-primary ws-toggle-btn';
+  }
+
+  if (ifaceSelect && Array.isArray(ws.interfaces)) {
+    const activeIp = ws.ip || '';
+    const optionsHtml = ws.interfaces.map((item) => {
+      const selected = (item.ip === activeIp) ? ' selected' : '';
+      return `<option value="${escapeHtml(item.ip)}"${selected}>${escapeHtml(item.label || item.ip)}</option>`;
+    }).join('');
+
+    if (ifaceSelect.dataset.lastHtml !== optionsHtml) {
+      ifaceSelect.innerHTML = optionsHtml;
+      ifaceSelect.dataset.lastHtml = optionsHtml;
+    }
+    if (activeIp && ifaceSelect.value !== activeIp) {
+      ifaceSelect.value = activeIp;
+    }
+    ifaceSelect.disabled = !isRunning;
+  }
+
+  if (urlInput) {
+    urlInput.value = isRunning ? (ws.url || '') : '';
+    urlInput.placeholder = isRunning ? 'http://...' : '服务已停止';
+  }
+  if (openBtn) {
+    openBtn.disabled = !isRunning;
+  }
+
+  if (qrBox) {
+    if (isRunning && ws.qrSvg) {
+      qrBox.classList.remove('is-stopped');
+      qrBox.innerHTML = ws.qrSvg;
+    } else if (isRunning) {
+      qrBox.classList.add('is-stopped');
+      qrBox.innerHTML = '<span style="font-size:11px;color:var(--text-3);padding:8px;line-height:1.4;">未检测到可用局域网</span>';
+    } else {
+      qrBox.classList.add('is-stopped');
+      qrBox.innerHTML = '<span style="font-size:11px;color:var(--text-3);padding:8px;line-height:1.4;">服务已停止<br>点击上方启动</span>';
+    }
+  }
+
+  if (qrTip) {
+    qrTip.textContent = isRunning ? '手机扫码直达' : '未开启';
   }
 }
 
@@ -1508,6 +1566,8 @@ function bindSharePanel() {
       if (url) {
         if (window.api && window.api.copyText) window.api.copyText(url);
         toast('快传网址已复制到剪贴板');
+      } else {
+        toast('快传服务未启动');
       }
     });
   }
@@ -1515,19 +1575,35 @@ function bindSharePanel() {
   const openWsBtn = $('#webShareOpenBtn');
   if (openWsBtn) {
     openWsBtn.addEventListener('click', () => {
-      const url = $('#webShareUrl').value;
-      if (url && window.api && window.api.openWebShareUrl) {
-        window.api.openWebShareUrl(url);
+      if (!currentWebShareState || !currentWebShareState.enabled) {
+        toast('快传服务未启动');
+        return;
+      }
+      const targetUrl = currentWebShareState.localUrl || currentWebShareState.url;
+      if (targetUrl && window.api && window.api.openWebShareUrl) {
+        window.api.openWebShareUrl(targetUrl);
       }
     });
   }
 
-  const toggleWs = $('#webShareToggle');
-  if (toggleWs) {
-    toggleWs.addEventListener('change', async (e) => {
+  const toggleWsBtn = $('#webShareToggleBtn');
+  if (toggleWsBtn) {
+    toggleWsBtn.addEventListener('click', async () => {
+      const targetState = !(currentWebShareState && currentWebShareState.enabled);
       if (window.api && window.api.toggleWebShare) {
-        await window.api.toggleWebShare(e.target.checked);
-        toast(e.target.checked ? '网页快传服务已启动' : '网页快传服务已停止');
+        await window.api.toggleWebShare(targetState);
+        toast(targetState ? '网页快传服务已启动' : '网页快传服务已停止');
+      }
+    });
+  }
+
+  const ifaceSelect = $('#webShareIfaceSelect');
+  if (ifaceSelect) {
+    ifaceSelect.addEventListener('change', async (e) => {
+      const chosenIp = e.target.value;
+      if (chosenIp && window.api && window.api.setWebShareIp) {
+        await window.api.setWebShareIp(chosenIp);
+        toast(`已切换至网卡 IP: ${chosenIp}`);
       }
     });
   }

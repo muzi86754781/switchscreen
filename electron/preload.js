@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('api', {
   // 手机 / 网页快传
   getWebShare: () => ipcRenderer.invoke('web-share:get'),
   toggleWebShare: (enable) => ipcRenderer.invoke('web-share:toggle', enable),
+  setWebShareIp: (ip) => ipcRenderer.invoke('web-share:set-ip', ip),
   openWebShareUrl: (url) => ipcRenderer.invoke('web-share:open', url),
 
   help: () => ipcRenderer.invoke('app:help'),

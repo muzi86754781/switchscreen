@@ -1248,6 +1248,25 @@ function registerIpc() {
     return services.getState();
   });
 
+  ipcMain.handle('web-share:get', () => webShare.getShareInfo());
+  ipcMain.handle('web-share:toggle', (_e, enable) => {
+    if (enable) webShare.start();
+    else webShare.stop();
+    broadcastState();
+    return webShare.getShareInfo();
+  });
+  ipcMain.handle('web-share:set-ip', (_e, ip) => {
+    if (ip && webShare.setChosenIp) {
+      webShare.setChosenIp(ip);
+      broadcastState();
+    }
+    return webShare.getShareInfo();
+  });
+  ipcMain.handle('web-share:open', (_e, url) => {
+    if (url) shell.openExternal(url);
+    return true;
+  });
+
   ipcMain.handle('window:minimize', () => win && win.minimize());
   ipcMain.handle('window:close', () => win && win.hide());
 }

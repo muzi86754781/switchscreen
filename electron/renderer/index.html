@@ -90,36 +90,9 @@
       <!-- ============ 传输与剪贴板 ============ -->
       <section class="panel" data-panel="share">
         <div class="share-grid">
-          <!-- 左：发送 -->
+          <!-- 左：从上到下：发送到、发送文件、发送文本、剪贴板与接收、接收目录 -->
           <div class="share-col">
-            <!-- 手机 / 网页快传 -->
-            <div class="card web-share-card">
-              <div class="card-label">
-                <span>手机 / 网页快传</span>
-                <span class="card-note" id="webShareNote">免装 App · 手机扫码即传</span>
-              </div>
-              <div class="web-share-body">
-                <div class="ws-left">
-                  <div class="ws-url-line">
-                    <input class="input ws-url-input" id="webShareUrl" readonly placeholder="http://..." />
-                    <button type="button" class="btn btn-sm" id="webShareCopyBtn">复制网址</button>
-                    <button type="button" class="btn btn-sm btn-ghost" id="webShareOpenBtn" title="在系统浏览器打开">打开</button>
-                  </div>
-                  <div class="ws-tip">手机连同一 Wi-Fi，用微信或自带相机扫码，免装 App 即可直接向电脑互传照片、文件与文本。</div>
-                  <label class="check-row check-row-sm" style="margin-top: 8px;">
-                    <input type="checkbox" id="webShareToggle" checked />
-                    <span class="box"></span>
-                    <span class="check-text">开启网页快传服务</span>
-                  </label>
-                </div>
-                <div class="ws-right">
-                  <div class="ws-qr" id="webShareQr"></div>
-                  <div class="ws-qr-tip">手机扫码直达</div>
-                </div>
-              </div>
-            </div>
-
-            <!-- 接收方 -->
+            <!-- 1. 发送到 -->
             <div class="card">
               <div class="card-label">
                 <span>发送到</span>
@@ -128,7 +101,7 @@
               <div class="peers" id="peerChips"></div>
             </div>
 
-            <!-- 发文件 -->
+            <!-- 2. 发送文件 -->
             <div class="card">
               <div class="card-label"><span>发送文件</span></div>
               <div class="dropzone" id="dropzone" tabindex="0">
@@ -157,7 +130,7 @@
               </div>
             </div>
 
-            <!-- 发文本 -->
+            <!-- 3. 发送文本 -->
             <div class="card">
               <div class="card-label"><span>发送文本</span></div>
               <textarea class="input" id="textInput" rows="4" placeholder="粘贴一段文字直接发过去…（可多行，Ctrl / ⌘ + Enter 发送）"></textarea>
@@ -166,11 +139,8 @@
                 <span class="hint">Ctrl / ⌘ + Enter 发送</span>
               </div>
             </div>
-          </div>
 
-          <!-- 右：上=剪贴板与接收，中=接收目录，下=传输记录 -->
-          <div class="share-col">
-            <!-- 剪贴板与接收 -->
+            <!-- 4. 剪贴板与接收 -->
             <div class="card">
               <div class="card-label"><span>剪贴板与接收</span></div>
               <label class="check-row check-row-sm">
@@ -185,6 +155,7 @@
               </label>
             </div>
 
+            <!-- 5. 接收目录 -->
             <div class="card">
               <div class="card-label"><span>接收目录</span></div>
               <div class="row">
@@ -196,7 +167,43 @@
               </div>
               <div class="hint">对端发来的文件保存在这里，同名文件会自动加 (1)。</div>
             </div>
+          </div>
 
+          <!-- 右：从上到下：手机/网页快传、传输记录 -->
+          <div class="share-col">
+            <!-- 1. 手机 / 网页快传 -->
+            <div class="card web-share-card">
+              <div class="card-label">
+                <span>手机 / 网页快传</span>
+                <span class="ws-status-badge" id="webShareBadge"><span class="ws-dot"></span><span id="webShareStatusText">运行中</span></span>
+                <button type="button" class="btn btn-sm btn-ghost ws-toggle-btn" id="webShareToggleBtn">停止服务</button>
+              </div>
+              <div class="web-share-body">
+                <div class="ws-left">
+                  <!-- 网卡选择 -->
+                  <div class="ws-iface-row" id="webShareIfaceRow">
+                    <span class="ws-iface-label">本机网卡：</span>
+                    <select class="input ws-iface-select" id="webShareIfaceSelect"></select>
+                  </div>
+                  <!-- 访问地址 -->
+                  <div class="ws-url-line">
+                    <input class="input ws-url-input" id="webShareUrl" readonly placeholder="http://..." />
+                    <button type="button" class="btn btn-sm" id="webShareCopyBtn">复制</button>
+                    <button type="button" class="btn btn-sm btn-ghost" id="webShareOpenBtn" title="在系统浏览器打开（绕过代理）">打开</button>
+                  </div>
+                  <div class="ws-tip">
+                    手机连同一 Wi-Fi，用微信或自带相机扫码，免装 App 即可互传照片与文字。
+                    <div class="ws-proxy-hint">提示：服务已自动跳过代理虚拟网卡；若手机开着 VPN/代理软件，设为「绕过局域网」即可秒连。</div>
+                  </div>
+                </div>
+                <div class="ws-right">
+                  <div class="ws-qr" id="webShareQr"></div>
+                  <div class="ws-qr-tip" id="webShareQrTip">手机扫码直达</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2. 传输记录 -->
             <div class="card share-card">
               <div class="card-label">
                 <span>传输记录</span>

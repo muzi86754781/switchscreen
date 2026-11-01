@@ -15,21 +15,51 @@ let isRunning = false;
 let servicesRef = null;
 let broadcastCallback = null;
 
-function getLocalIp() {
+function isVirtualOrProxy(name, ip) {
+  const lowerName = String(name || '').toLowerCase();
+  // 1. 过滤 Clash / 代理软件特有的 Fake-IP 网段 (198.18.0.0/15)
+  if (/^198\.(18|19)\./.test(ip)) return true;
+  // 2. 过滤回环与无效地址
+  if (/^127\.|^169\.254\./.test(ip)) return true;
+  // 3. 过滤常见的虚拟网卡与代理软件网卡名称
+  if (/meta|mihomo|clash|sing-?box|neko|surge|shadowrocket|vethernet|wsl|docker|vmware|virtualbox|tailscale|zerotier|loopback|tap|tun|wireguard/i.test(lowerName)) {
+    return true;
+  }
+  return false;
+}
+
+function getAvailableInterfaces() {
   const interfaces = os.networkInterfaces();
-  const candidates = [];
+  const list = [];
   for (const name of Object.keys(interfaces)) {
     for (const net of interfaces[name] || []) {
       if (net.family === 'IPv4' && !net.internal) {
-        const lowerName = name.toLowerCase();
-        const isVirtual = /vethernet|wsl|docker|vmware|virtualbox|tailscale|zerotier|loopback|tap|tun/i.test(lowerName);
-        candidates.push({ ip: net.address, isVirtual, name });
+        const isVirt = isVirtualOrProxy(name, net.address);
+        let score = 0;
+        if (!isVirt) {
+          if (net.address.startsWith('192.168.')) score = 100;
+          else if (net.address.startsWith('10.')) score = 80;
+          else if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(net.address)) score = 60;
+          else score = 40;
+        }
+        list.push({
+          name,
+          ip: net.address,
+          isVirtual: isVirt,
+          score,
+          label: `${name} (${net.address})${score === 100 ? ' [推荐]' : ''}`
+        });
       }
     }
   }
-  const nonVirtual = candidates.filter((c) => !c.isVirtual);
-  if (nonVirtual.length > 0) return nonVirtual[0].ip;
-  if (candidates.length > 0) return candidates[0].ip;
+  list.sort((a, b) => b.score - a.score);
+  return list;
+}
+
+function getLocalIp() {
+  const list = getAvailableInterfaces();
+  if (list.length > 0 && !list[0].isVirtual) return list[0].ip;
+  if (list.length > 0) return list[0].ip;
   return '127.0.0.1';
 }
 
@@ -552,20 +582,38 @@ function stopServer() {
   if (broadcastCallback) broadcastCallback();
 }
 
+let userChosenIp = '';
+
+function setChosenIp(ip) {
+  userChosenIp = ip;
+  if (broadcastCallback) broadcastCallback();
+}
+
 function getShareInfo() {
-  currentIp = getLocalIp();
+  const ifaces = getAvailableInterfaces();
+  // 优先用用户手动选定的 IP，否则用自动评分第一名的物理网卡 IP
+  if (userChosenIp && ifaces.some(i => i.ip === userChosenIp)) {
+    currentIp = userChosenIp;
+  } else {
+    currentIp = getLocalIp();
+  }
   const url = `http://${currentIp}:${currentPort}`;
+  const localUrl = `http://127.0.0.1:${currentPort}`;
   let qrSvg = '';
-  try {
-    qrSvg = generateQrSvg(url, 2, '#1a1f2c', '#ffffff');
-  } catch (e) {
-    logger.warn('WEB-SHARE', `Failed to generate QR SVG: ${e.message}`);
+  if (isRunning) {
+    try {
+      qrSvg = generateQrSvg(url, 2, '#1a1f2c', '#ffffff');
+    } catch (e) {
+      logger.warn('WEB-SHARE', `Failed to generate QR SVG: ${e.message}`);
+    }
   }
   return {
     enabled: isRunning,
     port: currentPort,
     ip: currentIp,
     url,
+    localUrl,
+    interfaces: ifaces,
     qrSvg
   };
 }
@@ -579,5 +627,7 @@ module.exports = {
   },
   start: startServer,
   stop: stopServer,
+  setChosenIp,
   getShareInfo
 };
+
