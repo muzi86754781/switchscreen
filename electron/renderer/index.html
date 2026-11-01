@@ -80,11 +80,6 @@
               <span class="box"></span>
               <span class="check-text">登录时启动</span>
             </label>
-
-            <div class="hk-log-actions" style="margin-top: 10px; display: flex; gap: 8px; align-items: center;">
-              <button type="button" class="btn btn-ghost" id="openLogBtn" title="打开实时运行日志文件（排查切换或按键问题）" style="font-size: 12px; padding: 4px 10px;">📋 查看运行日志</button>
-              <button type="button" class="btn btn-ghost" id="openLogDirBtn" title="打开日志保存目录" style="font-size: 12px; padding: 4px 10px;">📁 打开日志目录</button>
-            </div>
           </div>
         </div>
       </section>
@@ -122,24 +117,30 @@
                 <!-- 选项卡 1：发送文件 -->
                 <div class="send-tab-pane is-active" id="sendPaneFile">
                   <div class="dropzone" id="dropzone" tabindex="0">
-                    <div class="dz-icon">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M12 16V4" />
-                        <path d="M7 9l5-5 5 5" />
-                        <path d="M20 15v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3" />
-                      </svg>
+                    <!-- 默认空态 -->
+                    <div class="dz-empty-state" id="dzEmptyState">
+                      <div class="dz-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M12 16V4" />
+                          <path d="M7 9l5-5 5 5" />
+                          <path d="M20 15v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3" />
+                        </svg>
+                      </div>
+                      <div class="dz-title">把文件拖到这里，或直接粘贴图片（Ctrl / ⌘ + V）</div>
+                      <div class="dz-sub">或 <button type="button" class="link-inline" id="pickFiles">选择文件</button> · <button type="button" class="link-inline" id="pickFolder">选择文件夹</button></div>
                     </div>
-                    <div class="dz-title">把文件拖到这里，或直接粘贴图片（Ctrl / ⌘ + V）</div>
-                    <div class="dz-sub">或 <button type="button" class="link-inline" id="pickFiles">选择文件</button> · <button type="button" class="link-inline" id="pickFolder">选择文件夹</button></div>
-                  </div>
 
-                  <!-- 待发送文件预览列表 -->
-                  <div class="staged-wrap" id="stagedWrap" hidden>
-                    <div class="staged-head">
-                      <span class="staged-summary" id="stagedSummary">已选择 0 项</span>
-                      <button type="button" class="btn btn-ghost btn-mini" id="stagedClearBtn">清空</button>
+                    <!-- 选中文件后在框内展示 -->
+                    <div class="dz-staged-state" id="stagedWrap" hidden>
+                      <div class="staged-head">
+                        <span class="staged-summary" id="stagedSummary">已选择 0 项</span>
+                        <div class="staged-actions">
+                          <button type="button" class="link-inline" id="pickMoreFiles">+ 继续添加</button>
+                          <button type="button" class="btn btn-ghost btn-mini" id="stagedClearBtn">清空</button>
+                        </div>
+                      </div>
+                      <div class="staged-list" id="stagedList"></div>
                     </div>
-                    <div class="staged-list" id="stagedList"></div>
                   </div>
                 </div>
 
@@ -215,28 +216,6 @@
                     手机连同一 Wi-Fi，用微信或自带相机扫码，免装 App 即可互传照片与文字。
                     <div class="ws-proxy-hint">提示：服务已自动跳过代理虚拟网卡；若手机开着 VPN/代理软件，设为「绕过局域网」即可秒连。</div>
                   </div>
-                  <!-- 扫码在线设备状态 -->
-                  <div class="ws-clients-line" id="wsClientsLine">
-                    <span class="ws-clients-icon">📱</span>
-                    <span class="ws-clients-text" id="wsClientsText">等待手机扫码连接…</span>
-                  </div>
-                  <!-- 电脑发送到手机快捷操作区 -->
-                  <div class="ws-send-box" id="webShareSendBox">
-                    <div class="ws-send-head">
-                      <div class="ws-send-title">电脑发给手机：</div>
-                      <div class="ws-send-target" id="wsSendTargetWrap" style="display: none;">
-                        <span class="ws-target-label">目标:</span>
-                        <select class="ws-target-select" id="wsTargetSelect">
-                          <option value="all">📢 全部已连手机</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div class="ws-send-actions">
-                      <button type="button" class="btn btn-sm btn-primary" id="wsSendFileBtn" title="选择电脑文件/照片，手机扫码即可下载">📤 选文件发给手机</button>
-                      <button type="button" class="btn btn-sm" id="wsSendTextBtn" title="输入文字发给手机">📝 发文字</button>
-                      <button type="button" class="btn btn-sm btn-ghost" id="wsSendClipBtn" title="把电脑当前剪贴板文字直接发给手机">📋 发剪贴板</button>
-                    </div>
-                  </div>
                 </div>
                 <div class="ws-right">
                   <div class="ws-qr" id="webShareQr"></div>
@@ -306,7 +285,13 @@
     </main>
 
     <footer class="footer">
-      <button class="link" id="helpBtn">使用说明 <span class="arrow">↗</span></button>
+      <div class="foot-left" style="display: flex; align-items: center; gap: 6px;">
+        <button class="link" id="helpBtn">使用说明 <span class="arrow">↗</span></button>
+        <span class="foot-sep">·</span>
+        <button class="link" id="openLogBtn" title="打开实时运行日志文件（排查切换或按键问题）">查看运行日志</button>
+        <span class="foot-sep">·</span>
+        <button class="link" id="openLogDirBtn" title="打开日志保存目录">打开日志目录</button>
+      </div>
       <div class="foot-right">
         <button class="link foot-sponsor-btn" id="sponsorBtn" type="button">❤️ 支持作者</button>
         <span class="foot-sep">·</span>

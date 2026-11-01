@@ -77,6 +77,8 @@ function addSharedFiles(filePaths, target = 'all') {
           const name = path.basename(fp);
           const item = {
             id,
+            fromId: 'pc',
+            fromName: '电脑',
             target: target || 'all',
             targetName,
             name,
@@ -121,6 +123,8 @@ function addSharedText(text, target = 'all') {
   const id = 'ws_out_t_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
   sharedTextToPhone = {
     id,
+    fromId: 'pc',
+    fromName: '电脑',
     target: target || 'all',
     targetName,
     text: clean,
@@ -275,9 +279,9 @@ function buildWebHtml(pcName) {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 10px 4px 18px;
+      padding: 10px 4px 16px;
     }
-    .header-title { font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .header-title { font-size: 17px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
     .badge {
       font-size: 11px;
       padding: 3px 9px;
@@ -329,10 +333,6 @@ function buildWebHtml(pcName) {
     }
     .btn:hover { background: var(--primary-hover); }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-green {
-      background: #059669;
-    }
-    .btn-green:hover { background: #10b981; }
     .upload-box {
       border: 2px dashed rgba(255, 255, 255, 0.18);
       border-radius: 12px;
@@ -356,7 +356,7 @@ function buildWebHtml(pcName) {
       padding: 11px;
       font-size: 13.5px;
       resize: vertical;
-      min-height: 74px;
+      min-height: 80px;
       outline: none;
       margin-bottom: 10px;
       font-family: inherit;
@@ -391,6 +391,9 @@ function buildWebHtml(pcName) {
       white-space: nowrap;
       font-weight: 500;
       color: #f0f4fc;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
     .file-size { color: var(--text-sub); font-size: 11.5px; margin-top: 2px; }
     .dl-btn {
@@ -414,7 +417,7 @@ function buildWebHtml(pcName) {
       margin-bottom: 12px;
     }
     .pc-text-head {
-      font-size: 11px;
+      font-size: 11.5px;
       color: #93c5fd;
       display: flex;
       justify-content: space-between;
@@ -466,63 +469,135 @@ function buildWebHtml(pcName) {
       white-space: nowrap;
       text-align: center;
     }
+    /* 移动端发送选项卡与目标选择 */
+    .m-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding-bottom: 10px;
+    }
+    .m-tab-btn {
+      flex: 1;
+      appearance: none;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-sub);
+      font-size: 13.5px;
+      font-weight: 500;
+      padding: 9px 10px;
+      border-radius: 9px;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .m-tab-btn.is-active {
+      background: rgba(59, 130, 246, 0.2);
+      border-color: rgba(96, 165, 250, 0.6);
+      color: #93c5fd;
+      font-weight: 600;
+    }
+    .m-target-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      font-size: 12.5px;
+      color: var(--text-sub);
+    }
+    .m-target-select {
+      appearance: none;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      color: #93c5fd;
+      border-radius: 7px;
+      font-size: 12px;
+      padding: 6px 10px;
+      outline: none;
+      max-width: 220px;
+      cursor: pointer;
+    }
+    .sender-tag {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      color: #93c5fd;
+      font-weight: 500;
+      margin-left: 5px;
+      display: inline-block;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
       <div class="header-title">⚡ SwitchScreen 快传</div>
-      <div class="badge">已连上 ${pcName}</div>
+      <div class="badge">已连接 ${pcName}</div>
     </div>
 
-    <!-- 1. 电脑发给手机的内容 (置顶) -->
+    <!-- 1. 接收区（来自电脑与其它手机） -->
     <div class="card card-highlight">
       <div class="card-title">
         <div class="card-title-left">
-          <span>📥 电脑发给手机的内容</span>
+          <span>📥 接收区（来自电脑与其它手机）</span>
         </div>
         <span class="live-tag">● 实时同步</span>
       </div>
 
-      <!-- 电脑发来的文本 -->
+      <!-- 收到的文本 -->
       <div id="pcTextBox" class="pc-text-box" style="display: none;">
         <div class="pc-text-head">
-          <span>📝 电脑发来的文字</span>
+          <div><span>📝 收到的文字</span><span id="pcTextSender" class="sender-tag">来自 电脑</span></div>
           <span id="pcTextTime">刚刚</span>
         </div>
         <div id="pcTextContent" class="pc-text-body"></div>
         <button type="button" class="btn-copy" id="copyPcTextBtn">📋 一键复制到手机剪贴板</button>
       </div>
 
-      <!-- 电脑发来的文件列表 -->
+      <!-- 收到的文件列表 -->
       <div class="file-list" id="pcFileList">
-        <div style="color: var(--text-sub); font-size: 12.5px; text-align: center; padding: 12px;">电脑端暂未发文件（在电脑点「发文件到手机」即可直达）</div>
+        <div style="color: var(--text-sub); font-size: 12.5px; text-align: center; padding: 12px;">暂未收到文件（支持电脑发来或其它手机互传）</div>
       </div>
     </div>
 
-    <!-- 2. 发送文件到电脑 -->
+    <!-- 2. 发送区（选项卡切换发送文件/发送文本，支持发给电脑与手机互传） -->
     <div class="card">
-      <div class="card-title">
-        <div class="card-title-left"><span>📤 发送照片 / 文件到电脑</span></div>
+      <div class="m-tabs">
+        <button type="button" class="m-tab-btn is-active" id="mTabFile">📤 发送照片 / 文件</button>
+        <button type="button" class="m-tab-btn" id="mTabText">📝 发送文本</button>
       </div>
-      <div class="upload-box" id="uploadBox">
-        <div class="upload-icon">📁</div>
-        <div class="upload-text">点击选择照片、视频或文件</div>
-        <div class="upload-sub">支持批量多选 · 局域网直传 · 电脑端立即弹出通知与保存</div>
-      </div>
-      <input type="file" id="fileInput" class="file-input" multiple>
-      <div class="progress-bar" id="progressBar">
-        <div class="progress-fill" id="progressFill"></div>
-      </div>
-    </div>
 
-    <!-- 3. 发送文字到电脑 -->
-    <div class="card">
-      <div class="card-title">
-        <div class="card-title-left"><span>📝 发送文本到电脑</span></div>
+      <div class="m-target-row">
+        <span>发送给：</span>
+        <select class="m-target-select" id="mTargetSelect">
+          <option value="all">📢 电脑与全部手机 (互传)</option>
+          <option value="pc">💻 仅电脑</option>
+        </select>
       </div>
-      <textarea id="textInput" placeholder="输入文字，电脑会自动写入剪贴板并弹窗提醒…"></textarea>
-      <button class="btn" id="sendTextBtn">发送文字到电脑剪贴板</button>
+
+      <!-- 选项卡 1：发送文件 -->
+      <div id="mPaneFile">
+        <div class="upload-box" id="uploadBox">
+          <div class="upload-icon">📁</div>
+          <div class="upload-text">点击选择照片、视频或文件</div>
+          <div class="upload-sub">支持批量多选 · 局域网直传 · 电脑及目标手机立即收到</div>
+        </div>
+        <input type="file" id="fileInput" class="file-input" multiple>
+        <div class="progress-bar" id="progressBar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+      </div>
+
+      <!-- 选项卡 2：发送文本 -->
+      <div id="mPaneText" style="display: none;">
+        <textarea id="textInput" placeholder="输入文字，点击发送即可送达目标设备…"></textarea>
+        <button class="btn" id="sendTextBtn">发送文字</button>
+      </div>
     </div>
   </div>
 
@@ -530,180 +605,235 @@ function buildWebHtml(pcName) {
 
   <script>
     function detectDeviceName() {
-      var ua = navigator.userAgent || '';
-      if (/iPad/i.test(ua)) return 'iPad';
-      if (/iPhone/i.test(ua)) return 'iPhone';
-      if (/Huawei|Honor/i.test(ua)) return '华为手机';
-      if (/Xiaomi|Redmi/i.test(ua)) return '小米手机';
-      if (/OPPO/i.test(ua)) return 'OPPO手机';
-      if (/vivo/i.test(ua)) return 'vivo手机';
-      if (/Android/i.test(ua)) return 'Android手机';
-      if (/Macintosh/i.test(ua)) return 'Mac网页端';
-      if (/Windows/i.test(ua)) return 'Win网页端';
-      return '手机设备';
+      var ua = navigator.userAgent || "";
+      if (/iPad/i.test(ua)) return "iPad";
+      if (/iPhone/i.test(ua)) return "iPhone";
+      if (/Huawei|Honor/i.test(ua)) return "华为手机";
+      if (/Xiaomi|Redmi/i.test(ua)) return "小米手机";
+      if (/OPPO/i.test(ua)) return "OPPO手机";
+      if (/vivo/i.test(ua)) return "vivo手机";
+      if (/Android/i.test(ua)) return "Android手机";
+      if (/Macintosh/i.test(ua)) return "Mac网页端";
+      if (/Windows/i.test(ua)) return "Win网页端";
+      return "手机设备";
     }
-    var myClientId = '';
+    var myClientId = "";
     try {
-      myClientId = localStorage.getItem('ss_ws_cid');
+      myClientId = localStorage.getItem("ss_ws_cid");
       if (!myClientId) {
-        myClientId = 'c_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-        localStorage.setItem('ss_ws_cid', myClientId);
+        myClientId = "c_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
+        localStorage.setItem("ss_ws_cid", myClientId);
       }
     } catch (e) {
-      myClientId = 'c_' + Date.now().toString(36);
+      myClientId = "c_" + Date.now().toString(36);
     }
     var myDeviceName = detectDeviceName();
 
+    // 选项卡切换
+    var mTabFile = document.getElementById("mTabFile");
+    var mTabText = document.getElementById("mTabText");
+    var mPaneFile = document.getElementById("mPaneFile");
+    var mPaneText = document.getElementById("mPaneText");
+    mTabFile.addEventListener("click", function() {
+      mTabFile.classList.add("is-active");
+      mTabText.classList.remove("is-active");
+      mPaneFile.style.display = "block";
+      mPaneText.style.display = "none";
+    });
+    mTabText.addEventListener("click", function() {
+      mTabText.classList.add("is-active");
+      mTabFile.classList.remove("is-active");
+      mPaneText.style.display = "block";
+      mPaneFile.style.display = "none";
+    });
+
     function showToast(msg) {
-      const t = document.getElementById('toast');
+      var t = document.getElementById("toast");
       t.innerText = msg;
-      t.style.display = 'block';
+      t.style.display = "block";
       clearTimeout(window.__toastTimer);
-      window.__toastTimer = setTimeout(() => { t.style.display = 'none'; }, 2600);
+      window.__toastTimer = setTimeout(function() { t.style.display = "none"; }, 2600);
     }
 
     async function copyText(str) {
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
           await navigator.clipboard.writeText(str);
-          showToast('已复制到手机剪贴板！');
+          showToast("已复制到手机剪贴板！");
           return;
         }
-      } catch {}
-      const ta = document.createElement('textarea');
+      } catch (e) {}
+      var ta = document.createElement("textarea");
       ta.value = str;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
       document.body.appendChild(ta);
       ta.select();
-      document.execCommand('copy');
+      document.execCommand("copy");
       document.body.removeChild(ta);
-      showToast('已复制到手机剪贴板！');
+      showToast("已复制到手机剪贴板！");
     }
 
     // 上传文件
-    const uploadBox = document.getElementById('uploadBox');
-    const fileInput = document.getElementById('fileInput');
-    const progressBar = document.getElementById('progressBar');
-    const progressFill = document.getElementById('progressFill');
+    var uploadBox = document.getElementById("uploadBox");
+    var fileInput = document.getElementById("fileInput");
+    var progressBar = document.getElementById("progressBar");
+    var progressFill = document.getElementById("progressFill");
+    var mTargetSelect = document.getElementById("mTargetSelect");
 
-    uploadBox.addEventListener('click', () => fileInput.click());
+    uploadBox.addEventListener("click", function() { fileInput.click(); });
 
-    fileInput.addEventListener('change', async (e) => {
-      const files = Array.from(e.target.files || []);
+    fileInput.addEventListener("change", async function(e) {
+      var files = Array.from(e.target.files || []);
       if (!files.length) return;
-      progressBar.style.display = 'block';
+      progressBar.style.display = "block";
+      var targetVal = (mTargetSelect && mTargetSelect.value) || "all";
+      var targetName = (mTargetSelect && mTargetSelect.options[mTargetSelect.selectedIndex]) ? mTargetSelect.options[mTargetSelect.selectedIndex].text : "";
 
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+      for (var i = 0; i < files.length; i++) {
+        var file = files[i];
         try {
-          showToast('正在上传: ' + file.name + ' (' + (i + 1) + '/' + files.length + ')');
-          await new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open('POST', '/api/upload?name=' + encodeURIComponent(file.name) + '&cid=' + encodeURIComponent(myClientId) + '&deviceName=' + encodeURIComponent(myDeviceName), true);
-            xhr.upload.onprogress = (ev) => {
+          showToast("正在上传: " + file.name + " (" + (i + 1) + "/" + files.length + ")");
+          await new Promise(function(resolve, reject) {
+            var xhr = new XMLHttpRequest();
+            var url = "/api/upload?name=" + encodeURIComponent(file.name) +
+                      "&cid=" + encodeURIComponent(myClientId) +
+                      "&deviceName=" + encodeURIComponent(myDeviceName) +
+                      "&target=" + encodeURIComponent(targetVal) +
+                      "&targetName=" + encodeURIComponent(targetName);
+            xhr.open("POST", url, true);
+            xhr.upload.onprogress = function(ev) {
               if (ev.lengthComputable) {
-                const percent = Math.round((ev.loaded / ev.total) * 100);
-                progressFill.style.width = percent + '%';
+                var percent = Math.round((ev.loaded / ev.total) * 100);
+                progressFill.style.width = percent + "%";
               }
             };
-            xhr.onload = () => {
+            xhr.onload = function() {
               if (xhr.status >= 200 && xhr.status < 300) resolve();
-              else reject(new Error('Upload failed'));
+              else reject(new Error("Upload failed"));
             };
-            xhr.onerror = () => reject(new Error('Network error'));
+            xhr.onerror = function() { reject(new Error("Network error")); };
             xhr.send(file);
           });
         } catch (err) {
-          showToast('上传失败: ' + file.name);
+          showToast("上传失败: " + file.name);
         }
       }
-      progressBar.style.display = 'none';
-      progressFill.style.width = '0%';
-      fileInput.value = '';
-      showToast('文件已全部成功送达电脑！');
+      progressBar.style.display = "none";
+      progressFill.style.width = "0%";
+      fileInput.value = "";
+      showToast("文件已全部成功送达目标！");
       pollPcContent();
     });
 
     // 发送文字
-    const textInput = document.getElementById('textInput');
-    const sendTextBtn = document.getElementById('sendTextBtn');
-    sendTextBtn.addEventListener('click', async () => {
-      const text = textInput.value.trim();
+    var textInput = document.getElementById("textInput");
+    var sendTextBtn = document.getElementById("sendTextBtn");
+    sendTextBtn.addEventListener("click", async function() {
+      var text = textInput.value.trim();
       if (!text) return;
+      var targetVal = (mTargetSelect && mTargetSelect.value) || "all";
+      var targetName = (mTargetSelect && mTargetSelect.options[mTargetSelect.selectedIndex]) ? mTargetSelect.options[mTargetSelect.selectedIndex].text : "";
       try {
         sendTextBtn.disabled = true;
-        const res = await fetch('/api/text', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: text, cid: myClientId, deviceName: myDeviceName })
+        var res = await fetch("/api/text", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: text,
+            cid: myClientId,
+            deviceName: myDeviceName,
+            target: targetVal,
+            targetName: targetName
+          })
         });
         if (res.ok) {
-          textInput.value = '';
-          showToast('已成功送达电脑剪贴板并提醒电脑！');
+          textInput.value = "";
+          showToast("文字已成功发送至目标！");
         } else {
-          showToast('发送失败');
+          showToast("发送失败");
         }
       } catch (err) {
-        showToast('发送出错，请检查Wi-Fi连接');
+        showToast("发送出错，请检查Wi-Fi连接");
       } finally {
         sendTextBtn.disabled = false;
       }
     });
 
-    // 复制电脑文字
-    const pcTextBox = document.getElementById('pcTextBox');
-    const pcTextContent = document.getElementById('pcTextContent');
-    const copyPcTextBtn = document.getElementById('copyPcTextBtn');
-    copyPcTextBtn.addEventListener('click', () => {
+    // 复制收到的文字
+    var pcTextBox = document.getElementById("pcTextBox");
+    var pcTextContent = document.getElementById("pcTextContent");
+    var pcTextSender = document.getElementById("pcTextSender");
+    var copyPcTextBtn = document.getElementById("copyPcTextBtn");
+    copyPcTextBtn.addEventListener("click", function() {
       if (pcTextContent.textContent) copyText(pcTextContent.textContent);
     });
 
-    // 轮询电脑发来的内容
-    const pcFileList = document.getElementById('pcFileList');
-    let lastSeenTextId = null;
-    let lastSeenFileCount = 0;
-    let initialPoll = true;
+    // 轮询内容
+    var pcFileList = document.getElementById("pcFileList");
+    var lastSeenTextId = null;
+    var lastSeenFileCount = 0;
+    var initialPoll = true;
 
     async function pollPcContent() {
       try {
-        const res = await fetch('/api/poll?cid=' + encodeURIComponent(myClientId) + '&name=' + encodeURIComponent(myDeviceName));
+        var res = await fetch("/api/poll?cid=" + encodeURIComponent(myClientId) + "&name=" + encodeURIComponent(myDeviceName));
         if (!res.ok) return;
-        const data = await res.json();
+        var data = await res.json();
 
-        // 文本更新
-        if (data.text && data.text.text) {
-          pcTextBox.style.display = 'block';
+        // 更新在线目标设备选择下拉框
+        if (mTargetSelect && Array.isArray(data.clients)) {
+          var otherClients = data.clients.filter(function(c) { return c.id !== myClientId; });
+          var curVal = mTargetSelect.value || "all";
+          var html = '<option value="all">📢 电脑与全部手机 (互传)</option><option value="pc">💻 仅电脑</option>';
+          for (var k = 0; k < otherClients.length; k++) {
+            var oc = otherClients[k];
+            html += '<option value="' + oc.id + '">📱 ' + oc.name + ' (' + oc.ip + ')</option>';
+          }
+          if (mTargetSelect.dataset.lastHtml !== html) {
+            mTargetSelect.innerHTML = html;
+            mTargetSelect.dataset.lastHtml = html;
+            mTargetSelect.value = curVal;
+          }
+        }
+
+        // 文本更新（排除自己发的）
+        if (data.text && data.text.text && data.text.fromId !== myClientId) {
+          pcTextBox.style.display = "block";
           pcTextContent.textContent = data.text.text;
+          if (pcTextSender) {
+            pcTextSender.textContent = "来自 " + (data.text.fromName || (data.text.fromId ? "手机" : "电脑"));
+          }
           if (!initialPoll && lastSeenTextId && lastSeenTextId !== data.text.id) {
-            showToast('收到电脑新发来的文字！');
+            showToast("收到来自【" + (data.text.fromName || "电脑") + "】的新文字！");
             if (navigator.vibrate) navigator.vibrate(100);
           }
           lastSeenTextId = data.text.id;
         }
 
-        // 文件更新
-        const files = data.files || [];
+        // 文件更新（排除自己发的）
+        var files = (data.files || []).filter(function(f) { return f.fromId !== myClientId; });
         if (files.length > 0) {
           if (!initialPoll && files.length > lastSeenFileCount) {
-            showToast('收到电脑新发来的文件！');
+            showToast("收到新发来的文件！");
             if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
           }
           lastSeenFileCount = files.length;
           pcFileList.innerHTML = files.map(function(f) {
+            var fromTag = '<span class="sender-tag">来自 ' + (f.fromName || (f.fromId ? "手机" : "电脑")) + '</span>';
             return '<div class="file-item">' +
               '<div style="flex: 1; min-width: 0; margin-right: 8px;">' +
-                '<div class="file-name" title="' + f.name + '">' + f.name + '</div>' +
+                '<div class="file-name" title="' + f.name + '">' + f.name + fromTag + '</div>' +
                 '<div class="file-size">' + f.sizeStr + '</div>' +
               '</div>' +
               '<a class="dl-btn" href="/api/download?id=' + encodeURIComponent(f.id) + '" download="' + encodeURIComponent(f.name) + '">⬇️ 下载保存</a>' +
             '</div>';
-          }).join('');
+          }).join("");
         } else {
-          pcFileList.innerHTML = '<div style="color: var(--text-sub); font-size: 12.5px; text-align: center; padding: 12px;">电脑端暂未发文件（在电脑点「发文件到手机」即可直达）</div>';
+          pcFileList.innerHTML = '<div style="color: var(--text-sub); font-size: 12.5px; text-align: center; padding: 12px;">暂未收到文件（支持电脑发来或其它手机互传）</div>';
         }
         initialPoll = false;
-      } catch {}
+      } catch (e) {}
     }
 
     setInterval(pollPcContent, 2000);
@@ -745,27 +875,33 @@ function handleRequest(req, res) {
     const ua = req.headers['user-agent'] || '';
 
     recordClientActive(cid, name, ip, ua);
+    const onlineClients = getOnlineClients();
 
     let textForClient = null;
     if (sharedTextToPhone) {
-      if (!sharedTextToPhone.target || sharedTextToPhone.target === 'all' || sharedTextToPhone.target === cid) {
+      const isNotFromSelf = sharedTextToPhone.fromId !== cid;
+      const isTargeted = !sharedTextToPhone.target || sharedTextToPhone.target === 'all' || sharedTextToPhone.target === cid;
+      if (isNotFromSelf && isTargeted) {
         textForClient = sharedTextToPhone;
       }
     }
 
     const filesForClient = Array.from(sharedFilesToPhone.values()).filter(f => {
-      return !f.target || f.target === 'all' || f.target === cid;
+      const isNotFromSelf = f.fromId !== cid;
+      const isTargeted = !f.target || f.target === 'all' || f.target === cid;
+      return isNotFromSelf && isTargeted;
     });
 
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({
       text: textForClient,
-      files: filesForClient
+      files: filesForClient,
+      clients: onlineClients
     }));
     return;
   }
 
-  // 3. 文件上传（手机发送到电脑）
+  // 3. 文件上传（手机发送到电脑 / 手机间互传）
   if (req.method === 'POST' && pathname === '/api/upload') {
     const rawName = urlObj.searchParams.get('name') || 'upload_' + Date.now();
     const filename = sanitizeFilename(rawName);
@@ -773,8 +909,10 @@ function handleRequest(req, res) {
     const ip = rawIp.replace(/^.*:/, '') || '127.0.0.1';
     const cid = urlObj.searchParams.get('cid') || ('ip_' + ip);
     const deviceName = urlObj.searchParams.get('deviceName') || '手机';
+    const target = urlObj.searchParams.get('target') || 'all';
+    const targetName = urlObj.searchParams.get('targetName') || '';
+
     recordClientActive(cid, deviceName, ip);
-    const peerName = `${deviceName} (${ip})`;
 
     const recvDir = getReceiveDir();
     const savePath = uniquePath(recvDir, filename);
@@ -789,7 +927,31 @@ function handleRequest(req, res) {
       const finalName = path.basename(savePath);
       let fileSize = 0;
       try { fileSize = fs.statSync(savePath).size; } catch {}
-      logger.info('WEB-SHARE', `Received file from mobile (${peerName}): ${finalName} (${fileSize} bytes)`);
+      logger.info('WEB-SHARE', `Received file from ${deviceName}: ${finalName} (${fileSize} bytes, target: ${target})`);
+
+      // 若发送目标包含手机（非仅发电脑），加入 sharedFilesToPhone 供其它手机下载
+      if (target !== 'pc') {
+        const shareId = 'ws_p2p_f_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+        sharedFilesToPhone.set(shareId, {
+          id: shareId,
+          name: finalName,
+          originalPath: savePath,
+          size: fileSize,
+          sizeStr: formatBytes(fileSize),
+          target: target || 'all',
+          targetName: targetName,
+          fromId: cid,
+          fromName: deviceName,
+          at: Date.now()
+        });
+      }
+
+      let peerLabel = `${deviceName} (${ip})`;
+      if (target === 'all') {
+        peerLabel = `${deviceName} (互传全部)`;
+      } else if (target !== 'pc' && targetName) {
+        peerLabel = `${deviceName} ➔ ${targetName.replace(/^📱\s*/, '')}`;
+      }
 
       if (servicesRef && servicesRef.addWebShareTransfer) {
         servicesRef.addWebShareTransfer({
@@ -799,7 +961,7 @@ function handleRequest(req, res) {
           size: fileSize,
           done: fileSize,
           status: 'done',
-          peer: peerName,
+          peer: peerLabel,
           path: savePath,
           at: Date.now()
         });
@@ -823,7 +985,7 @@ function handleRequest(req, res) {
     return;
   }
 
-  // 4. 文本发送（手机发送到电脑）
+  // 4. 文本发送（手机发送到电脑 / 手机间互传）
   if (req.method === 'POST' && pathname === '/api/text') {
     let body = '';
     req.on('data', (chunk) => { body += chunk; });
@@ -835,14 +997,35 @@ function handleRequest(req, res) {
         const ip = rawIp.replace(/^.*:/, '') || '127.0.0.1';
         const cid = data.cid || ('ip_' + ip);
         const deviceName = data.deviceName || '手机';
+        const target = data.target || 'all';
+        const targetName = data.targetName || '';
         recordClientActive(cid, deviceName, ip);
-        const peerName = `${deviceName} (${ip})`;
 
         if (text) {
           if (clipboard) {
             try { clipboard.writeText(text); } catch {}
           }
           const textPreview = text.length > 24 ? text.slice(0, 24) + '…' : text;
+
+          // 若目标包含手机，设置 sharedTextToPhone 供其它手机复制
+          if (target !== 'pc') {
+            sharedTextToPhone = {
+              id: 'ws_p2p_t_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+              text: text,
+              target: target || 'all',
+              targetName: targetName,
+              fromId: cid,
+              fromName: deviceName,
+              at: Date.now()
+            };
+          }
+
+          let peerLabel = `${deviceName} (${ip})`;
+          if (target === 'all') {
+            peerLabel = `${deviceName} (互传全部)`;
+          } else if (target !== 'pc' && targetName) {
+            peerLabel = `${deviceName} ➔ ${targetName.replace(/^📱\s*/, '')}`;
+          }
 
           if (servicesRef && servicesRef.addWebShareTransfer) {
             servicesRef.addWebShareTransfer({
@@ -852,7 +1035,7 @@ function handleRequest(req, res) {
               size: Buffer.byteLength(text, 'utf8'),
               done: Buffer.byteLength(text, 'utf8'),
               status: 'done',
-              peer: peerName,
+              peer: peerLabel,
               text,
               at: Date.now()
             });
@@ -870,9 +1053,9 @@ function handleRequest(req, res) {
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
-      } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: e.message }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
       }
     });
     return;

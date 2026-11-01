@@ -1209,7 +1209,7 @@ function renderTransfers(s) {
     if (!node) {
       node = el('div', 'tx');
       node.dataset.id = t.id;
-      node.innerHTML = '<div class="tx-head"><span class="tx-dir"></span><b></b><span class="tx-size"></span>'
+      node.innerHTML = '<div class="tx-head"><span class="tx-dir"></span><span class="tx-peer"></span><b></b><span class="tx-size"></span>'
         + '<button class="tx-del" type="button" title="删除这条记录">×</button></div>'
         + '<div class="tx-bar"><i></i></div>'
         + '<div class="tx-foot"><span class="tx-state"></span><span class="tx-extra"></span></div>';
@@ -1227,6 +1227,12 @@ function renderTransfers(s) {
     node.classList.toggle('is-text', !!t.text);
     node.classList.toggle('is-clickable', !!(t.text || t.path || (t.saved && t.saved.length)));
     node.querySelector('.tx-dir').textContent = t.dir === 'in' ? '接收' : '发送';
+    const peerName = t.peer || (t.dir === 'in' ? '未知设备' : '对端设备');
+    const peerEl = node.querySelector('.tx-peer');
+    if (peerEl) {
+      peerEl.textContent = (t.dir === 'in' ? '来自 ' : '发往 ') + peerName;
+      peerEl.title = (t.dir === 'in' ? '来自: ' : '发往: ') + peerName;
+    }
     node.querySelector('b').textContent = t.name || '未命名';
     node.querySelector('.tx-size').textContent = fmtSize(t.size);
     node.querySelector('.tx-bar i').style.width = `${pct}%`;
@@ -1462,17 +1468,20 @@ let stagedPaths = [];
 
 async function renderStagedFiles() {
   const wrap = $('#stagedWrap');
+  const empty = $('#dzEmptyState');
   const list = $('#stagedList');
   const summary = $('#stagedSummary');
   if (!wrap || !list) return;
 
   if (!stagedPaths.length) {
     wrap.hidden = true;
+    if (empty) empty.hidden = false;
     list.innerHTML = '';
     return;
   }
 
   wrap.hidden = false;
+  if (empty) empty.hidden = true;
 
   let info = { items: [], totalSize: 0 };
   try {
@@ -1574,6 +1583,17 @@ function bindSharePanel() {
       toast(`已添加 ${stagedPaths.length} 项，点击下方设备名即可直接发送`);
     }
   };
+
+  const pickMore = $('#pickMoreFiles');
+  if (pickMore) {
+    pickMore.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        const files = await window.api.selectFiles('file');
+        addStagedPaths(files);
+      } catch (err) {}
+    });
+  }
 
   const clearStaged = $('#stagedClearBtn');
   if (clearStaged) {
@@ -1789,6 +1809,15 @@ function bindSharePanel() {
 }
 
 function bindFooter() {
+  const openLogBtn = $('#openLogBtn');
+  if (openLogBtn) openLogBtn.addEventListener('click', () => {
+    if (window.api && window.api.openLogFile) window.api.openLogFile();
+  });
+  const openLogDirBtn = $('#openLogDirBtn');
+  if (openLogDirBtn) openLogDirBtn.addEventListener('click', () => {
+    if (window.api && window.api.openLogDir) window.api.openLogDir();
+  });
+
   const helpBtn = $('#helpBtn');
   if (helpBtn) helpBtn.addEventListener('click', () => window.api.help());
   const footLog = $('#footLogBtn');
