@@ -1249,8 +1249,8 @@ function registerIpc() {
   });
 
   ipcMain.handle('web-share:get', () => webShare.getShareInfo());
-  ipcMain.handle('web-share:toggle', (_e, enable) => {
-    if (enable) webShare.start();
+  ipcMain.handle('web-share:toggle', async (_e, enable) => {
+    if (enable) await webShare.start();
     else webShare.stop();
     broadcastState();
     return webShare.getShareInfo();

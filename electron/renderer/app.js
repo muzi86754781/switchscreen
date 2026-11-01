@@ -994,11 +994,11 @@ function renderWebShare(s) {
   }
   if (toggleBtn) {
     toggleBtn.textContent = isRunning ? '停止服务' : '启动服务';
-    toggleBtn.className = isRunning ? 'btn btn-sm btn-ghost ws-toggle-btn' : 'btn btn-sm btn-primary ws-toggle-btn';
+    toggleBtn.className = isRunning ? 'ws-toggle-btn is-running' : 'ws-toggle-btn is-stopped';
   }
 
   if (ifaceSelect && Array.isArray(ws.interfaces)) {
-    const activeIp = ws.ip || '';
+    const activeIp = ws.ip || ws.recommendedIp || (ws.interfaces[0] ? ws.interfaces[0].ip : '');
     const optionsHtml = ws.interfaces.map((item) => {
       const selected = (item.ip === activeIp) ? ' selected' : '';
       return `<option value="${escapeHtml(item.ip)}"${selected}>${escapeHtml(item.label || item.ip)}</option>`;

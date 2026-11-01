@@ -37,28 +37,38 @@ function getAvailableInterfaces() {
         const isVirt = isVirtualOrProxy(name, net.address);
         let score = 0;
         if (!isVirt) {
-          if (net.address.startsWith('192.168.')) score = 100;
-          else if (net.address.startsWith('10.')) score = 80;
-          else if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(net.address)) score = 60;
-          else score = 40;
+          const isWifi = /wlan|wi-?fi|wireless|无线/i.test(name);
+          const isEth = /eth|以太网|ethernet|en\d/i.test(name);
+          const typeBonus = isWifi ? 30 : (isEth ? 20 : 10);
+
+          if (net.address.startsWith('192.168.')) score = 100 + typeBonus;
+          else if (/^172\.20\.10\./.test(net.address)) score = 95 + typeBonus; // iPhone 热点网段
+          else if (net.address.startsWith('10.')) score = 80 + typeBonus;
+          else if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(net.address)) score = 60 + typeBonus;
+          else score = 40 + typeBonus;
         }
         list.push({
           name,
           ip: net.address,
           isVirtual: isVirt,
           score,
-          label: `${name} (${net.address})${score === 100 ? ' [推荐]' : ''}`
+          label: `${name} (${net.address})${isVirt ? ' (虚拟网卡)' : ''}`
         });
       }
     }
   }
   list.sort((a, b) => b.score - a.score);
+  if (list.length > 0 && list[0].score > 0) {
+    list[0].label += ' [推荐]';
+    list[0].isRecommended = true;
+  }
   return list;
 }
 
 function getLocalIp() {
   const list = getAvailableInterfaces();
-  if (list.length > 0 && !list[0].isVirtual) return list[0].ip;
+  const valid = list.find(i => !i.isVirtual && i.score > 0);
+  if (valid) return valid.ip;
   if (list.length > 0) return list[0].ip;
   return '127.0.0.1';
 }
@@ -545,30 +555,35 @@ function handleRequest(req, res) {
 }
 
 function startServer(port = 47749) {
-  if (server) {
-    try { server.close(); } catch {}
-    server = null;
-  }
-
-  currentIp = getLocalIp();
-  currentPort = port;
-
-  server = http.createServer(handleRequest);
-
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE' && currentPort < 47760) {
-      logger.warn('WEB-SHARE', `Port ${currentPort} in use, trying ${currentPort + 1}`);
-      startServer(currentPort + 1);
-    } else {
-      logger.error('WEB-SHARE', `Server error: ${err.message}`);
-      isRunning = false;
+  return new Promise((resolve) => {
+    if (server) {
+      try { server.close(); } catch {}
+      server = null;
     }
-  });
 
-  server.listen(currentPort, '0.0.0.0', () => {
-    isRunning = true;
-    logger.info('WEB-SHARE', `Web share server running at http://${currentIp}:${currentPort}`);
-    if (broadcastCallback) broadcastCallback();
+    currentIp = userChosenIp || getLocalIp();
+    currentPort = port;
+
+    server = http.createServer(handleRequest);
+
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE' && currentPort < 47760) {
+        logger.warn('WEB-SHARE', `Port ${currentPort} in use, trying ${currentPort + 1}`);
+        resolve(startServer(currentPort + 1));
+      } else {
+        logger.error('WEB-SHARE', `Server error: ${err.message}`);
+        isRunning = false;
+        if (broadcastCallback) broadcastCallback();
+        resolve(false);
+      }
+    });
+
+    server.listen(currentPort, '0.0.0.0', () => {
+      isRunning = true;
+      logger.info('WEB-SHARE', `Web share server running at http://${currentIp}:${currentPort}`);
+      if (broadcastCallback) broadcastCallback();
+      resolve(true);
+    });
   });
 }
 
@@ -591,11 +606,14 @@ function setChosenIp(ip) {
 
 function getShareInfo() {
   const ifaces = getAvailableInterfaces();
-  // 优先用用户手动选定的 IP，否则用自动评分第一名的物理网卡 IP
-  if (userChosenIp && ifaces.some(i => i.ip === userChosenIp)) {
+  const recommended = ifaces.find(i => !i.isVirtual && i.score > 0) || ifaces[0];
+  const recommendedIp = recommended ? recommended.ip : '127.0.0.1';
+
+  // 优先用用户手动选定的有效 IP，否则默认选中推荐的第一名物理网卡 IP
+  if (userChosenIp && ifaces.some(i => i.ip === userChosenIp && !i.isVirtual)) {
     currentIp = userChosenIp;
   } else {
-    currentIp = getLocalIp();
+    currentIp = recommendedIp;
   }
   const url = `http://${currentIp}:${currentPort}`;
   const localUrl = `http://127.0.0.1:${currentPort}`;
@@ -611,8 +629,9 @@ function getShareInfo() {
     enabled: isRunning,
     port: currentPort,
     ip: currentIp,
-    url,
-    localUrl,
+    recommendedIp,
+    url: isRunning ? url : '',
+    localUrl: isRunning ? localUrl : '',
     interfaces: ifaces,
     qrSvg
   };
