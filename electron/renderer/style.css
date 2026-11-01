@@ -667,7 +667,8 @@ body.win .brand { padding-left: 0; }
 .share-card { display: flex; flex-direction: column; }
 .share-card .tx-list {
   flex: 1 1 auto;
-  max-height: 268px;
+  min-height: 200px;
+  max-height: 360px;
   overflow-y: auto;
   padding-right: 2px;
 }

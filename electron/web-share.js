@@ -20,6 +20,8 @@ let isRunning = false;
 let servicesRef = null;
 let broadcastCallback = null;
 let notifyCallback = null;
+let askIncomingCallback = null;
+let showIncomingTextCallback = null;
 
 const sharedFilesToPhone = new Map();
 let sharedTextToPhone = null;
@@ -359,36 +361,47 @@ function handleRequest(req, res) {
 
     recordClientActive(cid, deviceName, ip);
 
+    const autoAccept = !!(servicesRef && servicesRef.cfg && servicesRef.cfg.ui && servicesRef.cfg.ui.autoAccept);
     const recvDir = getReceiveDir();
-    const savePath = uniquePath(recvDir, filename);
+    // 未开启免确认时，先保存为 .pending 临时文件，避免未同意接收就直接出现在目录中
+    const tempName = autoAccept ? filename : (filename + '.' + Date.now() + '.pending');
+    const savePath = uniquePath(recvDir, tempName);
 
     const writeStream = fs.createWriteStream(savePath);
     req.pipe(writeStream);
 
-    writeStream.on('finish', () => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, name: path.basename(savePath) }));
-
-      const finalName = path.basename(savePath);
+    writeStream.on('finish', async () => {
       let fileSize = 0;
       try { fileSize = fs.statSync(savePath).size; } catch {}
-      logger.info('WEB-SHARE', `Received file from ${deviceName}: ${finalName} (${fileSize} bytes, target: ${target})`);
+      logger.info('WEB-SHARE', `Received file stream from ${deviceName}: ${filename} (${fileSize} bytes, target: ${target})`);
 
-      // 若发送目标包含手机（非仅发电脑），加入 sharedFilesToPhone 供其它手机下载
-      if (target !== 'pc') {
-        const shareId = 'ws_p2p_f_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
-        sharedFilesToPhone.set(shareId, {
-          id: shareId,
-          name: finalName,
-          originalPath: savePath,
-          size: fileSize,
-          sizeStr: formatBytes(fileSize),
-          target: target || 'all',
-          targetName: targetName,
-          fromId: cid,
-          fromName: deviceName,
-          at: Date.now()
-        });
+      let finalPath = savePath;
+      let finalName = filename;
+      let accepted = true;
+
+      if (autoAccept) {
+        finalName = path.basename(savePath);
+        if (askIncomingCallback) {
+          askIncomingCallback({ name: finalName, from: deviceName, total: fileSize, count: 1 }, true);
+        } else if (notifyCallback) {
+          notifyCallback(`收到来自 ${deviceName} 的文件`, `${finalName} (${formatBytes(fileSize)})`);
+        }
+      } else {
+        if (askIncomingCallback) {
+          accepted = await askIncomingCallback({ name: filename, from: deviceName, total: fileSize, count: 1 }, false);
+        }
+        if (accepted) {
+          finalPath = uniquePath(recvDir, filename);
+          try {
+            fs.renameSync(savePath, finalPath);
+            finalName = path.basename(finalPath);
+          } catch (e) {
+            finalPath = savePath;
+            finalName = path.basename(savePath);
+          }
+        } else {
+          try { fs.unlinkSync(savePath); } catch {}
+        }
       }
 
       let peerLabel = `${deviceName} (${ip})`;
@@ -398,29 +411,67 @@ function handleRequest(req, res) {
         peerLabel = `${deviceName} ➔ ${targetName.replace(/^📱\s*/, '')}`;
       }
 
-      if (servicesRef && servicesRef.addWebShareTransfer) {
-        servicesRef.addWebShareTransfer({
-          id: 'ws_in_f_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-          dir: 'in',
-          name: finalName,
-          size: fileSize,
-          done: fileSize,
-          status: 'done',
-          peer: peerLabel,
-          path: savePath,
-          at: Date.now()
-        });
-      }
+      if (accepted) {
+        if (target !== 'pc') {
+          const shareId = 'ws_p2p_f_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+          sharedFilesToPhone.set(shareId, {
+            id: shareId,
+            name: finalName,
+            originalPath: finalPath,
+            size: fileSize,
+            sizeStr: formatBytes(fileSize),
+            target: target || 'all',
+            targetName: targetName,
+            fromId: cid,
+            fromName: deviceName,
+            at: Date.now()
+          });
+        }
 
-      if (servicesRef && servicesRef.pushStatus) {
-        servicesRef.pushStatus(`来自【${deviceName}】的文件已送达：${finalName}`, 'ok');
-      }
+        if (servicesRef && servicesRef.addWebShareTransfer) {
+          servicesRef.addWebShareTransfer({
+            id: 'ws_in_f_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+            dir: 'in',
+            name: finalName,
+            size: fileSize,
+            done: fileSize,
+            status: 'done',
+            peer: peerLabel,
+            path: finalPath,
+            at: Date.now()
+          });
+        }
 
-      if (notifyCallback) {
-        notifyCallback(`收到来自 ${deviceName} 的文件`, `${finalName} (${formatBytes(fileSize)})`);
-      }
+        if (servicesRef && servicesRef.pushStatus) {
+          servicesRef.pushStatus(`来自【${deviceName}】的文件已送达：${finalName}`, 'ok');
+        }
 
-      if (broadcastCallback) broadcastCallback();
+        if (broadcastCallback) broadcastCallback();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, name: finalName }));
+      } else {
+        if (servicesRef && servicesRef.addWebShareTransfer) {
+          servicesRef.addWebShareTransfer({
+            id: 'ws_in_f_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+            dir: 'in',
+            name: filename,
+            size: fileSize,
+            done: 0,
+            status: 'rejected',
+            peer: peerLabel,
+            path: '',
+            at: Date.now()
+          });
+        }
+
+        if (servicesRef && servicesRef.pushStatus) {
+          servicesRef.pushStatus(`已取消来自【${deviceName}】的文件：${filename}`, 'info');
+        }
+
+        if (broadcastCallback) broadcastCallback();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: '电脑端已取消/拒绝接收' }));
+      }
     });
 
     writeStream.on('error', (err) => {
@@ -434,7 +485,7 @@ function handleRequest(req, res) {
   if (req.method === 'POST' && pathname === '/api/text') {
     let body = '';
     req.on('data', (chunk) => { body += chunk; });
-    req.on('end', () => {
+    req.on('end', async () => {
       try {
         const data = JSON.parse(body || '{}');
         const text = String(data.text || '').trim();
@@ -447,25 +498,8 @@ function handleRequest(req, res) {
         recordClientActive(cid, deviceName, ip);
 
         if (text) {
-          if (clipboard) {
-            try { clipboard.writeText(text); } catch {}
-          }
+          const autoAccept = !!(servicesRef && servicesRef.cfg && servicesRef.cfg.ui && servicesRef.cfg.ui.autoAccept);
           const textPreview = text.length > 24 ? text.slice(0, 24) + '…' : text;
-
-          // 若目标包含手机，设置 sharedTextToPhone 供其它手机复制
-          if (target !== 'pc') {
-            sharedTextToPhone = {
-              id: 'ws_p2p_t_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-              text: text,
-              target: target || 'all',
-              targetName: targetName,
-              fromId: cid,
-              fromName: deviceName,
-              at: Date.now()
-            };
-            sharedTextsList.unshift(sharedTextToPhone);
-            if (sharedTextsList.length > 30) sharedTextsList.pop();
-          }
 
           let peerLabel = `${deviceName} (${ip})`;
           if (target === 'all') {
@@ -474,30 +508,81 @@ function handleRequest(req, res) {
             peerLabel = `${deviceName} ➔ ${targetName.replace(/^📱\s*/, '')}`;
           }
 
-          if (servicesRef && servicesRef.addWebShareTransfer) {
-            servicesRef.addWebShareTransfer({
-              id: 'ws_in_t_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-              dir: 'in',
-              name: `文本 · ${textPreview}`,
-              size: Buffer.byteLength(text, 'utf8'),
-              done: Buffer.byteLength(text, 'utf8'),
-              status: 'done',
-              peer: peerLabel,
-              text,
-              at: Date.now()
-            });
+          let accepted = true;
+          if (autoAccept) {
+            if (showIncomingTextCallback) {
+              await showIncomingTextCallback({ text, from: deviceName });
+            } else {
+              if (clipboard) {
+                try { clipboard.writeText(text); } catch {}
+              }
+              if (servicesRef && servicesRef.pushStatus) {
+                servicesRef.pushStatus(`已收到【${deviceName}】发送的文字并拷贝到剪贴板`, 'ok');
+              }
+              if (notifyCallback) {
+                notifyCallback(`收到来自 ${deviceName} 的文字`, text.slice(0, 60));
+              }
+            }
+          } else {
+            if (showIncomingTextCallback) {
+              accepted = await showIncomingTextCallback({ text, from: deviceName });
+            }
           }
 
-          if (servicesRef && servicesRef.pushStatus) {
-            servicesRef.pushStatus(`已收到【${deviceName}】发送的文字并拷贝到剪贴板`, 'ok');
-          }
+          if (accepted) {
+            if (target !== 'pc') {
+              sharedTextToPhone = {
+                id: 'ws_p2p_t_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+                text: text,
+                target: target || 'all',
+                targetName: targetName,
+                fromId: cid,
+                fromName: deviceName,
+                at: Date.now()
+              };
+              sharedTextsList.unshift(sharedTextToPhone);
+              if (sharedTextsList.length > 30) sharedTextsList.pop();
+            }
 
-          if (notifyCallback) {
-            notifyCallback(`收到来自 ${deviceName} 的文字`, `已写入剪贴板：${text.slice(0, 60)}`);
-          }
+            if (servicesRef && servicesRef.addWebShareTransfer) {
+              servicesRef.addWebShareTransfer({
+                id: 'ws_in_t_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+                dir: 'in',
+                name: `文本 · ${textPreview}`,
+                size: Buffer.byteLength(text, 'utf8'),
+                done: Buffer.byteLength(text, 'utf8'),
+                status: 'done',
+                peer: peerLabel,
+                text,
+                at: Date.now()
+              });
+            }
 
-          if (broadcastCallback) broadcastCallback();
+            if (broadcastCallback) broadcastCallback();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true }));
+          } else {
+            if (servicesRef && servicesRef.addWebShareTransfer) {
+              servicesRef.addWebShareTransfer({
+                id: 'ws_in_t_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+                dir: 'in',
+                name: `文本 · ${textPreview}`,
+                size: Buffer.byteLength(text, 'utf8'),
+                done: 0,
+                status: 'rejected',
+                peer: peerLabel,
+                text,
+                at: Date.now()
+              });
+            }
+
+            if (broadcastCallback) broadcastCallback();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: '电脑端已取消/拒绝接收' }));
+          }
+          return;
         }
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
       } catch (err) {
@@ -534,11 +619,31 @@ function handleRequest(req, res) {
       return;
     }
 
+    const isInline = urlObj.searchParams.get('inline') === '1';
+    const ext = path.extname(filename).toLowerCase().replace('.', '');
+    const mimeMap = {
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      gif: 'image/gif',
+      webp: 'image/webp',
+      svg: 'image/svg+xml',
+      heic: 'image/heic',
+      mp4: 'video/mp4',
+      mov: 'video/quicktime',
+      webm: 'video/webm',
+      mp3: 'audio/mpeg',
+      pdf: 'application/pdf',
+      txt: 'text/plain; charset=utf-8'
+    };
+    const contentType = mimeMap[ext] || 'application/octet-stream';
+    const dispType = isInline ? 'inline' : 'attachment';
+
     try {
       res.writeHead(200, {
-        'Content-Type': 'application/octet-stream',
+        'Content-Type': contentType,
         'Content-Length': fileSize,
-        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`
+        'Content-Disposition': `${dispType}; filename*=UTF-8''${encodeURIComponent(filename)}`
       });
       fs.createReadStream(filePath).pipe(res);
     } catch (e) {
@@ -639,10 +744,12 @@ function getShareInfo() {
 }
 
 module.exports = {
-  init: (services, broadcast, notify) => {
+  init: (services, broadcast, notify, askIncoming, showIncomingText) => {
     servicesRef = services;
     broadcastCallback = broadcast;
     notifyCallback = notify;
+    askIncomingCallback = askIncoming;
+    showIncomingTextCallback = showIncomingText;
     // 默认自启 Web 快传服务
     startServer();
   },

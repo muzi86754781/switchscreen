@@ -653,9 +653,9 @@ function createPeer(userConfig, hooks) {
     recvDir: () => (cfg.ui && cfg.ui.receiveDir) || path.join(os.homedir(), 'Desktop', 'SwitchScreen'),
     onUpdate: (list) => { if (typeof h.onFileUpdate === 'function') h.onFileUpdate(list); },
     shouldAccept: (payload) => {
-      if (cfg.ui && cfg.ui.autoAccept) return true;
-      if (typeof h.onAskIncoming === 'function') return h.onAskIncoming(payload);
-      return true;
+      const isAuto = !!(cfg.ui && cfg.ui.autoAccept);
+      if (typeof h.onAskIncoming === 'function') return h.onAskIncoming(payload, isAuto);
+      return isAuto;
     }
   });
 

@@ -373,6 +373,28 @@
     .m-modal-head.is-sponsor {
       color: #f87171;
     }
+    .btn-ghost-mini {
+      appearance: none;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      color: #94a3b8;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .btn-ghost-mini:active {
+      background: rgba(255, 255, 255, 0.18);
+      color: #fff;
+    }
+    .recv-action-btn.is-preview {
+      background: rgba(59, 130, 246, 0.18);
+      border: 1px solid rgba(59, 130, 246, 0.38);
+      color: #93c5fd;
+    }
+    .recv-action-btn.is-preview:active {
+      background: rgba(59, 130, 246, 0.32);
+    }
     .m-modal-close {
       appearance: none;
       background: none;
@@ -400,6 +422,10 @@
       display: block;
       margin: 0 auto 8px;
       box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+      -webkit-touch-callout: default !important;
+      user-select: auto !important;
+      -webkit-user-select: auto !important;
+      pointer-events: auto !important;
     }
     .m-sponsor-tip {
       font-size: 11.5px;
@@ -509,7 +535,10 @@
         <div class="card-title-left">
           <span>📥 接收记录（文件与文本）</span>
         </div>
-        <span class="live-tag">● 实时同步</span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span class="live-tag">● 实时同步</span>
+          <button type="button" class="btn-ghost-mini" id="mClearRecvBtn" title="清空手机上的接收记录">清空</button>
+        </div>
       </div>
 
       <!-- 接收文件与文本统一列表：一行一条数据 -->
@@ -535,13 +564,34 @@
       <div class="m-modal-body">
         <p class="m-sponsor-p">若 SwitchScreen 帮您提升了多机协同的办公与娱乐效率，欢迎扫码请作者喝一杯咖啡，您的每一份认可都是本项目持续维护和进化的最大动力！☕✨</p>
         <div class="m-sponsor-qr-wrap">
-          <img src="/assets/sponsor_qr.jpg" alt="微信赞赏码" class="m-sponsor-qr">
-          <div class="m-sponsor-tip">微信扫一扫 · 或长按保存图片</div>
+          <img src="/assets/sponsor_qr.jpg" alt="微信赞赏收款码" class="m-sponsor-qr">
+          <div class="m-sponsor-tip">微信内长按二维码可识别支付 · 或点击下方保存</div>
+          <div style="margin-top: 8px;">
+            <a class="btn-mini-copy" style="text-decoration: none; display: inline-block;" href="/assets/sponsor_qr.jpg" download="SwitchScreen_赞赏码.jpg">⬇️ 保存收款码图片到相册</a>
+          </div>
         </div>
         <div class="m-sponsor-contact">
-          <span>作者微信: <b>likai6033</b></span>
-          <button type="button" class="btn-mini-copy" id="mCopyWxBtn">复制微信号</button>
+          <span>作者QQ: <b>285351298</b></span>
+          <button type="button" class="btn-mini-copy" id="mCopyWxBtn">复制QQ号</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 图片全屏预览 / 保存到相册弹窗 -->
+  <div class="m-modal" id="mImgModal" style="display: none;">
+    <div class="m-modal-mask" id="mImgMask"></div>
+    <div class="m-modal-box" style="max-width: 92vw; text-align: center; padding: 14px;">
+      <div class="m-modal-head" style="margin-bottom: 8px;">
+        <span id="mImgTitle" style="font-size: 13px; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px;">查看图片</span>
+        <button type="button" class="m-modal-close" id="mImgClose">✕</button>
+      </div>
+      <div style="margin: 8px 0; max-height: 60vh; overflow: auto; display: flex; align-items: center; justify-content: center;">
+        <img id="mImgPreview" src="" alt="图片预览" style="max-width: 100%; max-height: 58vh; border-radius: 8px; -webkit-touch-callout: default !important; user-select: auto !important; pointer-events: auto !important;">
+      </div>
+      <div style="font-size: 12px; color: #60a5fa; margin-top: 6px; font-weight: 500;">💡 长按上方图片，在弹出菜单中选择「存储图像 / 保存到相册」</div>
+      <div style="margin-top: 10px; display: flex; gap: 8px; justify-content: center;">
+        <a id="mImgDlBtn" class="btn" style="padding: 7px 16px; font-size: 13px; width: auto; text-decoration: none;" href="" download="">⬇️ 下载原文件</a>
       </div>
     </div>
   </div>
@@ -693,8 +743,41 @@
     if (mSponsorMask) mSponsorMask.addEventListener('click', closeSponsorModal);
     if (mCopyWxBtn) {
       mCopyWxBtn.addEventListener('click', function() {
-        copyText('likai6033');
+        copyText('285351298');
       });
+    }
+
+    // 图片预览与保存相册弹窗
+    var mImgModal = document.getElementById('mImgModal');
+    var mImgClose = document.getElementById('mImgClose');
+    var mImgMask = document.getElementById('mImgMask');
+    var mImgTitle = document.getElementById('mImgTitle');
+    var mImgPreview = document.getElementById('mImgPreview');
+    var mImgDlBtn = document.getElementById('mImgDlBtn');
+
+    function openImgModal(title, url, downloadName) {
+      if (mImgTitle) mImgTitle.innerText = title || '查看图片';
+      if (mImgPreview) mImgPreview.src = url;
+      if (mImgDlBtn) {
+        mImgDlBtn.href = url.replace('&inline=1', '');
+        mImgDlBtn.setAttribute('download', downloadName || 'image.jpg');
+      }
+      if (mImgModal) mImgModal.style.display = 'flex';
+    }
+    function closeImgModal() {
+      if (mImgModal) mImgModal.style.display = 'none';
+      if (mImgPreview) mImgPreview.src = '';
+    }
+    if (mImgClose) mImgClose.addEventListener('click', closeImgModal);
+    if (mImgMask) mImgMask.addEventListener('click', closeImgModal);
+
+    function isImageFile(filename) {
+      var ext = ((filename || '').split('.').pop() || '').toLowerCase();
+      return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic'].indexOf(ext) >= 0;
+    }
+    function isVideoFile(filename) {
+      var ext = ((filename || '').split('.').pop() || '').toLowerCase();
+      return ['mp4', 'mov', 'webm', 'm4v'].indexOf(ext) >= 0;
     }
 
     // 文本查看弹窗交互
@@ -760,20 +843,27 @@
                 }
               };
               xhr.onload = function() {
+                try {
+                  var d = JSON.parse(xhr.responseText || '{}');
+                  if (d && d.ok === false) {
+                    reject(new Error(d.error || '电脑端已取消/拒绝接收'));
+                    return;
+                  }
+                } catch (e) {}
                 if (xhr.status >= 200 && xhr.status < 300) resolve();
-                else reject(new Error('Upload failed'));
+                else reject(new Error('上传未成功'));
               };
-              xhr.onerror = function() { reject(new Error('Network error')); };
+              xhr.onerror = function() { reject(new Error('网络中断')); };
               xhr.send(file);
             });
           } catch (err) {
-            showToast('上传失败: ' + file.name);
+            showToast(err.message || ('上传失败: ' + file.name));
           }
         }
         if (progressBar) progressBar.style.display = 'none';
         if (progressFill) progressFill.style.width = '0%';
         fileInput.value = '';
-        showToast('文件已全部成功送达目标！');
+        showToast('传输完毕！');
         pollPcContent();
       });
     }
@@ -800,11 +890,13 @@
               targetName: targetName
             })
           });
-          if (res.ok) {
+          var d = {};
+          try { d = await res.json(); } catch (e) {}
+          if (res.ok && d.ok !== false) {
             textInput.value = '';
             showToast('文字已成功发送至目标！');
           } else {
-            showToast('发送失败');
+            showToast(d.error || '发送失败或被取消');
           }
         } catch (err) {
           showToast('发送出错，请检查Wi-Fi连接');
@@ -847,7 +939,17 @@
           '</div>';
         } else {
           var fileIcon = getFileIcon(item.name);
-          return '<div class="recv-row" data-kind="file" data-id="' + item.id + '">' +
+          var isImg = isImageFile(item.name);
+          var isVid = isVideoFile(item.name);
+          var actionBtn = '';
+          if (isImg) {
+            actionBtn = '<button type="button" class="recv-action-btn is-preview" data-action="preview-img" data-id="' + item.id + '" data-name="' + encodeURIComponent(item.name) + '">🖼️ 查看/保存</button>';
+          } else if (isVid) {
+            actionBtn = '<a class="recv-action-btn is-preview" href="/api/download?id=' + encodeURIComponent(item.id) + '&inline=1" target="_blank">🎬 播放/保存</a>';
+          } else {
+            actionBtn = '<a class="recv-action-btn is-dl" href="/api/download?id=' + encodeURIComponent(item.id) + '" download="' + encodeURIComponent(item.name) + '">⬇️ 下载</a>';
+          }
+          return '<div class="recv-row" data-kind="file" data-id="' + item.id + '" data-is-img="' + (isImg ? '1' : '0') + '" data-name="' + encodeURIComponent(item.name) + '">' +
             '<div class="recv-icon">' + fileIcon + '</div>' +
             '<div class="recv-content">' +
               '<div class="recv-title-line">' +
@@ -860,13 +962,30 @@
                 '<span>' + timeStr + '</span>' +
               '</div>' +
             '</div>' +
-            '<a class="recv-action-btn is-dl" href="/api/download?id=' + encodeURIComponent(item.id) + '" download="' + encodeURIComponent(item.name) + '">⬇️ 下载</a>' +
+            actionBtn +
           '</div>';
         }
       }).join('');
     }
 
-    // 事件代理：点击接收行与复制按钮
+    // 清空接收记录
+    var mClearRecvBtn = document.getElementById('mClearRecvBtn');
+    if (mClearRecvBtn) {
+      mClearRecvBtn.addEventListener('click', function() {
+        if (receivedMap.size === 0) {
+          showToast('暂无接收记录');
+          return;
+        }
+        if (confirm('确定清空手机上的所有接收记录吗？')) {
+          receivedMap.clear();
+          localStorage.setItem('ss_ws_cleared_at', String(Date.now()));
+          renderReceivedList();
+          showToast('接收记录已清空');
+        }
+      });
+    }
+
+    // 事件代理：点击接收行与各个按钮
     if (recvList) {
       recvList.addEventListener('click', function(e) {
         var copyBtn = e.target.closest('[data-action="copy"]');
@@ -876,19 +995,35 @@
           if (raw) copyText(raw);
           return;
         }
+
+        var prevBtn = e.target.closest('[data-action="preview-img"]');
+        if (prevBtn) {
+          e.stopPropagation();
+          var imgId = prevBtn.getAttribute('data-id');
+          var imgName = decodeURIComponent(prevBtn.getAttribute('data-name') || '图片');
+          openImgModal(imgName, '/api/download?id=' + encodeURIComponent(imgId) + '&inline=1', imgName);
+          return;
+        }
+
         var dlBtn = e.target.closest('a.recv-action-btn');
         if (dlBtn) return; // 普通链接下载
 
         var row = e.target.closest('.recv-row');
-        if (row && row.getAttribute('data-kind') === 'text') {
+        if (row) {
+          var kind = row.getAttribute('data-kind');
           var id = row.getAttribute('data-id');
-          var item = receivedMap.get(id);
-          if (item && item.text) {
-            if (item.text.length > 40 || item.text.indexOf('\n') >= 0) {
-              openTextModal('来自 ' + (item.fromName || '设备'), item.text);
-            } else {
-              copyText(item.text);
+          if (kind === 'text') {
+            var item = receivedMap.get(id);
+            if (item && item.text) {
+              if (item.text.length > 40 || item.text.indexOf('\n') >= 0) {
+                openTextModal('来自 ' + (item.fromName || '设备'), item.text);
+              } else {
+                copyText(item.text);
+              }
             }
+          } else if (kind === 'file' && row.getAttribute('data-is-img') === '1') {
+            var imgName = decodeURIComponent(row.getAttribute('data-name') || '图片');
+            openImgModal(imgName, '/api/download?id=' + encodeURIComponent(id) + '&inline=1', imgName);
           }
         }
       });
@@ -918,6 +1053,8 @@
 
         var hasNew = false;
 
+        var clearedAt = parseInt(localStorage.getItem('ss_ws_cleared_at') || '0', 10);
+
         // 收集收到的文本
         var textList = [];
         if (Array.isArray(data.texts)) {
@@ -927,6 +1064,8 @@
         }
         textList.forEach(function(t) {
           if (t && t.text && t.fromId !== myClientId) {
+            var atTime = t.at || Date.now();
+            if (clearedAt && atTime <= clearedAt) return;
             var tid = t.id || ('t_' + t.text.slice(0, 10));
             if (!receivedMap.has(tid)) {
               receivedMap.set(tid, {
@@ -934,7 +1073,7 @@
                 id: tid,
                 text: t.text,
                 fromName: t.fromName || (t.fromId ? '手机' : '电脑'),
-                at: t.at || Date.now()
+                at: atTime
               });
               hasNew = true;
               if (!initialPoll) {
@@ -948,6 +1087,8 @@
         // 收集收到的文件
         var fileList = (data.files || []).filter(function(f) { return f.fromId !== myClientId; });
         fileList.forEach(function(f) {
+          var atTime = f.at || Date.now();
+          if (clearedAt && atTime <= clearedAt) return;
           if (!receivedMap.has(f.id)) {
             receivedMap.set(f.id, {
               type: 'file',
@@ -955,7 +1096,7 @@
               name: f.name,
               sizeStr: f.sizeStr || '0 B',
               fromName: f.fromName || (f.fromId ? '手机' : '电脑'),
-              at: f.at || Date.now()
+              at: atTime
             });
             hasNew = true;
             if (!initialPoll) {
@@ -977,3 +1118,4 @@
   </script>
 </body>
 </html>
+

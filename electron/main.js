@@ -803,57 +803,243 @@ function fmtSize(n) {
   return `${x >= 10 || i === 0 ? x.toFixed(0) : x.toFixed(1)} ${u[i]}`;
 }
 
-/** 接收方弹窗：接收 / 取消（默认不自动接收，除非用户开了免确认） */
-function askIncoming(payload) {
+function isAppInBackground() {
+  if (!win || win.isDestroyed()) return true;
+  if (!win.isVisible()) return true;
+  if (win.isMinimized()) return true;
+  if (!win.isFocused()) return true;
+  return false;
+}
+
+let promptWin = null;
+const promptResolvers = new Map();
+let promptTimer = null;
+
+function createPromptWindow() {
+  if (promptWin && !promptWin.isDestroyed()) return promptWin;
+
+  const width = 380;
+  const height = 150;
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { workArea } = primaryDisplay;
+  const x = Math.round(workArea.x + workArea.width - width - 16);
+  const y = Math.round(workArea.y + workArea.height - height - 16);
+
+  promptWin = new BrowserWindow({
+    width,
+    height,
+    x,
+    y,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: true,
+    show: false,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  });
+
+  promptWin.setAlwaysOnTop(true, 'screen-saver');
+  promptWin.loadFile(path.join(__dirname, 'toast-prompt.html'));
+
+  promptWin.on('closed', () => {
+    promptWin = null;
+  });
+
+  return promptWin;
+}
+
+function showDesktopPrompt(data) {
   return new Promise((resolve) => {
-    const name = payload.name || '文件';
-    const from = services.deviceInfo(payload.from).name || payload.from;
-    const opts = {
-      type: 'question',
-      buttons: ['接收', '取消'],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-      title: '收到文件',
-      message: `${from} 想发送 ${name}`,
-      detail: `${payload.count || 1} 项 · 共 ${fmtSize(payload.total || 0)}\n保存到：${services.cfg.ui.receiveDir || services.defaultReceiveDir()}`
-    };
-    const p = win && !win.isDestroyed() ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts);
-    p.then((r) => {
-      const accept = r.response === 0;
-      services.pushStatus(accept ? `正在接收 ${name}` : `已拒绝来自 ${from} 的 ${name}`, accept ? 'ok' : 'info');
+    try {
+      const id = 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+      data.id = id;
+      promptResolvers.set(id, resolve);
+
+      if (promptTimer) {
+        clearTimeout(promptTimer);
+        promptTimer = null;
+      }
+
+      const pWin = createPromptWindow();
+
+      const sendData = () => {
+        if (!pWin || pWin.isDestroyed()) {
+          resolve(false);
+          return;
+        }
+        try {
+          const primaryDisplay = screen.getPrimaryDisplay();
+          const { workArea } = primaryDisplay;
+          const x = Math.round(workArea.x + workArea.width - 380 - 16);
+          const y = Math.round(workArea.y + workArea.height - 150 - 16);
+          pWin.setPosition(x, y);
+        } catch {}
+
+        pWin.webContents.send('show-prompt', data);
+        pWin.showInactive();
+
+        if (!data.needConfirm) {
+          promptTimer = setTimeout(() => {
+            if (pWin && !pWin.isDestroyed()) {
+              pWin.hide();
+            }
+            if (promptResolvers.has(id)) {
+              promptResolvers.delete(id);
+              resolve(true);
+            }
+          }, 6000);
+        } else {
+          promptTimer = setTimeout(() => {
+            if (pWin && !pWin.isDestroyed()) {
+              pWin.hide();
+            }
+            if (promptResolvers.has(id)) {
+              const res = promptResolvers.get(id);
+              promptResolvers.delete(id);
+              res(false);
+            }
+          }, 60000);
+        }
+      };
+
+      if (pWin.webContents.isLoading()) {
+        pWin.webContents.once('did-finish-load', sendData);
+      } else {
+        sendData();
+      }
+    } catch (e) {
+      console.error('showDesktopPrompt error:', e);
+      resolve(false);
+    }
+  });
+}
+
+function notifyIncoming(title, body) {
+  try {
+    if (Notification && typeof Notification.isSupported === 'function' && Notification.isSupported()) {
+      new Notification({ title, body }).show();
+    }
+  } catch {}
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('toast', `${title}: ${body}`);
+  }
+}
+
+/** 接收方弹窗：接收 / 取消（根据「免确认自动接收」与「是否后台」处理） */
+function askIncoming(payload, isAuto) {
+  const autoAccept = (typeof isAuto === 'boolean') ? isAuto : !!(services.cfg.ui && services.cfg.ui.autoAccept);
+  const name = payload.name || '文件';
+  const from = (payload.from ? (services.deviceInfo(payload.from).name || payload.from) : '外部设备');
+  const sizeText = fmtSize(payload.total || 0);
+
+  if (autoAccept) {
+    if (isAppInBackground()) {
+      showDesktopPrompt({
+        title: '⚡ 收到文件',
+        from,
+        main: name,
+        meta: `${payload.count || 1} 项 · 共 ${sizeText} · 已自动接收`,
+        needConfirm: false
+      });
+    }
+    notifyIncoming(`收到来自 ${from} 的文件`, `${name} (${sizeText})`);
+    return Promise.resolve(true);
+  }
+
+  return new Promise((resolve) => {
+    showDesktopPrompt({
+      title: '⚡ 收到文件请求',
+      from,
+      main: name,
+      meta: `${payload.count || 1} 项 · 共 ${sizeText}\n保存到：${services.cfg.ui.receiveDir || services.defaultReceiveDir()}`,
+      needConfirm: true,
+      acceptText: '接收',
+      cancelText: '取消'
+    }).then((accept) => {
+      services.pushStatus(accept ? `正在接收来自 ${from} 的 ${name}` : `已取消来自 ${from} 的 ${name}`, accept ? 'ok' : 'info');
       broadcastState();
       resolve(accept);
     }).catch(() => resolve(false));
   });
 }
 
-/** 收到文本：直接弹窗展示全文 + 一键拷贝 */
+/** 收到文本：根据「免确认自动接收」与「是否后台」处理 */
 function showIncomingText(payload) {
-  const text = String(payload.text || '');
-  const from = payload.from ? (services.deviceInfo(payload.from).name || payload.from) : '';
-  const long = text.length > 400;
-  const opts = {
-    type: 'info',
-    buttons: ['拷贝到剪贴板', '关闭'],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
-    title: payload.title || (from ? `来自 ${from} 的文本` : '传输记录'),
-    message: long ? `${text.slice(0, 400)}…` : text,
-    detail: long ? `共 ${text.length} 字，点「拷贝到剪贴板」复制全文` : '点「拷贝到剪贴板」直接粘贴到当前应用'
-  };
-  const p = win && !win.isDestroyed() ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts);
-  p.then((r) => {
-    if (r.response === 0) {
-      try { clipboard.writeText(text); } catch { /* ignore */ }
-      services.pushStatus('已拷贝到剪贴板', 'ok');
+  return new Promise((resolve) => {
+    const text = String(payload.text || '').trim();
+    const from = payload.from ? (services.deviceInfo(payload.from).name || payload.from) : '外部设备';
+    const autoAccept = !!(services.cfg.ui && services.cfg.ui.autoAccept);
+    const shortText = text.length > 50 ? text.slice(0, 50) + '…' : text;
+
+    if (autoAccept) {
+      try { clipboard.writeText(text); } catch {}
+      services.pushStatus(`已收到【${from}】发送的文字并拷贝到剪贴板`, 'ok');
       broadcastState();
+
+      if (isAppInBackground()) {
+        showDesktopPrompt({
+          title: '⚡ 收到文本',
+          from,
+          main: shortText,
+          meta: `共 ${text.length} 字 · 已自动拷贝到剪贴板`,
+          needConfirm: false
+        });
+      }
+      notifyIncoming(`收到来自 ${from} 的文字`, text.slice(0, 60));
+      resolve(true);
+      return;
     }
-  }).catch(() => {});
+
+    showDesktopPrompt({
+      title: '⚡ 收到文本消息',
+      from,
+      main: shortText,
+      meta: `共 ${text.length} 字 · 点击「接收」拷贝到剪贴板`,
+      needConfirm: true,
+      acceptText: '接收',
+      cancelText: '取消'
+    }).then((accept) => {
+      if (accept) {
+        try { clipboard.writeText(text); } catch {}
+        services.pushStatus(`已接收【${from}】的文字并拷贝到剪贴板`, 'ok');
+        broadcastState();
+        resolve(true);
+      } else {
+        services.pushStatus(`已忽略来自【${from}】的文字`, 'info');
+        broadcastState();
+        resolve(false);
+      }
+    }).catch(() => resolve(false));
+  });
 }
 
 function registerIpc() {
+  ipcMain.on('prompt-response', (_event, { id, accept }) => {
+    if (promptTimer) {
+      clearTimeout(promptTimer);
+      promptTimer = null;
+    }
+    if (promptWin && !promptWin.isDestroyed()) {
+      promptWin.hide();
+    }
+    if (id && promptResolvers.has(id)) {
+      const res = promptResolvers.get(id);
+      promptResolvers.delete(id);
+      res(accept);
+    } else {
+      for (const res of promptResolvers.values()) {
+        res(accept);
+      }
+      promptResolvers.clear();
+    }
+  });
+
   ipcMain.handle('state:get', () => services.getState());
   ipcMain.handle('state:refresh', async () => {
     if (!services.getState().monitors.length) await services.detectMonitors();
@@ -1343,20 +1529,10 @@ app.whenReady().then(() => {
     try { app.dock.hide(); } catch { /* ignore */ }
   }
   services.ensureDefaults();
-  function notifyIncoming(title, body) {
-    try {
-      if (Notification && typeof Notification.isSupported === 'function' && Notification.isSupported()) {
-        new Notification({ title, body }).show();
-      }
-    } catch {}
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('toast', `${title}: ${body}`);
-    }
-  }
 
   try {
     services.setWebShareGetter(() => webShare.getShareInfo());
-    webShare.init(services, () => broadcastState(), notifyIncoming);
+    webShare.init(services, () => broadcastState(), notifyIncoming, askIncoming, showIncomingText);
   } catch (e) {
     logger.warn('WEB-SHARE', `Init web-share error: ${e.message}`);
   }
@@ -1447,7 +1623,7 @@ app.whenReady().then(() => {
       },
       onFileUpdate: (list) => { services.onFileUpdate(list); broadcastStateThrottled(); },
       // 收到文件前询问：接收 / 取消
-      onAskIncoming: (payload) => askIncoming(payload),
+      onAskIncoming: (payload, isAuto) => askIncoming(payload, isAuto),
       // 收到文本：直接弹窗展示并发拷贝按钮
       onText: (payload) => { showIncomingText(payload); broadcastStateThrottled(); },
       // 剪贴板同步用 Electron 原生读写（不依赖 clipboardy，打包后也一定能用）
