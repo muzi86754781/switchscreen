@@ -597,7 +597,7 @@
     </div>
   </div>
 
-  <!-- 视频预览 / 保存到相册弹窗 -->
+  <!-- 视频预览弹窗 -->
   <div class="m-modal" id="mVideoModal" style="display: none;">
     <div class="m-modal-mask" id="mVideoMask"></div>
     <div class="m-modal-box" style="max-width: 92vw; text-align: center; padding: 14px;">
@@ -608,13 +608,7 @@
       <div style="margin: 8px 0; max-height: 52vh; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 8px;">
         <video id="mVideoPlayer" src="" playsinline webkit-playsinline controls preload="metadata" style="max-width: 100%; max-height: 50vh; border-radius: 8px; outline: none;"></video>
       </div>
-      <div style="font-size: 12px; color: #60a5fa; margin-top: 6px; line-height: 1.5; text-align: left; background: rgba(59, 130, 246, 0.08); padding: 8px 10px; border-radius: 6px;">
-        💡 <b>存入手机相册指南：</b><br>
-        1. 优先点击下方「<b>📱 一键存入相册/共享</b>」，系统弹出菜单中选择「<b>存储视频</b>」即可直接存入相册；<br>
-        2. 或点击「<b>⬇️ 下载原视频文件</b>」，在 Safari 弹窗中点「下载」，下载完成后点地址栏 ⬇️ 列表点开视频，点击左下角分享图标选择「存储视频」。
-      </div>
-      <div style="margin-top: 10px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
-        <button type="button" id="mVideoShareBtn" class="btn" style="padding: 7px 16px; font-size: 13px; width: auto; background: #059669;">📱 一键存入相册/共享</button>
+      <div style="margin-top: 10px; display: flex; gap: 8px; justify-content: center;">
         <a id="mVideoDlBtn" class="btn" style="padding: 7px 16px; font-size: 13px; width: auto; text-decoration: none;" href="" download="">⬇️ 下载原视频文件</a>
       </div>
     </div>
@@ -826,14 +820,13 @@
       });
     }
 
-    // 视频预览与保存相册弹窗
+    // 视频预览与下载弹窗
     var mVideoModal = document.getElementById('mVideoModal');
     var mVideoClose = document.getElementById('mVideoClose');
     var mVideoMask = document.getElementById('mVideoMask');
     var mVideoTitle = document.getElementById('mVideoTitle');
     var mVideoPlayer = document.getElementById('mVideoPlayer');
     var mVideoDlBtn = document.getElementById('mVideoDlBtn');
-    var mVideoShareBtn = document.getElementById('mVideoShareBtn');
     var curVideoUrl = '';
     var curVideoName = '';
 
@@ -860,34 +853,6 @@
     }
     if (mVideoClose) mVideoClose.addEventListener('click', closeVideoModal);
     if (mVideoMask) mVideoMask.addEventListener('click', closeVideoModal);
-    if (mVideoShareBtn) {
-      mVideoShareBtn.addEventListener('click', async function() {
-        if (!curVideoUrl) return;
-        try {
-          showToast('正在读取视频数据…');
-          mVideoShareBtn.disabled = true;
-          var resp = await fetch(curVideoUrl);
-          var blob = await resp.blob();
-          var ext = ((curVideoName || '').split('.').pop() || 'mp4').toLowerCase();
-          var mime = (ext === 'mov') ? 'video/quicktime' : 'video/mp4';
-          var file = new File([blob], curVideoName, { type: mime });
-          if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            await navigator.share({ files: [file], title: curVideoName });
-            showToast('已调起系统存储菜单');
-          } else {
-            showToast('浏览器不支持直存，已调起下载');
-            window.location.href = curVideoUrl.replace('&inline=1', '');
-          }
-        } catch (err) {
-          if (err && err.name !== 'AbortError') {
-            showToast('已调起原文件下载');
-            window.location.href = curVideoUrl.replace('&inline=1', '');
-          }
-        } finally {
-          mVideoShareBtn.disabled = false;
-        }
-      });
-    }
 
     function isImageFile(filename) {
       var ext = ((filename || '').split('.').pop() || '').toLowerCase();
