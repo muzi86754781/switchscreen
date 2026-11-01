@@ -590,8 +590,7 @@
         <img id="mImgPreview" src="" alt="图片预览" style="max-width: 100%; max-height: 58vh; border-radius: 8px; -webkit-touch-callout: default !important; user-select: auto !important; pointer-events: auto !important;">
       </div>
       <div style="font-size: 12px; color: #60a5fa; margin-top: 6px; font-weight: 500;">💡 长按上方图片，在弹出菜单中选择「存储图像 / 保存到相册」</div>
-      <div style="margin-top: 10px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
-        <button type="button" id="mImgShareBtn" class="btn" style="padding: 7px 16px; font-size: 13px; width: auto; background: #059669;">📱 一键存入相册/共享</button>
+      <div style="margin-top: 10px; display: flex; gap: 8px; justify-content: center;">
         <a id="mImgDlBtn" class="btn" style="padding: 7px 16px; font-size: 13px; width: auto; text-decoration: none;" href="" download="">⬇️ 下载原文件</a>
       </div>
     </div>
@@ -772,18 +771,13 @@
     var mImgTitle = document.getElementById('mImgTitle');
     var mImgPreview = document.getElementById('mImgPreview');
     var mImgDlBtn = document.getElementById('mImgDlBtn');
-    var mImgShareBtn = document.getElementById('mImgShareBtn');
-    var curImgUrl = '';
-    var curImgName = '';
 
     function openImgModal(title, url, downloadName) {
-      curImgUrl = url;
-      curImgName = downloadName || 'image.jpg';
       if (mImgTitle) mImgTitle.innerText = title || '查看图片';
       if (mImgPreview) mImgPreview.src = url;
       if (mImgDlBtn) {
         mImgDlBtn.href = url.replace('&inline=1', '');
-        mImgDlBtn.setAttribute('download', curImgName);
+        mImgDlBtn.setAttribute('download', downloadName || 'image.jpg');
       }
       if (mImgModal) mImgModal.style.display = 'flex';
     }
@@ -793,32 +787,6 @@
     }
     if (mImgClose) mImgClose.addEventListener('click', closeImgModal);
     if (mImgMask) mImgMask.addEventListener('click', closeImgModal);
-    if (mImgShareBtn) {
-      mImgShareBtn.addEventListener('click', async function() {
-        if (!curImgUrl) return;
-        try {
-          showToast('正在读取图片数据…');
-          mImgShareBtn.disabled = true;
-          var resp = await fetch(curImgUrl);
-          var blob = await resp.blob();
-          var ext = ((curImgName || '').split('.').pop() || 'jpg').toLowerCase();
-          var mime = (ext === 'png') ? 'image/png' : 'image/jpeg';
-          var file = new File([blob], curImgName, { type: mime });
-          if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            await navigator.share({ files: [file], title: curImgName });
-            showToast('已调起系统存储菜单');
-          } else {
-            window.location.href = curImgUrl.replace('&inline=1', '');
-          }
-        } catch (err) {
-          if (err && err.name !== 'AbortError') {
-            window.location.href = curImgUrl.replace('&inline=1', '');
-          }
-        } finally {
-          mImgShareBtn.disabled = false;
-        }
-      });
-    }
 
     // 视频预览与下载弹窗
     var mVideoModal = document.getElementById('mVideoModal');
