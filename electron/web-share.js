@@ -23,6 +23,7 @@ let notifyCallback = null;
 
 const sharedFilesToPhone = new Map();
 let sharedTextToPhone = null;
+const sharedTextsList = [];
 const activeClients = new Map();
 
 function recordClientActive(id, name, ip, ua) {
@@ -130,6 +131,8 @@ function addSharedText(text, target = 'all') {
     text: clean,
     at: Date.now()
   };
+  sharedTextsList.unshift(sharedTextToPhone);
+  if (sharedTextsList.length > 30) sharedTextsList.pop();
   if (servicesRef && servicesRef.addWebShareTransfer) {
     servicesRef.addWebShareTransfer({
       id,
@@ -373,103 +376,8 @@ function buildWebHtml(pcName) {
       display: none;
     }
     .progress-fill { height: 100%; width: 0%; background: var(--primary); transition: width 0.1s; }
-    .file-list { margin-top: 4px; max-height: 280px; overflow-y: auto; }
-    .file-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 10px 12px;
-      background: rgba(255, 255, 255, 0.035);
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      border-radius: 9px;
-      margin-bottom: 7px;
-      font-size: 13px;
-    }
-    .file-name {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-weight: 500;
-      color: #f0f4fc;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .file-size { color: var(--text-sub); font-size: 11.5px; margin-top: 2px; }
-    .dl-btn {
-      padding: 6px 14px;
-      background: linear-gradient(180deg, #3b82f6, #2563eb);
-      color: #ffffff;
-      border-radius: 7px;
-      text-decoration: none;
-      font-size: 12px;
-      font-weight: 600;
-      white-space: nowrap;
-      margin-left: 10px;
-      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
-    }
-    .dl-btn:active { opacity: 0.85; }
-    .pc-text-box {
-      background: rgba(59, 130, 246, 0.09);
-      border: 1px solid rgba(59, 130, 246, 0.28);
-      border-radius: 10px;
-      padding: 12px 14px;
-      margin-bottom: 12px;
-    }
-    .pc-text-head {
-      font-size: 11.5px;
-      color: #93c5fd;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 7px;
-      font-weight: 600;
-    }
-    .pc-text-body {
-      font-size: 14px;
-      color: #ffffff;
-      white-space: pre-wrap;
-      word-break: break-all;
-      line-height: 1.55;
-      margin-bottom: 10px;
-      max-height: 180px;
-      overflow-y: auto;
-      user-select: text;
-    }
-    .btn-copy {
-      padding: 9px 12px;
-      font-size: 13px;
-      background: rgba(16, 185, 129, 0.2);
-      border: 1px solid rgba(16, 185, 129, 0.4);
-      color: #34d399;
-      border-radius: 8px;
-      width: 100%;
-      cursor: pointer;
-      font-weight: 600;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-    }
-    .btn-copy:active { background: rgba(16, 185, 129, 0.3); }
-    .toast {
-      position: fixed;
-      top: 18px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(17, 24, 39, 0.95);
-      border: 1px solid rgba(255, 255, 255, 0.16);
-      color: #fff;
-      padding: 10px 20px;
-      border-radius: 24px;
-      font-size: 13.5px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-      display: none;
-      z-index: 100;
-      white-space: nowrap;
-      text-align: center;
-    }
-    /* 移动端发送选项卡与目标选择 */
+
+    /* 选项卡与目标选择 */
     .m-tabs {
       display: flex;
       gap: 8px;
@@ -520,16 +428,275 @@ function buildWebHtml(pcName) {
       max-width: 220px;
       cursor: pointer;
     }
-    .sender-tag {
+
+    /* 接收记录统一列表：一行一条数据 */
+    .recv-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      max-height: 380px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+    .recv-list::-webkit-scrollbar { width: 4px; }
+    .recv-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 4px; }
+    .recv-empty {
+      color: var(--text-sub);
+      font-size: 12.5px;
+      text-align: center;
+      padding: 18px 8px;
+    }
+    .recv-row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 11px;
+      background: rgba(255, 255, 255, 0.032);
+      border: 1px solid rgba(255, 255, 255, 0.065);
+      border-radius: 9px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .recv-row:active {
+      background: rgba(255, 255, 255, 0.07);
+    }
+    .recv-icon {
+      font-size: 18px;
+      flex: 0 0 22px;
+      text-align: center;
+      line-height: 1;
+    }
+    .recv-content {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .recv-title-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: #f0f4fc;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .recv-peer-badge {
+      flex: 0 0 auto;
       font-size: 10px;
-      padding: 1px 6px;
-      border-radius: 4px;
-      background: rgba(59, 130, 246, 0.15);
-      border: 1px solid rgba(59, 130, 246, 0.35);
       color: #93c5fd;
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      border-radius: 4px;
+      padding: 0 5px;
+      height: 17px;
+      line-height: 16px;
+      white-space: nowrap;
       font-weight: 500;
-      margin-left: 5px;
-      display: inline-block;
+    }
+    .recv-main-text {
+      flex: 1 1 auto;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 500;
+    }
+    .recv-meta-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-sub);
+    }
+    .recv-action-btn {
+      flex: 0 0 auto;
+      appearance: none;
+      border: none;
+      border-radius: 6px;
+      padding: 5px 11px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+    }
+    .recv-action-btn.is-copy {
+      background: rgba(16, 185, 129, 0.18);
+      border: 1px solid rgba(16, 185, 129, 0.38);
+      color: #34d399;
+    }
+    .recv-action-btn.is-copy:active {
+      background: rgba(16, 185, 129, 0.3);
+    }
+    .recv-action-btn.is-dl {
+      background: linear-gradient(180deg, #3b82f6, #2563eb);
+      color: #ffffff;
+      box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
+    }
+    .recv-action-btn.is-dl:active {
+      opacity: 0.85;
+    }
+
+    /* 底部支持作者 */
+    .m-footer {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-top: 18px;
+      margin-bottom: 8px;
+    }
+    .btn-sponsor {
+      appearance: none;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.32);
+      color: #f87171;
+      font-size: 13.5px;
+      font-weight: 600;
+      padding: 8px 20px;
+      border-radius: 20px;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-sponsor:active {
+      background: rgba(239, 68, 68, 0.25);
+      transform: scale(0.97);
+    }
+
+    /* 弹窗体系 */
+    .m-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      box-sizing: border-box;
+    }
+    .m-modal-mask {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.72);
+      backdrop-filter: blur(4px);
+    }
+    .m-modal-box {
+      position: relative;
+      z-index: 1;
+      background: #181f2f;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 16px;
+      width: 100%;
+      max-width: 360px;
+      padding: 18px 20px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+      box-sizing: border-box;
+    }
+    .m-modal-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 15.5px;
+      font-weight: 700;
+      color: #e2e8f0;
+      margin-bottom: 12px;
+    }
+    .m-modal-head.is-sponsor {
+      color: #f87171;
+    }
+    .m-modal-close {
+      appearance: none;
+      background: none;
+      border: none;
+      color: var(--text-sub);
+      font-size: 18px;
+      cursor: pointer;
+      padding: 4px;
+    }
+    .m-sponsor-p {
+      font-size: 12.5px;
+      line-height: 1.6;
+      color: #cbd5e1;
+      margin-bottom: 14px;
+      text-align: justify;
+    }
+    .m-sponsor-qr-wrap {
+      text-align: center;
+      margin-bottom: 14px;
+    }
+    .m-sponsor-qr {
+      width: 190px;
+      height: 190px;
+      border-radius: 12px;
+      display: block;
+      margin: 0 auto 8px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+    }
+    .m-sponsor-tip {
+      font-size: 11.5px;
+      color: #94a3b8;
+    }
+    .m-sponsor-contact {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+      color: #e2e8f0;
+    }
+    .btn-mini-copy {
+      appearance: none;
+      background: rgba(59, 130, 246, 0.2);
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      color: #60a5fa;
+      border-radius: 6px;
+      padding: 4px 9px;
+      font-size: 11.5px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .m-text-detail-body {
+      max-height: 240px;
+      overflow-y: auto;
+      font-size: 13.5px;
+      color: #fff;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.28);
+      border-radius: 8px;
+      margin-bottom: 14px;
+      user-select: text;
+    }
+
+    .toast {
+      position: fixed;
+      top: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(17, 24, 39, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 24px;
+      font-size: 13.5px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      display: none;
+      z-index: 300;
+      white-space: nowrap;
+      text-align: center;
     }
   </style>
 </head>
@@ -540,32 +707,7 @@ function buildWebHtml(pcName) {
       <div class="badge">已连接 ${pcName}</div>
     </div>
 
-    <!-- 1. 接收区（来自电脑与其它手机） -->
-    <div class="card card-highlight">
-      <div class="card-title">
-        <div class="card-title-left">
-          <span>📥 接收区（来自电脑与其它手机）</span>
-        </div>
-        <span class="live-tag">● 实时同步</span>
-      </div>
-
-      <!-- 收到的文本 -->
-      <div id="pcTextBox" class="pc-text-box" style="display: none;">
-        <div class="pc-text-head">
-          <div><span>📝 收到的文字</span><span id="pcTextSender" class="sender-tag">来自 电脑</span></div>
-          <span id="pcTextTime">刚刚</span>
-        </div>
-        <div id="pcTextContent" class="pc-text-body"></div>
-        <button type="button" class="btn-copy" id="copyPcTextBtn">📋 一键复制到手机剪贴板</button>
-      </div>
-
-      <!-- 收到的文件列表 -->
-      <div class="file-list" id="pcFileList">
-        <div style="color: var(--text-sub); font-size: 12.5px; text-align: center; padding: 12px;">暂未收到文件（支持电脑发来或其它手机互传）</div>
-      </div>
-    </div>
-
-    <!-- 2. 发送区（选项卡切换发送文件/发送文本，支持发给电脑与手机互传） -->
+    <!-- 1. 发送区（位于上方） -->
     <div class="card">
       <div class="m-tabs">
         <button type="button" class="m-tab-btn is-active" id="mTabFile">📤 发送照片 / 文件</button>
@@ -599,6 +741,63 @@ function buildWebHtml(pcName) {
         <button class="btn" id="sendTextBtn">发送文字</button>
       </div>
     </div>
+
+    <!-- 2. 接收区（位于发送区下方） -->
+    <div class="card card-highlight">
+      <div class="card-title">
+        <div class="card-title-left">
+          <span>📥 接收记录（文件与文本）</span>
+        </div>
+        <span class="live-tag">● 实时同步</span>
+      </div>
+
+      <!-- 接收文件与文本统一列表：一行一条数据 -->
+      <div class="recv-list" id="recvList">
+        <div class="recv-empty" id="recvEmpty">暂无接收记录（电脑或其它手机发送后在此显示）</div>
+      </div>
+    </div>
+
+    <!-- 3. 最下方中间：支持作者 -->
+    <div class="m-footer">
+      <button type="button" class="btn-sponsor" id="mSponsorBtn">❤️ 支持作者</button>
+    </div>
+  </div>
+
+  <!-- 支持作者弹窗 -->
+  <div class="m-modal" id="mSponsorModal" style="display: none;">
+    <div class="m-modal-mask" id="mSponsorMask"></div>
+    <div class="m-modal-box">
+      <div class="m-modal-head is-sponsor">
+        <span>❤️ 支持作者</span>
+        <button type="button" class="m-modal-close" id="mSponsorClose">✕</button>
+      </div>
+      <div class="m-modal-body">
+        <p class="m-sponsor-p">若 SwitchScreen 帮您提升了多机协同的办公与娱乐效率，欢迎扫码请作者喝一杯咖啡，您的每一份认可都是本项目持续维护和进化的最大动力！☕✨</p>
+        <div class="m-sponsor-qr-wrap">
+          <img src="/assets/sponsor_qr.jpg" alt="微信赞赏码" class="m-sponsor-qr">
+          <div class="m-sponsor-tip">微信扫一扫 · 或长按保存图片</div>
+        </div>
+        <div class="m-sponsor-contact">
+          <span>作者微信: <b>likai6033</b></span>
+          <button type="button" class="btn-mini-copy" id="mCopyWxBtn">复制微信号</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 文本详情弹窗 -->
+  <div class="m-modal" id="mTextModal" style="display: none;">
+    <div class="m-modal-mask" id="mTextMask"></div>
+    <div class="m-modal-box">
+      <div class="m-modal-head">
+        <span id="mTextModalTitle">📝 文本内容</span>
+        <button type="button" class="m-modal-close" id="mTextClose">✕</button>
+      </div>
+      <div class="m-modal-body">
+        <div class="m-text-detail-body" id="mTextDetailContent"></div>
+        <button type="button" class="btn" id="mTextModalCopyBtn">📋 一键复制全文</button>
+      </div>
+    </div>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -617,6 +816,44 @@ function buildWebHtml(pcName) {
       if (/Windows/i.test(ua)) return "Win网页端";
       return "手机设备";
     }
+
+    function escapeHtml(str) {
+      if (!str) return "";
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function getFileIcon(filename) {
+      var ext = ((filename || "").split(".").pop() || "").toLowerCase();
+      if (["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "heic"].indexOf(ext) >= 0) return "🖼️";
+      if (["mp4", "mov", "avi", "mkv", "webm", "flv"].indexOf(ext) >= 0) return "🎬";
+      if (["mp3", "wav", "m4a", "flac", "aac"].indexOf(ext) >= 0) return "🎵";
+      if (["zip", "rar", "7z", "tar", "gz"].indexOf(ext) >= 0) return "📦";
+      if (["pdf"].indexOf(ext) >= 0) return "📑";
+      if (["doc", "docx", "txt", "md"].indexOf(ext) >= 0) return "📄";
+      if (["xls", "xlsx", "csv"].indexOf(ext) >= 0) return "📊";
+      if (["ppt", "pptx"].indexOf(ext) >= 0) return "📈";
+      return "📁";
+    }
+
+    function formatTime(ts) {
+      if (!ts) return "刚刚";
+      var diff = Math.floor((Date.now() - ts) / 1000);
+      if (diff < 30) return "刚刚";
+      if (diff < 60) return diff + "秒前";
+      if (diff < 3600) return Math.floor(diff / 60) + "分钟前";
+      var d = new Date(ts);
+      var h = String(d.getHours());
+      var m = String(d.getMinutes());
+      if (h.length < 2) h = "0" + h;
+      if (m.length < 2) m = "0" + m;
+      return h + ":" + m;
+    }
+
     var myClientId = "";
     try {
       myClientId = localStorage.getItem("ss_ws_cid");
@@ -659,7 +896,7 @@ function buildWebHtml(pcName) {
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
           await navigator.clipboard.writeText(str);
-          showToast("已复制到手机剪贴板！");
+          showToast("已复制到剪贴板！");
           return;
         }
       } catch (e) {}
@@ -671,7 +908,54 @@ function buildWebHtml(pcName) {
       ta.select();
       document.execCommand("copy");
       document.body.removeChild(ta);
-      showToast("已复制到手机剪贴板！");
+      showToast("已复制到剪贴板！");
+    }
+
+    // 支持作者弹窗交互
+    var mSponsorBtn = document.getElementById("mSponsorBtn");
+    var mSponsorModal = document.getElementById("mSponsorModal");
+    var mSponsorClose = document.getElementById("mSponsorClose");
+    var mSponsorMask = document.getElementById("mSponsorMask");
+    var mCopyWxBtn = document.getElementById("mCopyWxBtn");
+    if (mSponsorBtn) {
+      mSponsorBtn.addEventListener("click", function() {
+        mSponsorModal.style.display = "flex";
+      });
+    }
+    function closeSponsorModal() {
+      if (mSponsorModal) mSponsorModal.style.display = "none";
+    }
+    if (mSponsorClose) mSponsorClose.addEventListener("click", closeSponsorModal);
+    if (mSponsorMask) mSponsorMask.addEventListener("click", closeSponsorModal);
+    if (mCopyWxBtn) {
+      mCopyWxBtn.addEventListener("click", function() {
+        copyText("likai6033");
+      });
+    }
+
+    // 文本查看弹窗交互
+    var mTextModal = document.getElementById("mTextModal");
+    var mTextClose = document.getElementById("mTextClose");
+    var mTextMask = document.getElementById("mTextMask");
+    var mTextDetailContent = document.getElementById("mTextDetailContent");
+    var mTextModalTitle = document.getElementById("mTextModalTitle");
+    var mTextModalCopyBtn = document.getElementById("mTextModalCopyBtn");
+    var curModalText = "";
+    function openTextModal(title, text) {
+      curModalText = text;
+      mTextModalTitle.innerText = title || "📝 文本内容";
+      mTextDetailContent.innerText = text;
+      mTextModal.style.display = "flex";
+    }
+    function closeTextModal() {
+      if (mTextModal) mTextModal.style.display = "none";
+    }
+    if (mTextClose) mTextClose.addEventListener("click", closeTextModal);
+    if (mTextMask) mTextMask.addEventListener("click", closeTextModal);
+    if (mTextModalCopyBtn) {
+      mTextModalCopyBtn.addEventListener("click", function() {
+        copyText(curModalText);
+      });
     }
 
     // 上传文件
@@ -760,20 +1044,82 @@ function buildWebHtml(pcName) {
       }
     });
 
-    // 复制收到的文字
-    var pcTextBox = document.getElementById("pcTextBox");
-    var pcTextContent = document.getElementById("pcTextContent");
-    var pcTextSender = document.getElementById("pcTextSender");
-    var copyPcTextBtn = document.getElementById("copyPcTextBtn");
-    copyPcTextBtn.addEventListener("click", function() {
-      if (pcTextContent.textContent) copyText(pcTextContent.textContent);
-    });
-
-    // 轮询内容
-    var pcFileList = document.getElementById("pcFileList");
-    var lastSeenTextId = null;
-    var lastSeenFileCount = 0;
+    // 接收记录管理（统一单行展示）
+    var recvList = document.getElementById("recvList");
+    var receivedMap = new Map();
     var initialPoll = true;
+
+    function renderReceivedList() {
+      var items = Array.from(receivedMap.values()).sort(function(a, b) { return b.at - a.at; });
+      if (items.length === 0) {
+        recvList.innerHTML = '<div class="recv-empty">暂无接收记录（电脑或其它手机发送后在此显示）</div>';
+        return;
+      }
+      recvList.innerHTML = items.map(function(item) {
+        var timeStr = formatTime(item.at);
+        if (item.type === "text") {
+          var preview = (item.text || "").replace(/\s+/g, " ");
+          return '<div class="recv-row" data-kind="text" data-id="' + item.id + '">' +
+            '<div class="recv-icon">📝</div>' +
+            '<div class="recv-content">' +
+              '<div class="recv-title-line">' +
+                '<span class="recv-peer-badge">来自 ' + escapeHtml(item.fromName) + '</span>' +
+                '<span class="recv-main-text" title="' + escapeHtml(item.text) + '">' + escapeHtml(preview) + '</span>' +
+              '</div>' +
+              '<div class="recv-meta-line">' +
+                '<span>' + timeStr + '</span>' +
+                '<span>·</span>' +
+                '<span>文字</span>' +
+              '</div>' +
+            '</div>' +
+            '<button type="button" class="recv-action-btn is-copy" data-action="copy" data-text="' + encodeURIComponent(item.text) + '">📋 复制</button>' +
+          '</div>';
+        } else {
+          var fileIcon = getFileIcon(item.name);
+          return '<div class="recv-row" data-kind="file" data-id="' + item.id + '">' +
+            '<div class="recv-icon">' + fileIcon + '</div>' +
+            '<div class="recv-content">' +
+              '<div class="recv-title-line">' +
+                '<span class="recv-peer-badge">来自 ' + escapeHtml(item.fromName) + '</span>' +
+                '<span class="recv-main-text" title="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + '</span>' +
+              '</div>' +
+              '<div class="recv-meta-line">' +
+                '<span>' + escapeHtml(item.sizeStr || "0 B") + '</span>' +
+                '<span>·</span>' +
+                '<span>' + timeStr + '</span>' +
+              '</div>' +
+            '</div>' +
+            '<a class="recv-action-btn is-dl" href="/api/download?id=' + encodeURIComponent(item.id) + '" download="' + encodeURIComponent(item.name) + '">⬇️ 下载</a>' +
+          '</div>';
+        }
+      }).join("");
+    }
+
+    // 事件代理：点击接收行与复制按钮
+    recvList.addEventListener("click", function(e) {
+      var copyBtn = e.target.closest("[data-action='copy']");
+      if (copyBtn) {
+        e.stopPropagation();
+        var raw = decodeURIComponent(copyBtn.getAttribute("data-text") || "");
+        if (raw) copyText(raw);
+        return;
+      }
+      var dlBtn = e.target.closest("a.recv-action-btn");
+      if (dlBtn) return; // 普通链接下载
+
+      var row = e.target.closest(".recv-row");
+      if (row && row.getAttribute("data-kind") === "text") {
+        var id = row.getAttribute("data-id");
+        var item = receivedMap.get(id);
+        if (item && item.text) {
+          if (item.text.length > 40 || item.text.indexOf("\n") >= 0) {
+            openTextModal("来自 " + (item.fromName || "设备"), item.text);
+          } else {
+            copyText(item.text);
+          }
+        }
+      }
+    });
 
     async function pollPcContent() {
       try {
@@ -797,40 +1143,57 @@ function buildWebHtml(pcName) {
           }
         }
 
-        // 文本更新（排除自己发的）
-        if (data.text && data.text.text && data.text.fromId !== myClientId) {
-          pcTextBox.style.display = "block";
-          pcTextContent.textContent = data.text.text;
-          if (pcTextSender) {
-            pcTextSender.textContent = "来自 " + (data.text.fromName || (data.text.fromId ? "手机" : "电脑"));
-          }
-          if (!initialPoll && lastSeenTextId && lastSeenTextId !== data.text.id) {
-            showToast("收到来自【" + (data.text.fromName || "电脑") + "】的新文字！");
-            if (navigator.vibrate) navigator.vibrate(100);
-          }
-          lastSeenTextId = data.text.id;
-        }
+        var hasNew = false;
 
-        // 文件更新（排除自己发的）
-        var files = (data.files || []).filter(function(f) { return f.fromId !== myClientId; });
-        if (files.length > 0) {
-          if (!initialPoll && files.length > lastSeenFileCount) {
-            showToast("收到新发来的文件！");
-            if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+        // 收集收到的文本
+        var textList = [];
+        if (Array.isArray(data.texts)) {
+          textList = data.texts;
+        } else if (data.text) {
+          textList = [data.text];
+        }
+        textList.forEach(function(t) {
+          if (t && t.text && t.fromId !== myClientId) {
+            var tid = t.id || ("t_" + t.text.slice(0, 10));
+            if (!receivedMap.has(tid)) {
+              receivedMap.set(tid, {
+                type: "text",
+                id: tid,
+                text: t.text,
+                fromName: t.fromName || (t.fromId ? "手机" : "电脑"),
+                at: t.at || Date.now()
+              });
+              hasNew = true;
+              if (!initialPoll) {
+                showToast("收到来自【" + (t.fromName || "电脑") + "】的新文字！");
+                if (navigator.vibrate) navigator.vibrate(100);
+              }
+            }
           }
-          lastSeenFileCount = files.length;
-          pcFileList.innerHTML = files.map(function(f) {
-            var fromTag = '<span class="sender-tag">来自 ' + (f.fromName || (f.fromId ? "手机" : "电脑")) + '</span>';
-            return '<div class="file-item">' +
-              '<div style="flex: 1; min-width: 0; margin-right: 8px;">' +
-                '<div class="file-name" title="' + f.name + '">' + f.name + fromTag + '</div>' +
-                '<div class="file-size">' + f.sizeStr + '</div>' +
-              '</div>' +
-              '<a class="dl-btn" href="/api/download?id=' + encodeURIComponent(f.id) + '" download="' + encodeURIComponent(f.name) + '">⬇️ 下载保存</a>' +
-            '</div>';
-          }).join("");
-        } else {
-          pcFileList.innerHTML = '<div style="color: var(--text-sub); font-size: 12.5px; text-align: center; padding: 12px;">暂未收到文件（支持电脑发来或其它手机互传）</div>';
+        });
+
+        // 收集收到的文件
+        var fileList = (data.files || []).filter(function(f) { return f.fromId !== myClientId; });
+        fileList.forEach(function(f) {
+          if (!receivedMap.has(f.id)) {
+            receivedMap.set(f.id, {
+              type: "file",
+              id: f.id,
+              name: f.name,
+              sizeStr: f.sizeStr || "0 B",
+              fromName: f.fromName || (f.fromId ? "手机" : "电脑"),
+              at: f.at || Date.now()
+            });
+            hasNew = true;
+            if (!initialPoll) {
+              showToast("收到新发来的文件！");
+              if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+            }
+          }
+        });
+
+        if (hasNew || initialPoll) {
+          renderReceivedList();
         }
         initialPoll = false;
       } catch (e) {}
@@ -856,6 +1219,16 @@ function handleRequest(req, res) {
     res.writeHead(204);
     res.end();
     return;
+  }
+
+  // 赞赏码静态图片
+  if (req.method === 'GET' && (pathname === '/assets/sponsor_qr.jpg' || pathname === '/sponsor_qr.jpg')) {
+    const qrPath = path.join(__dirname, 'renderer', 'assets', 'sponsor_qr.jpg');
+    if (fs.existsSync(qrPath)) {
+      res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' });
+      fs.createReadStream(qrPath).pipe(res);
+      return;
+    }
   }
 
   // 1. Web 页面
@@ -886,6 +1259,12 @@ function handleRequest(req, res) {
       }
     }
 
+    const textsForClient = sharedTextsList.filter(t => {
+      const isNotFromSelf = t.fromId !== cid;
+      const isTargeted = !t.target || t.target === 'all' || t.target === cid;
+      return isNotFromSelf && isTargeted;
+    });
+
     const filesForClient = Array.from(sharedFilesToPhone.values()).filter(f => {
       const isNotFromSelf = f.fromId !== cid;
       const isTargeted = !f.target || f.target === 'all' || f.target === cid;
@@ -895,6 +1274,7 @@ function handleRequest(req, res) {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({
       text: textForClient,
+      texts: textsForClient,
       files: filesForClient,
       clients: onlineClients
     }));
@@ -1018,6 +1398,8 @@ function handleRequest(req, res) {
               fromName: deviceName,
               at: Date.now()
             };
+            sharedTextsList.unshift(sharedTextToPhone);
+            if (sharedTextsList.length > 30) sharedTextsList.pop();
           }
 
           let peerLabel = `${deviceName} (${ip})`;

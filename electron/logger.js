@@ -13,6 +13,26 @@ const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB
 const recentLogs = [];
 const MAX_RECENT = 500;
 
+let startupCleaned = false;
+function initOnStartup() {
+  if (startupCleaned) return;
+  startupCleaned = true;
+  try {
+    ensureDir();
+    // 软件每次启动后，清除上次的运行日志
+    if (fs.existsSync(LOG_FILE)) {
+      try { fs.unlinkSync(LOG_FILE); } catch {}
+    }
+    if (fs.existsSync(OLD_LOG_FILE)) {
+      try { fs.unlinkSync(OLD_LOG_FILE); } catch {}
+    }
+    recentLogs.length = 0;
+    fs.writeFileSync(LOG_FILE, `[${timestamp()}] [INFO] [INIT] SwitchScreen started (previous logs cleared)\n`, 'utf8');
+  } catch (e) {
+    console.error('[logger] Failed to clear log on startup:', e.message);
+  }
+}
+
 function ensureDir() {
   try {
     if (!fs.existsSync(LOG_DIR)) {
@@ -136,7 +156,12 @@ const logger = {
       return shell.openPath(LOG_DIR);
     }
     return '';
-  }
+  },
+
+  clearOnStartup: () => initOnStartup()
 };
+
+// 软件每次启动载入时，自动执行清除日志
+initOnStartup();
 
 module.exports = logger;

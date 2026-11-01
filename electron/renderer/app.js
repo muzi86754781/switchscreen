@@ -1475,13 +1475,21 @@ async function renderStagedFiles() {
 
   if (!stagedPaths.length) {
     wrap.hidden = true;
-    if (empty) empty.hidden = false;
+    wrap.style.display = 'none';
+    if (empty) {
+      empty.hidden = false;
+      empty.style.display = 'flex';
+    }
     list.innerHTML = '';
     return;
   }
 
   wrap.hidden = false;
-  if (empty) empty.hidden = true;
+  wrap.style.display = 'flex';
+  if (empty) {
+    empty.hidden = true;
+    empty.style.display = 'none';
+  }
 
   let info = { items: [], totalSize: 0 };
   try {
@@ -1641,6 +1649,17 @@ function bindSharePanel() {
     });
   }
 
+  const getFilePath = (f) => {
+    if (!f) return '';
+    if (window.api && window.api.getPathForFile) {
+      try {
+        const p = window.api.getPathForFile(f);
+        if (p) return p;
+      } catch {}
+    }
+    return f.path || '';
+  };
+
   const dz = $('#dropzone');
   const over = (v) => dz.classList.toggle('is-over', v);
   ['dragenter', 'dragover'].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); over(true); }));
@@ -1648,11 +1667,20 @@ function bindSharePanel() {
   dz.addEventListener('drop', (e) => {
     e.preventDefault();
     over(false);
-    const paths = Array.from(e.dataTransfer.files || []).map((f) => f.path).filter(Boolean);
+    const paths = Array.from(e.dataTransfer.files || []).map(getFilePath).filter(Boolean);
     if (paths.length) {
       addStagedPaths(paths);
     }
   });
+
+  // 点击空态框任意位置直接唤起文件选择器
+  dz.addEventListener('click', (e) => {
+    if (stagedPaths.length > 0) return;
+    if (e.target && e.target.closest && e.target.closest('button')) return;
+    const pf = $('#pickFiles');
+    if (pf) pf.click();
+  });
+
   window.addEventListener('dragover', (e) => e.preventDefault());
   window.addEventListener('drop', (e) => e.preventDefault());
 
@@ -1673,7 +1701,7 @@ function bindSharePanel() {
 
     // 1. 尝试从浏览器事件中的 e.clipboardData.files 提取文件/文件夹
     const files = Array.from((e.clipboardData && e.clipboardData.files) || []);
-    const directPaths = files.map((f) => f.path).filter(Boolean);
+    const directPaths = files.map(getFilePath).filter(Boolean);
     if (directPaths.length > 0) {
       e.preventDefault();
       addStagedPaths(directPaths);

@@ -1,6 +1,6 @@
 'use strict';
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   getState: () => ipcRenderer.invoke('state:get'),
@@ -52,6 +52,15 @@ contextBridge.exposeInMainWorld('api', {
   copyText: (text) => ipcRenderer.invoke('clip:write', text),
   saveClipboardImage: () => ipcRenderer.invoke('clip:save-image'),
   readClipboardStaged: () => ipcRenderer.invoke('clip:read-staged'),
+  getPathForFile: (file) => {
+    if (webUtils && typeof webUtils.getPathForFile === 'function') {
+      try {
+        const p = webUtils.getPathForFile(file);
+        if (p) return p;
+      } catch {}
+    }
+    return (file && file.path) || '';
+  },
   showText: (payload) => ipcRenderer.invoke('text:show', payload),
 
   // 手机 / 网页快传
