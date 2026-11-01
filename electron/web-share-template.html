@@ -590,8 +590,32 @@
         <img id="mImgPreview" src="" alt="图片预览" style="max-width: 100%; max-height: 58vh; border-radius: 8px; -webkit-touch-callout: default !important; user-select: auto !important; pointer-events: auto !important;">
       </div>
       <div style="font-size: 12px; color: #60a5fa; margin-top: 6px; font-weight: 500;">💡 长按上方图片，在弹出菜单中选择「存储图像 / 保存到相册」</div>
-      <div style="margin-top: 10px; display: flex; gap: 8px; justify-content: center;">
+      <div style="margin-top: 10px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
+        <button type="button" id="mImgShareBtn" class="btn" style="padding: 7px 16px; font-size: 13px; width: auto; background: #059669;">📱 一键存入相册/共享</button>
         <a id="mImgDlBtn" class="btn" style="padding: 7px 16px; font-size: 13px; width: auto; text-decoration: none;" href="" download="">⬇️ 下载原文件</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 视频预览 / 保存到相册弹窗 -->
+  <div class="m-modal" id="mVideoModal" style="display: none;">
+    <div class="m-modal-mask" id="mVideoMask"></div>
+    <div class="m-modal-box" style="max-width: 92vw; text-align: center; padding: 14px;">
+      <div class="m-modal-head" style="margin-bottom: 8px;">
+        <span id="mVideoTitle" style="font-size: 13px; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px;">播放视频</span>
+        <button type="button" class="m-modal-close" id="mVideoClose">✕</button>
+      </div>
+      <div style="margin: 8px 0; max-height: 52vh; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 8px;">
+        <video id="mVideoPlayer" src="" playsinline webkit-playsinline controls preload="metadata" style="max-width: 100%; max-height: 50vh; border-radius: 8px; outline: none;"></video>
+      </div>
+      <div style="font-size: 12px; color: #60a5fa; margin-top: 6px; line-height: 1.5; text-align: left; background: rgba(59, 130, 246, 0.08); padding: 8px 10px; border-radius: 6px;">
+        💡 <b>存入手机相册指南：</b><br>
+        1. 优先点击下方「<b>📱 一键存入相册/共享</b>」，系统弹出菜单中选择「<b>存储视频</b>」即可直接存入相册；<br>
+        2. 或点击「<b>⬇️ 下载原视频文件</b>」，在 Safari 弹窗中点「下载」，下载完成后点地址栏 ⬇️ 列表点开视频，点击左下角分享图标选择「存储视频」。
+      </div>
+      <div style="margin-top: 10px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
+        <button type="button" id="mVideoShareBtn" class="btn" style="padding: 7px 16px; font-size: 13px; width: auto; background: #059669;">📱 一键存入相册/共享</button>
+        <a id="mVideoDlBtn" class="btn" style="padding: 7px 16px; font-size: 13px; width: auto; text-decoration: none;" href="" download="">⬇️ 下载原视频文件</a>
       </div>
     </div>
   </div>
@@ -754,13 +778,18 @@
     var mImgTitle = document.getElementById('mImgTitle');
     var mImgPreview = document.getElementById('mImgPreview');
     var mImgDlBtn = document.getElementById('mImgDlBtn');
+    var mImgShareBtn = document.getElementById('mImgShareBtn');
+    var curImgUrl = '';
+    var curImgName = '';
 
     function openImgModal(title, url, downloadName) {
+      curImgUrl = url;
+      curImgName = downloadName || 'image.jpg';
       if (mImgTitle) mImgTitle.innerText = title || '查看图片';
       if (mImgPreview) mImgPreview.src = url;
       if (mImgDlBtn) {
         mImgDlBtn.href = url.replace('&inline=1', '');
-        mImgDlBtn.setAttribute('download', downloadName || 'image.jpg');
+        mImgDlBtn.setAttribute('download', curImgName);
       }
       if (mImgModal) mImgModal.style.display = 'flex';
     }
@@ -770,6 +799,95 @@
     }
     if (mImgClose) mImgClose.addEventListener('click', closeImgModal);
     if (mImgMask) mImgMask.addEventListener('click', closeImgModal);
+    if (mImgShareBtn) {
+      mImgShareBtn.addEventListener('click', async function() {
+        if (!curImgUrl) return;
+        try {
+          showToast('正在读取图片数据…');
+          mImgShareBtn.disabled = true;
+          var resp = await fetch(curImgUrl);
+          var blob = await resp.blob();
+          var ext = ((curImgName || '').split('.').pop() || 'jpg').toLowerCase();
+          var mime = (ext === 'png') ? 'image/png' : 'image/jpeg';
+          var file = new File([blob], curImgName, { type: mime });
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: curImgName });
+            showToast('已调起系统存储菜单');
+          } else {
+            window.location.href = curImgUrl.replace('&inline=1', '');
+          }
+        } catch (err) {
+          if (err && err.name !== 'AbortError') {
+            window.location.href = curImgUrl.replace('&inline=1', '');
+          }
+        } finally {
+          mImgShareBtn.disabled = false;
+        }
+      });
+    }
+
+    // 视频预览与保存相册弹窗
+    var mVideoModal = document.getElementById('mVideoModal');
+    var mVideoClose = document.getElementById('mVideoClose');
+    var mVideoMask = document.getElementById('mVideoMask');
+    var mVideoTitle = document.getElementById('mVideoTitle');
+    var mVideoPlayer = document.getElementById('mVideoPlayer');
+    var mVideoDlBtn = document.getElementById('mVideoDlBtn');
+    var mVideoShareBtn = document.getElementById('mVideoShareBtn');
+    var curVideoUrl = '';
+    var curVideoName = '';
+
+    function openVideoModal(title, url, downloadName) {
+      curVideoUrl = url;
+      curVideoName = downloadName || 'video.mp4';
+      if (mVideoTitle) mVideoTitle.innerText = title || '播放视频';
+      if (mVideoPlayer) {
+        mVideoPlayer.src = url;
+        try { mVideoPlayer.load(); } catch (e) {}
+      }
+      if (mVideoDlBtn) {
+        mVideoDlBtn.href = url.replace('&inline=1', '');
+        mVideoDlBtn.setAttribute('download', curVideoName);
+      }
+      if (mVideoModal) mVideoModal.style.display = 'flex';
+    }
+    function closeVideoModal() {
+      if (mVideoModal) mVideoModal.style.display = 'none';
+      if (mVideoPlayer) {
+        try { mVideoPlayer.pause(); } catch (e) {}
+        mVideoPlayer.src = '';
+      }
+    }
+    if (mVideoClose) mVideoClose.addEventListener('click', closeVideoModal);
+    if (mVideoMask) mVideoMask.addEventListener('click', closeVideoModal);
+    if (mVideoShareBtn) {
+      mVideoShareBtn.addEventListener('click', async function() {
+        if (!curVideoUrl) return;
+        try {
+          showToast('正在读取视频数据…');
+          mVideoShareBtn.disabled = true;
+          var resp = await fetch(curVideoUrl);
+          var blob = await resp.blob();
+          var ext = ((curVideoName || '').split('.').pop() || 'mp4').toLowerCase();
+          var mime = (ext === 'mov') ? 'video/quicktime' : 'video/mp4';
+          var file = new File([blob], curVideoName, { type: mime });
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: curVideoName });
+            showToast('已调起系统存储菜单');
+          } else {
+            showToast('浏览器不支持直存，已调起下载');
+            window.location.href = curVideoUrl.replace('&inline=1', '');
+          }
+        } catch (err) {
+          if (err && err.name !== 'AbortError') {
+            showToast('已调起原文件下载');
+            window.location.href = curVideoUrl.replace('&inline=1', '');
+          }
+        } finally {
+          mVideoShareBtn.disabled = false;
+        }
+      });
+    }
 
     function isImageFile(filename) {
       var ext = ((filename || '').split('.').pop() || '').toLowerCase();
@@ -945,11 +1063,11 @@
           if (isImg) {
             actionBtn = '<button type="button" class="recv-action-btn is-preview" data-action="preview-img" data-id="' + item.id + '" data-name="' + encodeURIComponent(item.name) + '">🖼️ 查看/保存</button>';
           } else if (isVid) {
-            actionBtn = '<a class="recv-action-btn is-preview" href="/api/download?id=' + encodeURIComponent(item.id) + '&inline=1" target="_blank">🎬 播放/保存</a>';
+            actionBtn = '<button type="button" class="recv-action-btn is-preview" data-action="preview-vid" data-id="' + item.id + '" data-name="' + encodeURIComponent(item.name) + '">🎬 播放/保存</button>';
           } else {
             actionBtn = '<a class="recv-action-btn is-dl" href="/api/download?id=' + encodeURIComponent(item.id) + '" download="' + encodeURIComponent(item.name) + '">⬇️ 下载</a>';
           }
-          return '<div class="recv-row" data-kind="file" data-id="' + item.id + '" data-is-img="' + (isImg ? '1' : '0') + '" data-name="' + encodeURIComponent(item.name) + '">' +
+          return '<div class="recv-row" data-kind="file" data-id="' + item.id + '" data-is-img="' + (isImg ? '1' : '0') + '" data-is-vid="' + (isVid ? '1' : '0') + '" data-name="' + encodeURIComponent(item.name) + '">' +
             '<div class="recv-icon">' + fileIcon + '</div>' +
             '<div class="recv-content">' +
               '<div class="recv-title-line">' +
@@ -1005,6 +1123,15 @@
           return;
         }
 
+        var prevVidBtn = e.target.closest('[data-action="preview-vid"]');
+        if (prevVidBtn) {
+          e.stopPropagation();
+          var vidId = prevVidBtn.getAttribute('data-id');
+          var vidName = decodeURIComponent(prevVidBtn.getAttribute('data-name') || '视频');
+          openVideoModal(vidName, '/api/download?id=' + encodeURIComponent(vidId) + '&inline=1', vidName);
+          return;
+        }
+
         var dlBtn = e.target.closest('a.recv-action-btn');
         if (dlBtn) return; // 普通链接下载
 
@@ -1021,9 +1148,14 @@
                 copyText(item.text);
               }
             }
-          } else if (kind === 'file' && row.getAttribute('data-is-img') === '1') {
-            var imgName = decodeURIComponent(row.getAttribute('data-name') || '图片');
-            openImgModal(imgName, '/api/download?id=' + encodeURIComponent(id) + '&inline=1', imgName);
+          } else if (kind === 'file') {
+            if (row.getAttribute('data-is-img') === '1') {
+              var imgName = decodeURIComponent(row.getAttribute('data-name') || '图片');
+              openImgModal(imgName, '/api/download?id=' + encodeURIComponent(id) + '&inline=1', imgName);
+            } else if (row.getAttribute('data-is-vid') === '1') {
+              var vidName = decodeURIComponent(row.getAttribute('data-name') || '视频');
+              openVideoModal(vidName, '/api/download?id=' + encodeURIComponent(id) + '&inline=1', vidName);
+            }
           }
         }
       });

@@ -917,6 +917,17 @@ function textNotEqual(el, text) {
 
 /* ---------------- 传输与剪贴板 ---------------- */
 
+function formatTxTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  const now = new Date();
+  const isToday = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return isToday ? time : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
+}
+
 const STATUS_TEXT = {
   waiting: '等待对方接收…',
   sending: '发送中',
@@ -1236,7 +1247,8 @@ function renderTransfers(s) {
     node.querySelector('b').textContent = t.name || '未命名';
     node.querySelector('.tx-size').textContent = fmtSize(t.size);
     node.querySelector('.tx-bar i').style.width = `${pct}%`;
-    node.querySelector('.tx-state').textContent = `${STATUS_TEXT[t.status] || t.status}${t.size ? ` · ${pct}%` : ''}`;
+    const timeStr = formatTxTime(t.at);
+    node.querySelector('.tx-state').textContent = `${STATUS_TEXT[t.status] || t.status}${t.size ? ` · ${pct}%` : ''}${timeStr ? ` · ${timeStr}` : ''}`;
     node.title = t.text
       ? '点一下查看全文，可拷贝'
       : (t.path ? '点一下在文件夹中显示这个文件' : '');
