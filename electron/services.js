@@ -97,6 +97,16 @@ function setSelfAwake(v) {
 }
 let ddcError = '';
 let fileTransfers = [];
+let webShareTransfers = [];
+function addWebShareTransfer(item) {
+  webShareTransfers = [item, ...webShareTransfers.filter(t => t.id !== item.id)].slice(0, 50);
+}
+function removeWebShareTransfer(id) {
+  webShareTransfers = webShareTransfers.filter(t => t.id !== id);
+}
+function clearWebShareTransfers() {
+  webShareTransfers = [];
+}
 const fileStatusSeen = new Map();
 let clipProgress = 0;
 let clipPercent = 0;
@@ -2406,7 +2416,7 @@ function getState() {
       error: (peer && peer.getCaptureError && peer.getCaptureError()) || ''
     },
     files: {
-      transfers: fileTransfers,
+      transfers: [...webShareTransfers, ...fileTransfers],
       recvDir: cfg.ui.receiveDir,
       autoAccept: !!cfg.ui.autoAccept,
       targets: targetPeerNames()
@@ -2875,6 +2885,9 @@ module.exports = {
   setHotkey,
   setWebShareGetter,
   defaultReceiveDir,
+  addWebShareTransfer,
+  removeWebShareTransfer,
+  clearWebShareTransfers,
   setClipProgress,
   setActiveTarget: (t) => { activeTarget = t; },
   findMonitor,

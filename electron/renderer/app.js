@@ -1607,6 +1607,49 @@ function bindSharePanel() {
       }
     });
   }
+
+  // 电脑发送到手机
+  const wsSendFileBtn = $('#wsSendFileBtn');
+  if (wsSendFileBtn) {
+    wsSendFileBtn.addEventListener('click', async () => {
+      if (window.api && window.api.sendWebShareFiles) {
+        const res = await window.api.sendWebShareFiles();
+        if (res && res.ok) {
+          toast(`已共享 ${res.count} 个文件给手机，手机扫码即可下载`);
+        }
+      }
+    });
+  }
+
+  const wsSendTextBtn = $('#wsSendTextBtn');
+  if (wsSendTextBtn) {
+    wsSendTextBtn.addEventListener('click', async () => {
+      const inputEl = $('#textInput');
+      let text = (inputEl && inputEl.value.trim()) || '';
+      if (!text) {
+        text = prompt('请输入要发送给手机的文字：');
+      }
+      if (text && text.trim()) {
+        if (window.api && window.api.sendWebShareText) {
+          await window.api.sendWebShareText(text.trim());
+          toast('文字已成功发送给手机！手机网页端已同步展示');
+          if (inputEl) inputEl.value = '';
+        }
+      }
+    });
+  }
+
+  const wsSendClipBtn = $('#wsSendClipBtn');
+  if (wsSendClipBtn) {
+    wsSendClipBtn.addEventListener('click', async () => {
+      if (window.api && window.api.sendWebShareClipboard) {
+        const res = await window.api.sendWebShareClipboard();
+        if (res && res.ok) {
+          toast('已将电脑剪贴板文字发送给手机！');
+        }
+      }
+    });
+  }
 }
 
 function bindFooter() {
@@ -1723,6 +1766,10 @@ function bindInputPanel() {
   window.api.onState((s) => {
     if (s && s.version) apply(s);
   });
+
+  if (window.api && window.api.onToast) {
+    window.api.onToast((msg) => toast(msg));
+  }
 
   // 兜底轮询：权限状态等系统信息变化不产生事件
   setInterval(async () => {

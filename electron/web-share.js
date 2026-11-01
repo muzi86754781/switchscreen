@@ -19,6 +19,77 @@ let currentIp = '127.0.0.1';
 let isRunning = false;
 let servicesRef = null;
 let broadcastCallback = null;
+let notifyCallback = null;
+
+const sharedFilesToPhone = new Map();
+let sharedTextToPhone = null;
+
+function addSharedFiles(filePaths) {
+  const added = [];
+  for (const fp of filePaths || []) {
+    try {
+      if (fs.existsSync(fp)) {
+        const st = fs.statSync(fp);
+        if (st.isFile()) {
+          const id = 'ws_out_f_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+          const name = path.basename(fp);
+          const item = {
+            id,
+            name,
+            originalPath: fp,
+            size: st.size,
+            sizeStr: formatBytes(st.size),
+            at: Date.now()
+          };
+          sharedFilesToPhone.set(id, item);
+          added.push(item);
+
+          if (servicesRef && servicesRef.addWebShareTransfer) {
+            servicesRef.addWebShareTransfer({
+              id,
+              dir: 'out',
+              name,
+              size: st.size,
+              done: st.size,
+              status: 'done',
+              peer: '手机网页端',
+              path: fp,
+              at: Date.now()
+            });
+          }
+        }
+      }
+    } catch {}
+  }
+  if (broadcastCallback) broadcastCallback();
+  return added;
+}
+
+function addSharedText(text) {
+  const clean = String(text || '').trim();
+  if (!clean) return null;
+  const id = 'ws_out_t_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+  sharedTextToPhone = {
+    id,
+    text: clean,
+    at: Date.now()
+  };
+  if (servicesRef && servicesRef.addWebShareTransfer) {
+    servicesRef.addWebShareTransfer({
+      id,
+      dir: 'out',
+      name: `文本 · ${clean.slice(0, 24)}${clean.length > 24 ? '…' : ''}`,
+      size: Buffer.byteLength(clean, 'utf8'),
+      done: Buffer.byteLength(clean, 'utf8'),
+      status: 'done',
+      peer: '手机网页端',
+      text: clean,
+      at: Date.now()
+    });
+  }
+  if (broadcastCallback) broadcastCallback();
+  return sharedTextToPhone;
+}
 
 function isVirtualOrProxy(name, ip) {
   const lowerName = String(name || '').toLowerCase();
@@ -141,7 +212,7 @@ function buildWebHtml(pcName) {
       background: var(--bg);
       color: var(--text);
       line-height: 1.5;
-      padding: 16px;
+      padding: 14px 16px 36px;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
@@ -152,39 +223,52 @@ function buildWebHtml(pcName) {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 12px 6px 20px;
+      padding: 10px 4px 18px;
     }
     .header-title { font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
     .badge {
       font-size: 11px;
-      padding: 2px 8px;
+      padding: 3px 9px;
       border-radius: 20px;
       background: rgba(16, 185, 129, 0.15);
       color: var(--success);
       font-weight: 600;
       display: inline-flex;
       align-items: center;
-      gap: 4px;
+      gap: 5px;
     }
-    .badge::before { content: ""; width: 6px; height: 6px; background: currentColor; border-radius: 50%; }
+    .badge::before { content: ""; width: 6px; height: 6px; background: currentColor; border-radius: 50%; box-shadow: 0 0 6px currentColor; }
     .card {
       background: var(--card);
       border: 1px solid var(--card-border);
       border-radius: var(--border-radius);
-      padding: 18px;
-      margin-bottom: 16px;
+      padding: 16px 18px;
+      margin-bottom: 14px;
       box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
     }
-    .card-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+    .card-highlight {
+      border-color: rgba(59, 130, 246, 0.35);
+      background: linear-gradient(180deg, rgba(22, 27, 38, 0.98), rgba(18, 23, 34, 0.98));
+    }
+    .card-title { font-size: 14.5px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+    .card-title-left { display: flex; align-items: center; gap: 7px; }
+    .live-tag {
+      font-size: 10px;
+      color: #60a5fa;
+      background: rgba(59, 130, 246, 0.15);
+      padding: 1px 6px;
+      border-radius: 10px;
+      font-weight: 500;
+    }
     .btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       width: 100%;
-      padding: 13px;
+      padding: 12px;
       background: var(--primary);
       color: #fff;
-      font-size: 15px;
+      font-size: 14.5px;
       font-weight: 600;
       border: none;
       border-radius: 10px;
@@ -193,33 +277,38 @@ function buildWebHtml(pcName) {
     }
     .btn:hover { background: var(--primary-hover); }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-green {
+      background: #059669;
+    }
+    .btn-green:hover { background: #10b981; }
     .upload-box {
       border: 2px dashed rgba(255, 255, 255, 0.18);
       border-radius: 12px;
-      padding: 28px 16px;
+      padding: 24px 16px;
       text-align: center;
       cursor: pointer;
       transition: 0.16s;
       background: rgba(255, 255, 255, 0.02);
     }
     .upload-box:active { background: rgba(59, 130, 246, 0.08); border-color: var(--primary); }
-    .upload-icon { font-size: 36px; margin-bottom: 6px; }
-    .upload-text { font-size: 15px; font-weight: 600; color: #fff; }
-    .upload-sub { font-size: 12px; color: var(--text-sub); margin-top: 4px; }
+    .upload-icon { font-size: 32px; margin-bottom: 4px; }
+    .upload-text { font-size: 14.5px; font-weight: 600; color: #fff; }
+    .upload-sub { font-size: 11.5px; color: var(--text-sub); margin-top: 4px; }
     .file-input { display: none; }
     textarea {
       width: 100%;
-      background: rgba(0, 0, 0, 0.25);
+      background: rgba(0, 0, 0, 0.28);
       border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 10px;
       color: #fff;
-      padding: 12px;
-      font-size: 14px;
+      padding: 11px;
+      font-size: 13.5px;
       resize: vertical;
-      min-height: 80px;
+      min-height: 74px;
       outline: none;
       margin-bottom: 10px;
       font-family: inherit;
+      line-height: 1.5;
     }
     textarea:focus { border-color: var(--primary); }
     .progress-bar {
@@ -232,50 +321,98 @@ function buildWebHtml(pcName) {
       display: none;
     }
     .progress-fill { height: 100%; width: 0%; background: var(--primary); transition: width 0.1s; }
-    .file-list { margin-top: 8px; max-height: 240px; overflow-y: auto; }
+    .file-list { margin-top: 4px; max-height: 280px; overflow-y: auto; }
     .file-item {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 10px;
-      background: rgba(255, 255, 255, 0.03);
-      border-radius: 8px;
-      margin-bottom: 6px;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.035);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 9px;
+      margin-bottom: 7px;
       font-size: 13px;
     }
     .file-name {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      margin-right: 8px;
-      flex: 1;
+      font-weight: 500;
+      color: #f0f4fc;
     }
-    .file-size { color: var(--text-sub); font-size: 12px; white-space: nowrap; }
+    .file-size { color: var(--text-sub); font-size: 11.5px; margin-top: 2px; }
     .dl-btn {
-      padding: 5px 12px;
-      background: rgba(59, 130, 246, 0.15);
-      color: var(--primary);
-      border-radius: 6px;
+      padding: 6px 14px;
+      background: linear-gradient(180deg, #3b82f6, #2563eb);
+      color: #ffffff;
+      border-radius: 7px;
       text-decoration: none;
       font-size: 12px;
       font-weight: 600;
       white-space: nowrap;
       margin-left: 10px;
+      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
     }
+    .dl-btn:active { opacity: 0.85; }
+    .pc-text-box {
+      background: rgba(59, 130, 246, 0.09);
+      border: 1px solid rgba(59, 130, 246, 0.28);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+    }
+    .pc-text-head {
+      font-size: 11px;
+      color: #93c5fd;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 7px;
+      font-weight: 600;
+    }
+    .pc-text-body {
+      font-size: 14px;
+      color: #ffffff;
+      white-space: pre-wrap;
+      word-break: break-all;
+      line-height: 1.55;
+      margin-bottom: 10px;
+      max-height: 180px;
+      overflow-y: auto;
+      user-select: text;
+    }
+    .btn-copy {
+      padding: 9px 12px;
+      font-size: 13px;
+      background: rgba(16, 185, 129, 0.2);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #34d399;
+      border-radius: 8px;
+      width: 100%;
+      cursor: pointer;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .btn-copy:active { background: rgba(16, 185, 129, 0.3); }
     .toast {
       position: fixed;
-      bottom: 24px;
+      top: 18px;
       left: 50%;
       transform: translateX(-50%);
-      background: rgba(20, 24, 33, 0.95);
-      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(17, 24, 39, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.16);
       color: #fff;
-      padding: 10px 18px;
+      padding: 10px 20px;
       border-radius: 24px;
-      font-size: 14px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      font-size: 13.5px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
       display: none;
       z-index: 100;
+      white-space: nowrap;
+      text-align: center;
     }
   </style>
 </head>
@@ -283,16 +420,43 @@ function buildWebHtml(pcName) {
   <div class="container">
     <div class="header">
       <div class="header-title">⚡ SwitchScreen 快传</div>
-      <div class="badge">已连接 ${pcName}</div>
+      <div class="badge">已连上 ${pcName}</div>
     </div>
 
-    <!-- 发送文件到电脑 -->
+    <!-- 1. 电脑发给手机的内容 (置顶) -->
+    <div class="card card-highlight">
+      <div class="card-title">
+        <div class="card-title-left">
+          <span>📥 电脑发给手机的内容</span>
+        </div>
+        <span class="live-tag">● 实时同步</span>
+      </div>
+
+      <!-- 电脑发来的文本 -->
+      <div id="pcTextBox" class="pc-text-box" style="display: none;">
+        <div class="pc-text-head">
+          <span>📝 电脑发来的文字</span>
+          <span id="pcTextTime">刚刚</span>
+        </div>
+        <div id="pcTextContent" class="pc-text-body"></div>
+        <button type="button" class="btn-copy" id="copyPcTextBtn">📋 一键复制到手机剪贴板</button>
+      </div>
+
+      <!-- 电脑发来的文件列表 -->
+      <div class="file-list" id="pcFileList">
+        <div style="color: var(--text-sub); font-size: 12.5px; text-align: center; padding: 12px;">电脑端暂未发文件（在电脑点「发文件到手机」即可直达）</div>
+      </div>
+    </div>
+
+    <!-- 2. 发送文件到电脑 -->
     <div class="card">
-      <div class="card-title">📁 发送文件 / 照片到电脑</div>
+      <div class="card-title">
+        <div class="card-title-left"><span>📤 发送照片 / 文件到电脑</span></div>
+      </div>
       <div class="upload-box" id="uploadBox">
-        <div class="upload-icon">📤</div>
+        <div class="upload-icon">📁</div>
         <div class="upload-text">点击选择照片、视频或文件</div>
-        <div class="upload-sub">支持批量多选 · 局域网直传秒速送达</div>
+        <div class="upload-sub">支持批量多选 · 局域网直传 · 电脑端立即弹出通知与保存</div>
       </div>
       <input type="file" id="fileInput" class="file-input" multiple>
       <div class="progress-bar" id="progressBar">
@@ -300,19 +464,13 @@ function buildWebHtml(pcName) {
       </div>
     </div>
 
-    <!-- 发送文字到电脑 -->
+    <!-- 3. 发送文字到电脑 -->
     <div class="card">
-      <div class="card-title">📝 发送文本到电脑</div>
-      <textarea id="textInput" placeholder="输入要发送的文本，电脑会自动写入剪贴板…"></textarea>
-      <button class="btn" id="sendTextBtn">发送文字到电脑</button>
-    </div>
-
-    <!-- 从电脑下载文件 -->
-    <div class="card">
-      <div class="card-title">📥 电脑端接收的文件（点击下载）</div>
-      <div class="file-list" id="fileList">
-        <div style="color: var(--text-sub); font-size: 13px; text-align: center; padding: 12px;">正在加载文件列表…</div>
+      <div class="card-title">
+        <div class="card-title-left"><span>📝 发送文本到电脑</span></div>
       </div>
+      <textarea id="textInput" placeholder="输入文字，电脑会自动写入剪贴板并弹窗提醒…"></textarea>
+      <button class="btn" id="sendTextBtn">发送文字到电脑剪贴板</button>
     </div>
   </div>
 
@@ -323,9 +481,30 @@ function buildWebHtml(pcName) {
       const t = document.getElementById('toast');
       t.innerText = msg;
       t.style.display = 'block';
-      setTimeout(() => { t.style.display = 'none'; }, 2400);
+      clearTimeout(window.__toastTimer);
+      window.__toastTimer = setTimeout(() => { t.style.display = 'none'; }, 2600);
     }
 
+    async function copyText(str) {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(str);
+          showToast('已复制到手机剪贴板！');
+          return;
+        }
+      } catch {}
+      const ta = document.createElement('textarea');
+      ta.value = str;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      showToast('已复制到手机剪贴板！');
+    }
+
+    // 上传文件
     const uploadBox = document.getElementById('uploadBox');
     const fileInput = document.getElementById('fileInput');
     const progressBar = document.getElementById('progressBar');
@@ -365,10 +544,11 @@ function buildWebHtml(pcName) {
       progressBar.style.display = 'none';
       progressFill.style.width = '0%';
       fileInput.value = '';
-      showToast('全部文件已成功送达电脑！');
-      loadFiles();
+      showToast('文件已全部成功送达电脑！');
+      pollPcContent();
     });
 
+    // 发送文字
     const textInput = document.getElementById('textInput');
     const sendTextBtn = document.getElementById('sendTextBtn');
     sendTextBtn.addEventListener('click', async () => {
@@ -383,36 +563,74 @@ function buildWebHtml(pcName) {
         });
         if (res.ok) {
           textInput.value = '';
-          showToast('文本已成功发送至电脑剪贴板！');
+          showToast('已成功送达电脑剪贴板并提醒电脑！');
         } else {
           showToast('发送失败');
         }
       } catch (err) {
-        showToast('发送出错');
+        showToast('发送出错，请检查Wi-Fi连接');
       } finally {
         sendTextBtn.disabled = false;
       }
     });
 
-    async function loadFiles() {
+    // 复制电脑文字
+    const pcTextBox = document.getElementById('pcTextBox');
+    const pcTextContent = document.getElementById('pcTextContent');
+    const copyPcTextBtn = document.getElementById('copyPcTextBtn');
+    copyPcTextBtn.addEventListener('click', () => {
+      if (pcTextContent.textContent) copyText(pcTextContent.textContent);
+    });
+
+    // 轮询电脑发来的内容
+    const pcFileList = document.getElementById('pcFileList');
+    let lastSeenTextId = null;
+    let lastSeenFileCount = 0;
+    let initialPoll = true;
+
+    async function pollPcContent() {
       try {
-        const res = await fetch('/api/files');
-        const list = await res.json();
-        const box = document.getElementById('fileList');
-        if (!list || !list.length) {
-          box.innerHTML = '<div style="color: var(--text-sub); font-size: 13px; text-align: center; padding: 12px;">暂无文件</div>';
-          return;
+        const res = await fetch('/api/poll');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // 文本更新
+        if (data.text && data.text.text) {
+          pcTextBox.style.display = 'block';
+          pcTextContent.textContent = data.text.text;
+          if (!initialPoll && lastSeenTextId && lastSeenTextId !== data.text.id) {
+            showToast('收到电脑新发来的文字！');
+            if (navigator.vibrate) navigator.vibrate(100);
+          }
+          lastSeenTextId = data.text.id;
         }
-        box.innerHTML = list.map(f => \`
-          <div class="file-item">
-            <span class="file-name" title="\${f.name}">\${f.name}</span>
-            <span class="file-size">\${f.sizeStr}</span>
-            <a class="dl-btn" href="/api/download?name=\${encodeURIComponent(f.name)}" download>下载</a>
-          </div>
-        \`).join('');
+
+        // 文件更新
+        const files = data.files || [];
+        if (files.length > 0) {
+          if (!initialPoll && files.length > lastSeenFileCount) {
+            showToast('收到电脑新发来的文件！');
+            if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+          }
+          lastSeenFileCount = files.length;
+          pcFileList.innerHTML = files.map(function(f) {
+            return '<div class="file-item">' +
+              '<div style="flex: 1; min-width: 0; margin-right: 8px;">' +
+                '<div class="file-name" title="' + f.name + '">' + f.name + '</div>' +
+                '<div class="file-size">' + f.sizeStr + '</div>' +
+              '</div>' +
+              '<a class="dl-btn" href="/api/download?id=' + encodeURIComponent(f.id) + '" download="' + encodeURIComponent(f.name) + '">⬇️ 下载保存</a>' +
+            '</div>';
+          }).join('');
+        } else {
+          pcFileList.innerHTML = '<div style="color: var(--text-sub); font-size: 12.5px; text-align: center; padding: 12px;">电脑端暂未发文件（在电脑点「发文件到手机」即可直达）</div>';
+        }
+        initialPoll = false;
       } catch {}
     }
-    loadFiles();
+
+    setInterval(pollPcContent, 2000);
+    pollPcContent();
   </script>
 </body>
 </html>`;
@@ -441,7 +659,17 @@ function handleRequest(req, res) {
     return;
   }
 
-  // 2. 文件上传
+  // 2. 手机轮询电脑发来的内容（文字 + 文件）
+  if (req.method === 'GET' && pathname === '/api/poll') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      text: sharedTextToPhone,
+      files: Array.from(sharedFilesToPhone.values())
+    }));
+    return;
+  }
+
+  // 3. 文件上传（手机发送到电脑）
   if (req.method === 'POST' && pathname === '/api/upload') {
     const rawName = urlObj.searchParams.get('name') || 'upload_' + Date.now();
     const filename = sanitizeFilename(rawName);
@@ -454,10 +682,34 @@ function handleRequest(req, res) {
     writeStream.on('finish', () => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, name: path.basename(savePath) }));
-      logger.info('WEB-SHARE', `Received file from mobile: ${path.basename(savePath)}`);
-      if (servicesRef) {
-        servicesRef.pushStatus(`手机网页端已传达文件：${path.basename(savePath)}`, 'ok');
+
+      const finalName = path.basename(savePath);
+      let fileSize = 0;
+      try { fileSize = fs.statSync(savePath).size; } catch {}
+      logger.info('WEB-SHARE', `Received file from mobile: ${finalName} (${fileSize} bytes)`);
+
+      if (servicesRef && servicesRef.addWebShareTransfer) {
+        servicesRef.addWebShareTransfer({
+          id: 'ws_in_f_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+          dir: 'in',
+          name: finalName,
+          size: fileSize,
+          done: fileSize,
+          status: 'done',
+          peer: '手机网页端',
+          path: savePath,
+          at: Date.now()
+        });
       }
+
+      if (servicesRef && servicesRef.pushStatus) {
+        servicesRef.pushStatus(`手机端已送达文件：${finalName}`, 'ok');
+      }
+
+      if (notifyCallback) {
+        notifyCallback('收到手机快传文件', `${finalName} (${formatBytes(fileSize)})`);
+      }
+
       if (broadcastCallback) broadcastCallback();
     });
 
@@ -468,7 +720,7 @@ function handleRequest(req, res) {
     return;
   }
 
-  // 3. 文本发送
+  // 4. 文本发送（手机发送到电脑）
   if (req.method === 'POST' && pathname === '/api/text') {
     let body = '';
     req.on('data', (chunk) => { body += chunk; });
@@ -477,10 +729,33 @@ function handleRequest(req, res) {
         const data = JSON.parse(body || '{}');
         const text = String(data.text || '').trim();
         if (text) {
-          clipboard.writeText(text);
-          if (servicesRef) {
-            servicesRef.pushStatus(`已收到手机发送的文字并拷贝到剪贴板`, 'ok');
+          if (clipboard) {
+            try { clipboard.writeText(text); } catch {}
           }
+          const textPreview = text.length > 24 ? text.slice(0, 24) + '…' : text;
+
+          if (servicesRef && servicesRef.addWebShareTransfer) {
+            servicesRef.addWebShareTransfer({
+              id: 'ws_in_t_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+              dir: 'in',
+              name: `文本 · ${textPreview}`,
+              size: Buffer.byteLength(text, 'utf8'),
+              done: Buffer.byteLength(text, 'utf8'),
+              status: 'done',
+              peer: '手机网页端',
+              text,
+              at: Date.now()
+            });
+          }
+
+          if (servicesRef && servicesRef.pushStatus) {
+            servicesRef.pushStatus('已收到手机发送的文字并拷贝到剪贴板', 'ok');
+          }
+
+          if (notifyCallback) {
+            notifyCallback('收到手机快传文字', `已写入剪贴板：${text.slice(0, 60)}`);
+          }
+
           if (broadcastCallback) broadcastCallback();
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -493,59 +768,37 @@ function handleRequest(req, res) {
     return;
   }
 
-  // 4. 文件列表查询
-  if (req.method === 'GET' && pathname === '/api/files') {
-    const recvDir = getReceiveDir();
-    try {
-      if (!fs.existsSync(recvDir)) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify([]));
-        return;
-      }
-      const files = fs.readdirSync(recvDir)
-        .map((f) => {
-          try {
-            const st = fs.statSync(path.join(recvDir, f));
-            return {
-              name: f,
-              size: st.size,
-              sizeStr: formatBytes(st.size),
-              mtime: st.mtimeMs
-            };
-          } catch { return null; }
-        })
-        .filter(Boolean)
-        .sort((a, b) => b.mtime - a.mtime)
-        .slice(0, 50);
-
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(files));
-    } catch {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify([]));
-    }
-    return;
-  }
-
-  // 5. 文件下载
+  // 5. 电脑发送给手机的文件下载
   if (req.method === 'GET' && pathname === '/api/download') {
-    const rawName = urlObj.searchParams.get('name') || '';
-    const filename = path.basename(rawName);
-    const recvDir = getReceiveDir();
-    const filePath = path.join(recvDir, filename);
+    const id = urlObj.searchParams.get('id');
+    let filePath = '';
+    let filename = '';
+    let fileSize = 0;
 
-    if (!filename || !fs.existsSync(filePath)) {
+    if (id && sharedFilesToPhone.has(id)) {
+      const item = sharedFilesToPhone.get(id);
+      filePath = item.originalPath;
+      filename = item.name;
+      fileSize = item.size;
+    } else {
+      const rawName = urlObj.searchParams.get('name') || '';
+      filename = path.basename(rawName);
+      const recvDir = getReceiveDir();
+      filePath = path.join(recvDir, filename);
+      try { fileSize = fs.statSync(filePath).size; } catch {}
+    }
+
+    if (!filePath || !fs.existsSync(filePath)) {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('文件不存在');
+      res.end('文件不存在或已被移除');
       return;
     }
 
     try {
-      const stat = fs.statSync(filePath);
       res.writeHead(200, {
         'Content-Type': 'application/octet-stream',
-        'Content-Length': stat.size,
-        'Content-Disposition': `attachment; filename="${encodeURIComponent(filename)}"`
+        'Content-Length': fileSize,
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`
       });
       fs.createReadStream(filePath).pipe(res);
     } catch (e) {
@@ -643,15 +896,18 @@ function getShareInfo() {
 }
 
 module.exports = {
-  init: (services, broadcast) => {
+  init: (services, broadcast, notify) => {
     servicesRef = services;
     broadcastCallback = broadcast;
+    notifyCallback = notify;
     // 默认自启 Web 快传服务
     startServer();
   },
   start: startServer,
   stop: stopServer,
   setChosenIp,
-  getShareInfo
+  getShareInfo,
+  addSharedFiles,
+  addSharedText
 };
 

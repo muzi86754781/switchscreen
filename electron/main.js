@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, shell, globalShortcut, screen, clipboard, powerMonitor } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, shell, globalShortcut, screen, clipboard, powerMonitor, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -1097,12 +1097,14 @@ function registerIpc() {
 
   // 删除一条传输记录（正在传的会先取消）
   ipcMain.handle('files:remove', (_e, id) => {
+    if (services.removeWebShareTransfer) services.removeWebShareTransfer(id);
     if (peer) peer.removeTransfer(id);
     return services.getState();
   });
 
   // 清空已结束的记录
   ipcMain.handle('files:clear', () => {
+    if (services.clearWebShareTransfers) services.clearWebShareTransfers();
     if (peer) peer.clearTransfers();
     return services.getState();
   });
@@ -1267,6 +1269,50 @@ function registerIpc() {
     return true;
   });
 
+  ipcMain.handle('web-share:send-files', async (_e, paths) => {
+    let filePaths = paths;
+    if (!filePaths || !filePaths.length) {
+      const res = await dialog.showOpenDialog(win, {
+        title: '选择要发送到手机的文件',
+        properties: ['openFile', 'multiSelections']
+      });
+      if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+      filePaths = res.filePaths;
+    }
+    const added = webShare.addSharedFiles(filePaths);
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('toast', `已共享 ${added.length} 个文件给手机，手机扫码即可下载`);
+    }
+    broadcastState();
+    return { ok: true, count: added.length };
+  });
+
+  ipcMain.handle('web-share:send-text', async (_e, text) => {
+    const clean = String(text || '').trim();
+    if (!clean) return { ok: false };
+    webShare.addSharedText(clean);
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('toast', '已将文字共享给手机，手机网页端已同步展示');
+    }
+    broadcastState();
+    return { ok: true };
+  });
+
+  ipcMain.handle('web-share:send-clipboard', async () => {
+    let text = '';
+    try { text = clipboard.readText(); } catch {}
+    if (!text || !text.trim()) {
+      if (win && !win.isDestroyed()) win.webContents.send('toast', '当前电脑剪贴板中没有文字内容');
+      return { ok: false, reason: 'empty' };
+    }
+    webShare.addSharedText(text.trim());
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('toast', '已将电脑剪贴板文字共享给手机！');
+    }
+    broadcastState();
+    return { ok: true };
+  });
+
   ipcMain.handle('window:minimize', () => win && win.minimize());
   ipcMain.handle('window:close', () => win && win.hide());
 }
@@ -1297,9 +1343,20 @@ app.whenReady().then(() => {
     try { app.dock.hide(); } catch { /* ignore */ }
   }
   services.ensureDefaults();
+  function notifyIncoming(title, body) {
+    try {
+      if (Notification && typeof Notification.isSupported === 'function' && Notification.isSupported()) {
+        new Notification({ title, body }).show();
+      }
+    } catch {}
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('toast', `${title}: ${body}`);
+    }
+  }
+
   try {
     services.setWebShareGetter(() => webShare.getShareInfo());
-    webShare.init(services, () => broadcastState());
+    webShare.init(services, () => broadcastState(), notifyIncoming);
   } catch (e) {
     logger.warn('WEB-SHARE', `Init web-share error: ${e.message}`);
   }
