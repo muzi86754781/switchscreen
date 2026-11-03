@@ -40,7 +40,11 @@ function winErrText(code) {
   if (c === 6) return '显示器句柄已失效（切换过程中系统重排了显示拓扑）';
   if (c === 87) return '接口参数不被显示器接受';
   if (c === 1168) return '找不到这块显示器';
-  return `设置失败${c ? `，错误码 ${c}` : ''}`;
+  const hex = (c >>> 0).toString(16).toUpperCase();
+  if (hex === 'C0262588' || hex === 'C0262589' || hex === 'C0262582') {
+    return 'DDC 通信无响应（该端口非活动或显示器已关闭该接口通信）';
+  }
+  return `设置失败${c ? `，错误码 ${c} (0x${hex})` : ''}`;
 }
 
 function run(cmd, args, timeout = 20000) {
@@ -126,7 +130,7 @@ async function winApply(planStr) {
     const t = line.trim();
     const c = t.match(/^COUNT=(\d+)$/);
     if (c) { count = Number(c[1]); continue; }
-    const m = t.match(/^MON=(\d+)\|(True|False|SKIP|GONE)\|(\d+)$/i);
+    const m = t.match(/^MON=(\d+)\|(True|False|SKIP|GONE)\|(-?\d+)$/i);
     if (!m) continue;
     const verdict = m[2].toUpperCase();
     if (verdict === 'SKIP') continue;
@@ -161,7 +165,7 @@ async function winWake(index, hexValue) {
   const r = await run('powershell.exe', psArgs(script, args));
   const results = [];
   for (const line of r.out.split(/\r?\n/)) {
-    const m = line.trim().match(/^MON=(\d+)\|(True|False)\|(\d+)$/i);
+    const m = line.trim().match(/^MON=(\d+)\|(True|False)\|(-?\d+)$/i);
     if (!m) continue;
     const ok = m[2].toUpperCase() === 'TRUE';
     results.push({ index: Number(m[1]), ok, via: 'dxva2', error: ok ? '' : winErrText(m[3]) });

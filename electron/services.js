@@ -522,10 +522,52 @@ function migratePortKeys() {
 }
 
 function portFor(monitorId, deviceId) {
-  const t = (cfg.ui.portMap && cfg.ui.portMap[portKeyOf(monitorId)]) || {};
-  // 只认「这块屏上这台设备」自己的配置。曾经退回全局 localInput / remoteInput，
-  // 结果没配过的屏也显示 HDMI1/HDMI2 —— 界面上看着配好了、实际一直切错、判归属也全错。
-  return Object.prototype.hasOwnProperty.call(t, deviceId) ? normInput(t[deviceId]) : '';
+  if (!monitorId || !deviceId) return '';
+  const m = findMonitor(monitorId);
+  const primaryKey = m ? portKey(m) : portKeyOf(monitorId);
+
+  // 1. 优先查候选 key 集合
+  const candidateKeys = [];
+  if (primaryKey) candidateKeys.push(primaryKey);
+
+  const alias = (cfg.ui && cfg.ui.portAlias && (cfg.ui.portAlias[primaryKey] || cfg.ui.portAlias[String(primaryKey).toLowerCase()])) || '';
+  if (alias && !candidateKeys.includes(alias)) candidateKeys.push(alias);
+
+  const monName = (m && m.name) || (cfg.ui && cfg.ui.screenMemo && cfg.ui.screenMemo[primaryKey] && cfg.ui.screenMemo[primaryKey].name) || '';
+  if (monName) {
+    const nmKey = 'nm:' + normName(monName);
+    if (!candidateKeys.includes(nmKey)) candidateKeys.push(nmKey);
+  }
+
+  const monSerial = (m && m.serial) || (cfg.ui && cfg.ui.screenMemo && cfg.ui.screenMemo[primaryKey] && cfg.ui.screenMemo[primaryKey].serial) || '';
+  if (monSerial && monSerial.length > 2) {
+    const snKey = 'sn:' + String(monSerial).toLowerCase();
+    if (!candidateKeys.includes(snKey)) candidateKeys.push(snKey);
+  }
+
+  if (cfg.ui && cfg.ui.portMap) {
+    for (const k of candidateKeys) {
+      const t = cfg.ui.portMap[k];
+      if (t && Object.prototype.hasOwnProperty.call(t, deviceId)) {
+        const v = normInput(t[deviceId]);
+        if (v) return v;
+      }
+    }
+
+    // 2. 跨平台模糊认领（例如 Windows 存的是 sn:gn64v6cg08tl，而 macOS 只能读到 nm:dellu2414h）
+    if (monName) {
+      for (const [pk, t] of Object.entries(cfg.ui.portMap)) {
+        if (!t || !Object.prototype.hasOwnProperty.call(t, deviceId)) continue;
+        const v = normInput(t[deviceId]);
+        if (!v) continue;
+        if (pk.startsWith('nm:') && modelNameHit(pk.slice(3), monName)) return v;
+        const memo = cfg.ui.screenMemo && cfg.ui.screenMemo[pk];
+        if (memo && memo.name && modelNameHit(memo.name, monName)) return v;
+      }
+    }
+  }
+
+  return '';
 }
 
 /**
@@ -570,6 +612,7 @@ function setPort(monitorId, deviceId, value) {
   if (!monitorId || !deviceId) return false;
   if (!cfg.ui.portMap) cfg.ui.portMap = {};
   if (!cfg.ui.ownerMap) cfg.ui.ownerMap = {};
+  const m = findMonitor(monitorId);
   const key = portKeyOf(monitorId);
   const t = cfg.ui.portMap[key] || {};
   const v = normInput(value);
@@ -584,8 +627,22 @@ function setPort(monitorId, deviceId, value) {
   t[deviceId] = v;
   markPortSrc(monitorId, deviceId, 'manual');
   cfg.ui.portMap[key] = t;
+
+  // 跨平台同步写入：若能获取型号名或序列号，同步写入一份 nm: 和 sn:，保证 Windows 和 macOS 两端一致识别
+  const monName = (m && m.name) || (cfg.ui.screenMemo && cfg.ui.screenMemo[key] && cfg.ui.screenMemo[key].name) || '';
+  if (monName) {
+    const nmKey = 'nm:' + normName(monName);
+    if (!cfg.ui.portMap[nmKey]) cfg.ui.portMap[nmKey] = {};
+    cfg.ui.portMap[nmKey][deviceId] = v;
+  }
+  const monSerial = (m && m.serial) || (cfg.ui.screenMemo && cfg.ui.screenMemo[key] && cfg.ui.screenMemo[key].serial) || '';
+  if (monSerial && monSerial.length > 2) {
+    const snKey = 'sn:' + String(monSerial).toLowerCase();
+    if (!cfg.ui.portMap[snKey]) cfg.ui.portMap[snKey] = {};
+    cfg.ui.portMap[snKey][deviceId] = v;
+  }
+
   // 手配完顺手校准归属：如果这块屏此刻的输入源正好就是这个口，那现在就是这台在用
-  const m = monitorsCache.find((x) => x.id === monitorId);
   if (v && m && sameInput(m.currentInput, v)) cfg.ui.ownerMap[key] = deviceId;
   // 本机 / 首个对端的值同步到全局默认，仅用于「新显示器」的初始提示，不再覆盖每块屏
   if (v) {
@@ -609,9 +666,11 @@ function setPort(monitorId, deviceId, value) {
  */
 function exportPorts() {
   const out = [];
+  const handledKeys = new Set();
   for (const m of monitorsCache) {
     if (m.internal) continue;
     const key = portKey(m);
+    handledKeys.add(key);
     const t = (cfg.ui.portMap && cfg.ui.portMap[key]) || {};
     const ports = {};
     const src = {};
@@ -623,6 +682,30 @@ function exportPorts() {
       if (s) src[k] = s; // 对端手配过的（manual）同步过去后也要当手配，不许被自动清理
     }
     if (Object.keys(ports).length) out.push({ name: m.name, serial: m.serial || '', ports, src });
+  }
+
+  // 补充在 screenMemo 里的离线显示器（正切在对端那台机器上的显示器）
+  if (cfg.ui && cfg.ui.portMap) {
+    for (const [k, t] of Object.entries(cfg.ui.portMap)) {
+      if (!t || handledKeys.has(k)) continue;
+      const memo = cfg.ui.screenMemo && cfg.ui.screenMemo[k];
+      const name = (memo && memo.name) || (k.startsWith('nm:') ? k.slice(3) : '');
+      const serial = (memo && memo.serial) || (k.startsWith('sn:') ? k.slice(3) : '');
+      if (!name && !serial) continue;
+      const ports = {};
+      const src = {};
+      for (const dev of Object.keys(t)) {
+        const v = normInput(t[dev]);
+        if (!v) continue;
+        ports[dev] = v;
+        const s = portSrcOf(k, dev);
+        if (s) src[dev] = s;
+      }
+      if (Object.keys(ports).length) {
+        out.push({ name: name || ('Monitor ' + serial), serial, ports, src });
+        handledKeys.add(k);
+      }
+    }
   }
   return out;
 }
@@ -647,11 +730,10 @@ function importPorts(list) {
       const idx = extList.indexOf(it);
       if (idx >= 0 && extMonitors[idx]) m = extMonitors[idx];
     }
-    if (!m) continue;
     if (!cfg.ui.portMap) cfg.ui.portMap = {};
-    const mk = portKey(m);
+    const mk = m ? portKey(m) : (it.serial ? ('sn:' + String(it.serial).toLowerCase()) : ('nm:' + key));
     const t = cfg.ui.portMap[mk] || {};
-    const live = normInput(m.currentInput);
+    const live = m ? normInput(m.currentInput) : '';
     const rsrc = (it.src && typeof it.src === 'object') ? it.src : {};
     for (const dev of Object.keys(it.ports)) {
       const v = normInput(it.ports[dev]);
@@ -677,6 +759,13 @@ function importPorts(list) {
       n += 1;
     }
     cfg.ui.portMap[mk] = t;
+
+    // 建立 alias 与 nm 键映射
+    if (it.serial && key) {
+      if (!cfg.ui.portAlias) cfg.ui.portAlias = {};
+      cfg.ui.portAlias['sn:' + String(it.serial).toLowerCase()] = 'nm:' + key;
+      cfg.ui.portAlias['nm:' + key] = 'sn:' + String(it.serial).toLowerCase();
+    }
   }
 
   // 对端发来的是它那边的**全量**配置：本机「从对端同步来」的条目若已不在里面，
@@ -1700,6 +1789,49 @@ function buildSwitchPlan(targetId) {
   };
 }
 
+/**
+ * 协同切换兜底：当收到对端 switch-target 消息时，若本机计算出的 plan 未覆盖某块屏，
+ * 利用对端随附的 monitors 列表匹配本机屏并补全切换计划
+ */
+function onSwitchTargetFallback(targetId, peerMonitors, peerPlan) {
+  if (!targetId) return null;
+  const map = {};
+  let label = '';
+  const list = Array.isArray(peerMonitors) ? peerMonitors : [];
+
+  for (const m of monitorsCache) {
+    if (m.internal || typeof m.index !== 'number' || m.isOffline) continue;
+    let val = portFor(m.id || m.key, targetId);
+    if (!val && list.length) {
+      const pm = list.find((p) => p && (modelNameHit(p.name, m.name) || (normName(p.name) && normName(p.name) === normName(m.name))));
+      if (pm && pm.value) {
+        val = normInput(pm.value);
+        if (val) setPort(m.id || m.key, targetId, val);
+      }
+    }
+    if (!val && typeof peerPlan === 'string' && normInput(peerPlan)) {
+      val = normInput(peerPlan);
+    }
+    if (!val) continue;
+
+    const cur = trustedInput(m);
+    if (cur && sameInput(cur, val) && ownerOf(m) === targetId) continue;
+    const recent = recentSwitchLock.get(portKey(m));
+    if (recent && recent.target === targetId && Date.now() - recent.at < 4500) continue;
+
+    if (!label) label = labelForInput(val);
+    map[m.index] = val;
+  }
+
+  const count = Object.keys(map).length;
+  if (!count) return null;
+  return {
+    ok: true,
+    plan: count === 1 ? Object.values(map)[0] : map,
+    label
+  };
+}
+
 /** 单块屏切到某台设备的执行计划 */
 function monitorSwitchPlan(monitorId, targetId) {
   const m = findMonitor(monitorId);
@@ -2662,19 +2794,22 @@ async function onRemoteSwitchMonitor({ name, target, key, port }) {
   logger.info('PEER', `onRemoteSwitchMonitor matched: name="${m.name}", index=${m.index}, isOffline=${m.isOffline}`);
   if (typeof m.index === 'number' && !m.isOffline) {
     const p = monitorSwitchPlan(m.id || m.key, target);
-    if (p && p.ok && !p.already) {
-      logger.info('PEER', `onRemoteSwitchMonitor: executing onSwitchRequest locally on behalf of remote, input=${p.value}`);
+    const targetPort = (p && p.ok) ? p.value : (normInput(port) || '');
+    const targetLabel = (p && p.ok) ? p.label : (labelForInput(targetPort) || '');
+    if (targetPort && (!p || !p.already)) {
+      logger.info('PEER', `onRemoteSwitchMonitor: executing onSwitchRequest locally on behalf of remote, input=${targetPort}`);
+      setPort(m.id || m.key, target, targetPort);
       await onSwitchRequest({
-        input: p.value,
-        label: p.label,
-        index: p.index,
+        input: targetPort,
+        label: targetLabel,
+        index: m.index,
         target,
         from: deviceInfo(target).name
       });
     } else if (p && p.already) {
       logger.info('PEER', `onRemoteSwitchMonitor: monitor "${m.name}" is already showing ${target}`);
-    } else if (p && !p.ok) {
-      logger.warn('PEER', `onRemoteSwitchMonitor plan failed: ${p.error}`);
+    } else if (!targetPort) {
+      logger.warn('PEER', `onRemoteSwitchMonitor plan failed: no port configured and remote didn't provide port`);
     }
   } else {
     logger.info('PEER', `onRemoteSwitchMonitor: monitor "${m.name}" not active locally, skipping local DDC`);
@@ -2852,6 +2987,7 @@ module.exports = {
   primaryDevice,
   setSelfAwake,
   buildSwitchPlan,
+  onSwitchTargetFallback,
   monitorSwitchPlan,
   monitorCyclePlan,
   probePort,

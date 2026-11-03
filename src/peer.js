@@ -225,7 +225,13 @@ function createPeer(userConfig, hooks) {
       // 关键双向保障：现实中很多显示器（如 DELL U2414H）在非活动端口（如当前处于 HDMI1，Mac 接在 HDMI2）时，
       // 会关闭或屏蔽非活动接口的 DDC/CI 通信，导致从非活动端发送的 DDC 命令无效；
       // 必须由当前正点亮该屏的对端机器（活动信号源）协同下发切换命令，两端同时下发，100% 确保全部显示器切到位。
-      sendToAny({ type: 'switch-target', target });
+      sendToAny({
+        type: 'switch-target',
+        target,
+        monitors: plan ? (plan.monitors || []) : [],
+        plan: plan ? plan.plan : null,
+        label
+      });
 
       // 本机直接切自己接线能碰到的每一块屏（DDC 走视频线，与当前画面在哪台无关）
       if (hadPlan && typeof h.onSwitchRequest === 'function') {
@@ -516,8 +522,23 @@ function createPeer(userConfig, hooks) {
       autoLockUntil = Date.now() + 1500;
       let p = null;
       try { p = typeof h.getSwitchPlan === 'function' ? h.getSwitchPlan(t) : null; } catch { /* ignore */ }
-      if (p && p.plan && typeof h.onSwitchRequest === 'function') {
-        Promise.resolve(h.onSwitchRequest({ target: t, input: p.plan, label: p.label || '' }))
+      let inputPlan = (p && p.plan) ? p.plan : null;
+      let inputLabel = (p && p.label) ? p.label : (msg.label || '');
+
+      // 如果本机计算出的 plan 为空或未覆盖对端声明的显示器：
+      // 利用对端随附的 msg.monitors / msg.plan 触发服务层补全
+      if (typeof h.onSwitchTargetFallback === 'function') {
+        try {
+          const fallback = h.onSwitchTargetFallback(t, msg.monitors, msg.plan);
+          if (fallback && fallback.plan) {
+            inputPlan = fallback.plan;
+            if (fallback.label) inputLabel = fallback.label;
+          }
+        } catch { /* ignore */ }
+      }
+
+      if (inputPlan && typeof h.onSwitchRequest === 'function') {
+        Promise.resolve(h.onSwitchRequest({ target: t, input: inputPlan, label: inputLabel }))
           .catch(() => {});
       }
     }

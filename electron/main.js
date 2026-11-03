@@ -1620,6 +1620,7 @@ app.whenReady().then(() => {
       onSwitch: (info) => { services.onSwitch(info); broadcastState(); },
       // 每块屏的接口由服务层算，peer 只负责执行与状态同步
       getSwitchPlan: (target) => services.buildSwitchPlan(target),
+      onSwitchTargetFallback: (target, monitors, plan) => services.onSwitchTargetFallback(target, monitors, plan),
       // 显示器元数据（内建屏与排列）同步给对端
       getDisplaysMeta: () => services.exportDisplaysMeta(),
       // 接口配置两端共享：在任一台配好，另一台也能直接按这个值切
