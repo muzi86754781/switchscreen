@@ -3,6 +3,7 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, shell, globalShortcut, screen, clipboard, powerMonitor, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 const services = require('./services');
 const webShare = require('./web-share');
@@ -32,16 +33,39 @@ if (!gotTheLock) {
 }
 
 // 登录时开机自启检测：静默启动至系统托盘，不弹出主界面，macOS 退出程序坞
-let isSilentLaunch = process.argv.includes('--hidden') ||
-                     process.argv.includes('--minimized');
-try {
-  if (app.getLoginItemSettings) {
-    const loginItem = app.getLoginItemSettings();
-    if (loginItem.wasOpenedAsHidden || loginItem.wasOpenedAtLogin) {
-      isSilentLaunch = true;
-    }
+function checkSilentLaunch() {
+  if (process.argv.includes('--hidden') || process.argv.includes('--minimized')) {
+    return true;
   }
-} catch { /* ignore */ }
+  try {
+    if (typeof app.getLoginItemSettings === 'function') {
+      const loginItem = app.getLoginItemSettings();
+      if (loginItem && (loginItem.wasOpenedAtLogin || loginItem.wasOpenedAsHidden || loginItem.restoreState)) {
+        return true;
+      }
+    }
+  } catch { /* ignore */ }
+
+  // macOS 专属保底检测：
+  // 在现代 macOS (Ventura 13+, Sonoma 14+, Sequoia 15+) 中，Apple 推行 SMAppService，
+  // 废弃了 openAsHidden，且在部分版本下 wasOpenedAtLogin 无法稳定透传。
+  // 若用户在软件中开启了「登录时启动」（services.cfg.ui.launchAtLogin === true），
+  // 且系统开机运行时间小于 300 秒（5 分钟内），可可靠判定为开机/登录自启动。
+  if (IS_MAC) {
+    try {
+      const launchAtLoginCfg = !!(services.cfg && services.cfg.ui && services.cfg.ui.launchAtLogin);
+      if (launchAtLoginCfg && typeof os.uptime === 'function' && os.uptime() < 300) {
+        return true;
+      }
+    } catch { /* ignore */ }
+  }
+
+  return false;
+}
+
+let isSilentLaunch = checkSilentLaunch();
+let startupFinished = false;
+setTimeout(() => { startupFinished = true; }, 4000);
 
 // macOS 开机静默启动时：在最顶层立即隐藏 Dock 图标，杜绝 Dock 栏弹跳与图标闪现
 if (isSilentLaunch && IS_MAC && app.dock && app.dock.hide) {
@@ -84,6 +108,9 @@ function createWindow() {
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.once('ready-to-show', () => {
+    if (!isSilentLaunch && checkSilentLaunch()) {
+      isSilentLaunch = true;
+    }
     if (!isSilentLaunch) {
       if (IS_MAC && app.dock && app.dock.show) {
         try { app.dock.show(); } catch { /* ignore */ }
@@ -141,6 +168,7 @@ function createWindow() {
 }
 
 function showWindow() {
+  isSilentLaunch = false;
   if (IS_MAC && app.dock && app.dock.show) {
     try { app.dock.show(); } catch { /* ignore */ }
   }
@@ -1525,6 +1553,9 @@ function checkNativeModules() {
 }
 
 app.whenReady().then(() => {
+  if (!isSilentLaunch && checkSilentLaunch()) {
+    isSilentLaunch = true;
+  }
   if (isSilentLaunch && IS_MAC && app.dock && app.dock.hide) {
     try { app.dock.hide(); } catch { /* ignore */ }
   }
@@ -1691,7 +1722,13 @@ app.whenReady().then(() => {
   broadcastState();
 });
 
-app.on('activate', () => showWindow());
+app.on('activate', () => {
+  // macOS 开机自启阶段系统会自动派发 activate 事件，静默启动期间忽略该事件，避免弹出主窗口
+  if (isSilentLaunch && !startupFinished) {
+    return;
+  }
+  showWindow();
+});
 app.on('window-all-closed', () => { /* 常驻托盘 */ });
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
