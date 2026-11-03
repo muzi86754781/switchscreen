@@ -1725,6 +1725,7 @@ function refreshScreenLayout() {
 /** 所有参与切换的屏用的是同一个接口时，压成单个值：执行端就能「所有屏一起切」 */
 function unifyInput(map, involved) {
   const vals = Object.values(map);
+  if (vals.length === 1) return vals[0];
   if (involved > 1 && vals.length === involved && new Set(vals).size === 1) return vals[0];
   return map;
 }
@@ -2158,6 +2159,7 @@ async function doDetectMonitors() {
           return {
             id: `ddc:${d.index}`,
             index: d.index,
+            uuid: d.uuid || '',
             name: bestName,
             serial: (f && f.serial) || d.serial || '',
             size: (f && f.size) || '',

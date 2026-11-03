@@ -538,7 +538,7 @@ function createPeer(userConfig, hooks) {
       }
 
       if (inputPlan && typeof h.onSwitchRequest === 'function') {
-        Promise.resolve(h.onSwitchRequest({ target: t, input: inputPlan, label: inputLabel }))
+        Promise.resolve(h.onSwitchRequest({ target: t, input: inputPlan, label: inputLabel, from: name }))
           .catch(() => {});
       }
     }
