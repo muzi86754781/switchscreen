@@ -538,8 +538,10 @@ function createPeer(userConfig, hooks) {
           if (fallback && fallback.plan) {
             if (!inputPlan) {
               inputPlan = fallback.plan;
-            } else if (typeof inputPlan === 'object' && typeof fallback.plan === 'object') {
+            } else if (typeof fallback.plan === 'object' && typeof inputPlan === 'object') {
               inputPlan = Object.assign({}, fallback.plan, inputPlan);
+            } else if (typeof fallback.plan === 'object') {
+              inputPlan = fallback.plan;
             }
             if (fallback.label && !inputLabel) inputLabel = fallback.label;
           }

@@ -665,7 +665,7 @@ function confirmSwitchHint(delay, opts) {
     }).catch((e) => {
       logger.warn('MAIN', `confirmSwitchHint detectMonitors error: ${e.message}`);
     });
-  }, typeof delay === 'number' ? delay : 1800);
+  }, typeof delay === 'number' ? delay : 2800);
 }
 
 async function doSwitchAll(explicitTarget) {
@@ -681,10 +681,9 @@ async function doSwitchAll(explicitTarget) {
   logger.info('SWITCH', `doSwitchAll start: target=${target} (${name})`);
   const plan0 = services.buildSwitchPlan(target);
   const missing = (plan0.missing || []).slice();
-  // 所有屏都已经在这台设备上了：一次 DDC 都不写 ——
-  // 写一次显示器就要重新同步信号（黑屏 1~3 秒），没必要让本来就对的屏再黑一遍
-  if (!plan0.ok && !missing.length && plan0.already > 0) {
-    logger.info('SWITCH', `doSwitchAll: all monitors already showing ${name}`);
+  // 仅当所有显示器 100% 确认都已显示在目标设备上，且没有任何一块屏需要切换时，才静默跳过
+  if (!plan0.ok && !missing.length && plan0.already > 0 && plan0.already >= plan0.total) {
+    logger.info('SWITCH', `doSwitchAll: all monitors (${plan0.already}/${plan0.total}) already showing ${name}`);
     services.pushStatus(`所有显示器都已经在显示 ${name} 了`, 'ok');
     broadcastState();
     return { ok: true, result: 'kept', target };
@@ -702,7 +701,7 @@ async function doSwitchAll(explicitTarget) {
   } finally {
     switching = false;
   }
-  if (result === 'sent' || result === 'relayed') { onSwitchDone(); confirmSwitchHint(1800, { publish: true }); }
+  if (result === 'sent' || result === 'relayed') { onSwitchDone(); confirmSwitchHint(2800, { publish: true }); }
   broadcastState();
   // 有屏还没配目标电脑的接口：切完顺手认一次口（会闪几下屏，认到就永久记住，
   // 以后再切就是一次到位；认不出来也不影响，手动点接口配一次即可）

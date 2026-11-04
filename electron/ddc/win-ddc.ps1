@@ -281,7 +281,6 @@ public class SsDdc
             mouse_event(0x0001, 0, 1, 0, UIntPtr.Zero);
             mouse_event(0x0001, 0, unchecked((uint)-1), 0, UIntPtr.Zero);
             SetThreadExecutionState(0x80000000 | 0x00000002 | 0x00000001);
-            ChangeDisplaySettingsEx(null, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero);
         }
         catch {}
 
@@ -376,7 +375,6 @@ public class SsDdc
             mouse_event(0x0001, 0, 1, 0, UIntPtr.Zero);
             mouse_event(0x0001, 0, unchecked((uint)-1), 0, UIntPtr.Zero);
             SetThreadExecutionState(0x80000000 | 0x00000002 | 0x00000001);
-            ChangeDisplaySettingsEx(null, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero);
         }
         catch {}
 

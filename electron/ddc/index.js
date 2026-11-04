@@ -421,47 +421,35 @@ async function macSet(index, hexValue, uuid, name) {
     return { ok: false, via: 'none', error: '未找到 m1ddc/ddcctl/BetterDisplay' };
   }
   const base = path.basename(tool);
-  // ddcctl 的 -i 只接受 1-18 的十进制值，传 0x11 会被判为参数错误（打印 Usage）
   const decimal = String(parseInt(hexValue, 16));
-  if (logger) logger.info('DDC', `macSet: index=${index}, uuid=${uuid || ''}, hex=${hexValue} (${decimal}), tool=${base}`);
+  const idx = typeof index === 'number' ? index : 1;
+  if (logger) logger.info('DDC', `macSet: index=${idx}, hex=${hexValue} (${decimal}), tool=${base}`);
 
   // 切换前确保唤醒显示器供电
   try { await run('/usr/bin/caffeinate', ['-u', '-t', '2'], 2000); } catch {}
 
   if (base === 'm1ddc') {
-    // 切换前唤醒显示器（VCP 0xD6 = 1）
+    // 1) 切换前唤醒显示器（实测 display <n> set power 1 100% 可靠，严禁使用非标准 uuid 引起超时阻塞总线）
     try {
-      if (uuid) await run(tool, ['display', uuid, 'set', '0xd6', '1'], 1500);
-      else await run(tool, ['display', String(index), 'set', '0xd6', '1'], 1500);
+      await run(tool, ['display', String(idx), 'set', 'power', '1'], 3000);
     } catch {}
 
-    // 1) 优先尝试按 UUID 切换（最精确，抗序号抖动）
-    if (uuid) {
-      const rUuid = await run(tool, ['display', uuid, 'set', 'input', decimal]);
-      if (rUuid.ok) {
-        if (logger) logger.info('DDC', `macSet success via UUID: uuid=${uuid}`);
-        return { ok: true, via: base };
-      }
-      const rUuidAlt = await run(tool, ['display', uuid, 'set', 'input-alt', decimal]);
-      if (rUuidAlt.ok) {
-        if (logger) logger.info('DDC', `macSet success via UUID (input-alt): uuid=${uuid}`);
-        return { ok: true, via: base };
-      }
-    }
-    // 2) 尝试按序号切换
-    const rIdx = await run(tool, ['display', String(index), 'set', 'input', decimal]);
+    // 2) 优先按物理序号切换输入源
+    const rIdx = await run(tool, ['display', String(idx), 'set', 'input', decimal], 4000);
     if (rIdx.ok) {
-      if (logger) logger.info('DDC', `macSet success: index=${index}`);
+      if (logger) logger.info('DDC', `macSet success: index=${idx}`);
       return { ok: true, via: base };
     }
+
     // 3) 尝试 input-alt（部分 LG/DELL 固件版本使用 input-alt）
-    const rAlt = await run(tool, ['display', String(index), 'set', 'input-alt', decimal]);
+    const rAlt = await run(tool, ['display', String(idx), 'set', 'input-alt', decimal], 4000);
     if (rAlt.ok) {
-      if (logger) logger.info('DDC', `macSet success via input-alt: index=${index}`);
+      if (logger) logger.info('DDC', `macSet success via input-alt: index=${idx}`);
       return { ok: true, via: base };
     }
+
     // 4) 若失败，尝试不带 display 前缀切（默认当前外接屏）
-    const rDef = await run(tool, ['set', 'input', decimal]);
+    const rDef = await run(tool, ['set', 'input', decimal], 4000);
     if (rDef.ok) {
       if (logger) logger.info('DDC', `macSet success via default display`);
       return { ok: true, via: base };
@@ -474,11 +462,12 @@ async function macSet(index, hexValue, uuid, name) {
     if (rLu.ok) return rLu;
 
     const err = (rIdx.err || rIdx.out || rDef.err || rDef.out || '切换失败').trim().slice(0, 200);
-    if (logger) logger.warn('DDC', `macSet error: index=${index}, err=${err}`);
+    if (logger) logger.warn('DDC', `macSet error: index=${idx}, err=${err}`);
     return { ok: false, via: base, error: err };
   } else {
     // ddcctl
-    const r = await run(tool, ['-d', String(index), '-i', decimal]);
+    try { await run(tool, ['-d', String(idx), '-p', '1'], 3000); } catch {}
+    const r = await run(tool, ['-d', String(idx), '-i', decimal], 4000);
     const blob = `${r.out}\n${r.err}`;
     if (/Usage:\s*ddcctl/i.test(blob)) {
       const err = `ddcctl 参数被拒绝（输入源必须是 1-18 的十进制，当前值 ${hexValue} → ${decimal}）`;
@@ -490,7 +479,7 @@ async function macSet(index, hexValue, uuid, name) {
       };
     }
     if (r.ok) {
-      if (logger) logger.info('DDC', `macSet success: index=${index}, tool=${base}`);
+      if (logger) logger.info('DDC', `macSet success: index=${idx}, tool=${base}`);
       return { ok: true, via: base };
     }
 
@@ -501,7 +490,7 @@ async function macSet(index, hexValue, uuid, name) {
     if (rLu.ok) return rLu;
 
     const err = (r.err || r.out || '切换失败').trim().slice(0, 200);
-    if (logger) logger.warn('DDC', `macSet error: index=${index}, err=${err}`);
+    if (logger) logger.warn('DDC', `macSet error: index=${idx}, err=${err}`);
     return { ok: false, via: base, error: err };
   }
 }
@@ -677,29 +666,27 @@ async function setInputAll(target, opts) {
     if (IS_MAC && /built-?in|内建|color lcd/i.test(d.name || '')) continue;
     let v = '';
     if (isMap) {
-      // 1. 优先按显示器型号名字精准匹配 target 中的值（避免跨平台时数字 index 错配，如 Win 从 0 编号、Mac 从 1 编号）
-      if (o.names) {
-        for (const [k, name] of Object.entries(o.names)) {
-          if (sameName(name, d.name) && (target[k] !== undefined || target[`ddc:${k}`] !== undefined)) {
-            v = target[k] || target[`ddc:${k}`];
-            break;
-          }
+      // 1. 若 target 直接包含显示器名字/型号/key/ID，优先采用（跨平台最准）
+      for (const [k, val] of Object.entries(target)) {
+        if (typeof k === 'string' && (sameName(k, d.name) || (d.serial && k.includes(d.serial)))) {
+          v = val;
+          break;
         }
       }
-      // 2. 尝试 target key 直接是显示器名称/UUID
-      if (!v) {
-        for (const [k, val] of Object.entries(target)) {
-          if (typeof k === 'string' && (sameName(k, d.name) || (d.uuid && k.includes(d.uuid)))) {
-            v = val;
-            break;
-          }
-        }
+      // 2. 若附带了 monitors 协同清单（带有 name 和 value），按型号名精准匹配
+      if (!v && Array.isArray(o.monitors)) {
+        const pm = o.monitors.find((m) => m && (sameName(m.name, d.name) || (m.key && d.serial && m.key.includes(d.serial))));
+        if (pm && pm.value) v = pm.value;
       }
-      // 3. 兜底尝试本地物理序号匹配
+      // 3. 本地接口映射表中如果提供了 portGetter
+      if (!v && typeof o.portGetter === 'function') {
+        v = o.portGetter(d);
+      }
+      // 4. 尝试本地物理序号匹配（同机下发时 target 键就是 d.index）
       if (!v && (target[d.index] !== undefined || target[`ddc:${d.index}`] !== undefined)) {
         v = target[d.index] || target[`ddc:${d.index}`];
       }
-      // 4. 若 target map 只有一个值，则所有外接屏统一采纳
+      // 5. 若 target map 只有一个值，则所有外接屏统一采纳
       if (!v) {
         const vals = Object.values(target);
         if (vals.length === 1) v = vals[0];

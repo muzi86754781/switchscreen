@@ -1829,7 +1829,7 @@ function unifyInput(map, involved) {
  */
 function buildSwitchPlan(targetId) {
   if (!targetId) {
-    return { ok: false, total: 0, skipped: 0, unreachable: 0, plan: null, monitors: [], label: '' };
+    return { ok: false, total: 0, skipped: 0, unreachable: 0, plan: null, monitors: [], label: '', missing: [] };
   }
   const map = {};
   const monitors = [];
@@ -1837,40 +1837,58 @@ function buildSwitchPlan(targetId) {
   let total = 0;
   let skipped = 0;
   let already = 0;
-  let unreachable = 0;
   let label = '';
 
-  for (const m of monitorsCache) {
-    if (m.internal) continue;
+  // 跨机全局显示器拓扑：包括当前本地活跃外接屏与目前正显示在对端上的外接屏（allMonitors() 包含 offlineRows()）
+  const allExt = allMonitors().filter((m) => !m.internal);
+  for (const m of allExt) {
     total += 1;
-    if (typeof m.index !== 'number') { unreachable += 1; continue; }
-    const value = portFor(m.id, targetId);
-    if (!value) { skipped += 1; missing.push({ id: m.id, name: m.name }); continue; }
-    // 这块屏已经切在目标口上了：别再写一次 —— 每写一次显示器都要重新同步信号
-    // （就是那 1~3 秒黑屏），本来就已经对的屏不该跟着再黑一遍。
-    // 注意：必须是这块屏此刻确实属于目标设备（ownerOf(m) === targetId）才算真正显示中；
-    // 若当前归属还是别的设备（比如在另一台显示中，残存旧读数），绝不能跳过！
-    const cur = trustedInput(m);
-    if (cur && sameInput(cur, value) && ownerOf(m) === targetId) { already += 1; continue; }
-    // 防重复切换抖动：同一块屏若在 4 秒内刚刚切到过该目标设备，绝不再写第二次（避免亮屏后又黑屏再亮屏）
-    const recent = recentSwitchLock.get(portKey(m));
-    if (recent && recent.target === targetId && Date.now() - recent.at < 4500) { already += 1; continue; }
+    const value = portFor(m.key || m.id, targetId);
+    if (!value) {
+      skipped += 1;
+      missing.push({ id: m.id, name: m.name, key: m.key });
+      continue;
+    }
+
+    // 检查这块屏当前是否确实已经属于目标设备且正在显示目标设备
+    const curOwner = m.ownerId || ownerOf(m);
+    if (curOwner === targetId) {
+      already += 1;
+      continue;
+    }
+
     if (!label) label = labelForInput(value);
-    map[m.index] = value;
-    monitors.push({ name: m.name, key: portKey(m), index: m.index, value, label: labelForInput(value) });
+
+    // 匹配本地显示器缓存，判断本机是否可以直接下发 DDC
+    const localHit = monitorsCache.find((x) => !x.internal && (x.id === m.id || (m.key && portKey(x) === m.key) || modelNameHit(x.name, m.name)));
+    const localIdx = localHit && typeof localHit.index === 'number' ? localHit.index : (typeof m.index === 'number' && !m.isOffline ? m.index : null);
+
+    if (typeof localIdx === 'number') {
+      map[localIdx] = value;
+    }
+
+    // 无论本机是否能直达，都加入全局待切显示器列表，确保广播给对端协同下发
+    monitors.push({
+      name: m.name,
+      key: m.key || screenKey(m),
+      index: localIdx,
+      value,
+      label: labelForInput(value),
+      canLocalDdc: typeof localIdx === 'number'
+    });
   }
 
   const count = Object.keys(map).length;
+  // 只要还有任何一块显示器未切到目标电脑（monitors.length > 0），计划即为有效，绝不阻断「全部切到这台」
+  const hasWork = monitors.length > 0;
   return {
-    ok: count > 0,
+    ok: hasWork,
     target: targetId,
     total,
     skipped,
     already,
-    unreachable,
+    unreachable: 0,
     missing,
-    // 每块屏接口相同时压成一个值：执行端「枚举到几块就切几块」，不依赖 index。
-    // 有屏已经切好了的时候必须用 map —— 压成单值会把本来就对的屏也写一遍（白黑一次）
     plan: count ? (already ? map : unifyInput(map, count)) : null,
     monitors,
     label: label || (targetId === cfg.peerName ? cfg.ui.localInputLabel : cfg.ui.remoteInputLabel) || ''
@@ -1917,7 +1935,7 @@ function onSwitchTargetFallback(targetId, peerMonitors, peerPlan) {
   if (!count) return null;
   return {
     ok: true,
-    plan: count === 1 ? Object.values(map)[0] : map,
+    plan: map,
     label
   };
 }
@@ -2401,8 +2419,18 @@ function indexNames() {
  * 2) 全部失败时才用外部命令行工具兜底；
  * 3) 都失败则如实返回原因，供界面提示。
  */
-async function switchMonitorInput(value, label) {
-  const native = await ddc.setInputAll(value, { names: indexNames() });
+async function switchMonitorInput(value, label, targetDeviceId) {
+  const monitorsList = [];
+  for (const m of monitorsCache) {
+    if (typeof m.index === 'number') {
+      monitorsList.push({ name: m.name, key: portKey(m), index: m.index });
+    }
+  }
+  const native = await ddc.setInputAll(value, {
+    names: indexNames(),
+    monitors: monitorsList,
+    portGetter: (d) => targetDeviceId ? portFor(d.key || d.name, targetDeviceId) : ''
+  });
   if (native.ok) {
     ddcError = native.partial ? (native.error || '部分显示器不支持 DDC') : '';
     return {
@@ -2738,8 +2766,6 @@ function onFileUpdate(list) {
  */
 async function onSwitchRequest({ input, label, from, index, target }) {
   logger.info('SWITCH', `onSwitchRequest: index=${index}, input=${JSON.stringify(input)}, label=${label}, target=${target}, from=${from || 'local'}`);
-  // 无论切回本机还是配合对端协同，先清空硬件写入缓存并唤醒视频管道（激活 DPMS、鼠标微动、唤醒显卡像素时钟输出）
-  try { await ddc.wakeDisplay(typeof index === 'number' ? index : -1, typeof input === 'string' ? input : ''); } catch {}
   // 指定了 index = 只切这一台显示器
   if (typeof index === 'number') {
     const value = typeof input === 'string' ? input : Object.values(input || {})[0];
@@ -2771,7 +2797,7 @@ async function onSwitchRequest({ input, label, from, index, target }) {
   }
 
   const name = label || (typeof input === 'string' ? labelForInput(input) : '目标接口');
-  const r = await switchMonitorInput(input, name);
+  const r = await switchMonitorInput(input, name, target);
   const scope = r.total > 1 ? `${r.success}/${r.total} 台显示器` : '显示器';
   if (r.ok) {
     // 亲手切成功 → 把这些屏的归属记下来（读不到当前输入源的屏也能着对色）
