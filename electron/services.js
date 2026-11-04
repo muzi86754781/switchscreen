@@ -1857,6 +1857,13 @@ function buildSwitchPlan(targetId) {
       continue;
     }
 
+    // 防重复切换抖动：同一块屏若在 4.5 秒内刚刚切到过该目标设备，绝不再写第二次（避免亮屏后又黑屏再亮屏）
+    const recent = recentSwitchLock.get(m.key || portKey(m));
+    if (recent && recent.target === targetId && Date.now() - recent.at < 4500) {
+      already += 1;
+      continue;
+    }
+
     if (!label) label = labelForInput(value);
 
     // 匹配本地显示器缓存，判断本机是否可以直接下发 DDC
@@ -1926,6 +1933,8 @@ function onSwitchTargetFallback(targetId, peerMonitors, peerPlan) {
 
     const cur = trustedInput(m);
     if (cur && sameInput(cur, val) && ownerOf(m) === targetId) continue;
+    const recent = recentSwitchLock.get(m.key || portKey(m));
+    if (recent && recent.target === targetId && Date.now() - recent.at < 4500) continue;
 
     if (!label) label = labelForInput(val);
     map[m.index] = val;

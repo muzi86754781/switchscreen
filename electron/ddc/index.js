@@ -248,10 +248,6 @@ async function macTool() {
   }
   const m1 = await which('m1ddc');
   if (m1) return m1;
-  const bd = await which('betterdisplaycli');
-  if (bd) return bd;
-  const lu = await which('lunar');
-  if (lu) return lu;
   return await which('ddcctl');
 }
 
@@ -294,12 +290,8 @@ async function macList() {
     const r = await run(tool, ['display', 'list']);
     if (r.ok) {
       const lines = r.out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-      const rawDisplays = await Promise.all(lines.map(async (line, i) => {
-        const mIdx = line.match(/^\[(\d+)\]/);
-        const dispIdx = mIdx ? Number(mIdx[1]) : (i + 1);
-        const uMatch = line.match(/\(([A-F0-9-]+)\)/i);
-        const uuid = uMatch ? uMatch[1] : '';
-        const hex = await macReadInput(tool, dispIdx);
+      const displays = await Promise.all(lines.map(async (line, i) => {
+        const hex = await macReadInput(tool, i + 1);
         // m1ddc 的输出形如「[1] DELL U2414H (XXXXXXXX)」：序号和括号尾巴都要剥掉，
         // 只留下真实型号名 —— 它是跨机器认屏（稳定键 / 接口同步）的依据
         const name = line
@@ -308,15 +300,12 @@ async function macList() {
           .replace(/\s*\([^)]*\)\s*$/, '')
           .trim();
         return {
-          index: dispIdx,
-          uuid,
-          name: name || `显示器 ${dispIdx}`,
+          index: i + 1,
+          name: name || `显示器 ${i + 1}`,
           currentInput: hex,
           currentInputLabel: hex ? labelOf(hex) : ''
         };
       }));
-      // 过滤内建屏幕（Color LCD），仅保留物理外接屏，确保索引和跨机器型号不被内建屏挤占错位
-      const displays = rawDisplays.filter((d) => !/built-?in|内建|color lcd/i.test(d.name || ''));
       if (displays.length) return { ok: true, via: 'm1ddc', displays };
     }
     return { ok: false, via: 'm1ddc', displays: [], error: r.err || 'm1ddc 未返回显示器列表' };
@@ -329,170 +318,38 @@ async function macList() {
   };
 }
 
-async function macBetterDisplaySet(name, decimal) {
-  const candidates = [
-    '/Applications/BetterDisplay.app/Contents/MacOS/BetterDisplay',
-    toolPath(['betterdisplaycli']),
-    await which('betterdisplaycli'),
-    '/opt/homebrew/bin/betterdisplaycli',
-    '/usr/local/bin/betterdisplaycli'
-  ].filter(Boolean);
-
-  for (const bin of candidates) {
-    if (fs.existsSync(bin)) {
-      if (name) {
-        const r1 = await run(bin, ['set', `-namelike=${name}`, '-vcp=inputSelect', `-value=${decimal}`], 4000);
-        if (r1.ok) {
-          if (logger) logger.info('DDC', `macSet success via BetterDisplay CLI (namelike inputSelect): name=${name}, value=${decimal}`);
-          return { ok: true, via: 'betterdisplay' };
-        }
-        const r2 = await run(bin, ['set', `-namelike=${name}`, '-vcp=0x60', `-value=${decimal}`], 4000);
-        if (r2.ok) {
-          if (logger) logger.info('DDC', `macSet success via BetterDisplay CLI (namelike 0x60): name=${name}, value=${decimal}`);
-          return { ok: true, via: 'betterdisplay' };
-        }
-        const r3 = await run(bin, ['set', `-namelike=${name}`, '-vcp=inputSelect', `-ddc=${decimal}`], 4000);
-        if (r3.ok) {
-          if (logger) logger.info('DDC', `macSet success via BetterDisplay CLI (named ddc fallback): name=${name}, ddc=${decimal}`);
-          return { ok: true, via: 'betterdisplay' };
-        }
-      }
-      const rGenVal = await run(bin, ['set', '-vcp=inputSelect', `-value=${decimal}`], 4000);
-      if (rGenVal.ok) {
-        if (logger) logger.info('DDC', `macSet success via BetterDisplay CLI (generic value): value=${decimal}`);
-        return { ok: true, via: 'betterdisplay' };
-      }
-      const rGen = await run(bin, ['set', '-vcp=inputSelect', `-ddc=${decimal}`], 4000);
-      if (rGen.ok) {
-        if (logger) logger.info('DDC', `macSet success via BetterDisplay CLI (generic ddc fallback): ddc=${decimal}`);
-        return { ok: true, via: 'betterdisplay' };
-      }
-    }
-  }
-  try {
-    const q = name ? `namelike=${encodeURIComponent(name)}&value=${decimal}&vcp=inputSelect` : `value=${decimal}&vcp=inputSelect`;
-    const rHttp = await run('/usr/bin/curl', ['-s', '--max-time', '2', `http://127.0.0.1:55777/set?${q}`], 3000);
-    if (rHttp.ok && !/error|failed/i.test(rHttp.out)) {
-      if (logger) logger.info('DDC', `macSet success via BetterDisplay HTTP: value=${decimal}`);
-      return { ok: true, via: 'betterdisplay-http' };
-    }
-  } catch {}
-  return { ok: false };
-}
-
-async function macLunarSet(name, decimal, hexValue) {
-  const candidates = [
-    toolPath(['lunar']),
-    await which('lunar'),
-    '/Applications/Lunar.app/Contents/MacOS/Lunar',
-    '/opt/homebrew/bin/lunar',
-    '/usr/local/bin/lunar'
-  ].filter(Boolean);
-
-  for (const bin of candidates) {
-    if (fs.existsSync(bin)) {
-      const lbl = labelOf(hexValue);
-      if (lbl) {
-        const r1 = await run(bin, ['set', 'input', lbl], 4000);
-        if (r1.ok) {
-          if (logger) logger.info('DDC', `macSet success via Lunar (label): ${lbl}`);
-          return { ok: true, via: 'lunar' };
-        }
-      }
-      const r2 = await run(bin, ['set', 'input', decimal], 4000);
-      if (r2.ok) {
-        if (logger) logger.info('DDC', `macSet success via Lunar (decimal): ${decimal}`);
-        return { ok: true, via: 'lunar' };
-      }
-    }
-  }
-  return { ok: false };
-}
-
-async function macSet(index, hexValue, uuid, name) {
+async function macSet(index, hexValue) {
   const tool = await macTool();
   if (!tool) {
-    if (logger) logger.warn('DDC', 'macSet failed: m1ddc/ddcctl not found, trying BetterDisplay/Lunar fallback');
-    const decimal = String(parseInt(hexValue, 16));
-    const rBd = await macBetterDisplaySet(name, decimal);
-    if (rBd.ok) return rBd;
-    const rLu = await macLunarSet(name, decimal, hexValue);
-    if (rLu.ok) return rLu;
-    return { ok: false, via: 'none', error: '未找到 m1ddc/ddcctl/BetterDisplay' };
+    if (logger) logger.warn('DDC', 'macSet failed: m1ddc/ddcctl not found');
+    return { ok: false, via: 'none', error: '未找到 m1ddc/ddcctl' };
   }
   const base = path.basename(tool);
+  // ddcctl 的 -i 只接受 1-18 的十进制值，传 0x11 会被判为参数错误（打出 Usage）
   const decimal = String(parseInt(hexValue, 16));
   const idx = typeof index === 'number' ? index : 1;
   if (logger) logger.info('DDC', `macSet: index=${idx}, hex=${hexValue} (${decimal}), tool=${base}`);
+  const r = base === 'm1ddc'
+    ? await run(tool, ['display', String(idx), 'set', 'input', decimal], 5000)
+    : await run(tool, ['-d', String(idx), '-i', decimal], 5000);
 
-  // 切换前确保唤醒显示器供电
-  try { await run('/usr/bin/caffeinate', ['-u', '-t', '2'], 2000); } catch {}
-
-  if (base === 'm1ddc') {
-    // 1) 切换前唤醒显示器（实测 display <n> set power 1 100% 可靠，严禁使用非标准 uuid 引起超时阻塞总线）
-    try {
-      await run(tool, ['display', String(idx), 'set', 'power', '1'], 3000);
-    } catch {}
-
-    // 2) 优先按物理序号切换输入源
-    const rIdx = await run(tool, ['display', String(idx), 'set', 'input', decimal], 4000);
-    if (rIdx.ok) {
-      if (logger) logger.info('DDC', `macSet success: index=${idx}`);
-      return { ok: true, via: base };
-    }
-
-    // 3) 尝试 input-alt（部分 LG/DELL 固件版本使用 input-alt）
-    const rAlt = await run(tool, ['display', String(idx), 'set', 'input-alt', decimal], 4000);
-    if (rAlt.ok) {
-      if (logger) logger.info('DDC', `macSet success via input-alt: index=${idx}`);
-      return { ok: true, via: base };
-    }
-
-    // 4) 若失败，尝试不带 display 前缀切（默认当前外接屏）
-    const rDef = await run(tool, ['set', 'input', decimal], 4000);
-    if (rDef.ok) {
-      if (logger) logger.info('DDC', `macSet success via default display`);
-      return { ok: true, via: base };
-    }
-
-    // 5) 尝试外部工具 (BetterDisplay / Lunar，特别是 Apple Silicon 原生 HDMI 接口需要 BetterDisplay 驱动)
-    const rBd = await macBetterDisplaySet(name, decimal);
-    if (rBd.ok) return rBd;
-    const rLu = await macLunarSet(name, decimal, hexValue);
-    if (rLu.ok) return rLu;
-
-    const err = (rIdx.err || rIdx.out || rDef.err || rDef.out || '切换失败').trim().slice(0, 200);
-    if (logger) logger.warn('DDC', `macSet error: index=${idx}, err=${err}`);
-    return { ok: false, via: base, error: err };
-  } else {
-    // ddcctl
-    try { await run(tool, ['-d', String(idx), '-p', '1'], 3000); } catch {}
-    const r = await run(tool, ['-d', String(idx), '-i', decimal], 4000);
-    const blob = `${r.out}\n${r.err}`;
-    if (/Usage:\s*ddcctl/i.test(blob)) {
-      const err = `ddcctl 参数被拒绝（输入源必须是 1-18 的十进制，当前值 ${hexValue} → ${decimal}）`;
-      if (logger) logger.warn('DDC', err);
-      return {
-        ok: false,
-        via: base,
-        error: err
-      };
-    }
-    if (r.ok) {
-      if (logger) logger.info('DDC', `macSet success: index=${idx}, tool=${base}`);
-      return { ok: true, via: base };
-    }
-
-    // ddcctl 失败时也兜底 BetterDisplay / Lunar
-    const rBd = await macBetterDisplaySet(name, decimal);
-    if (rBd.ok) return rBd;
-    const rLu = await macLunarSet(name, decimal, hexValue);
-    if (rLu.ok) return rLu;
-
-    const err = (r.err || r.out || '切换失败').trim().slice(0, 200);
-    if (logger) logger.warn('DDC', `macSet error: index=${idx}, err=${err}`);
-    return { ok: false, via: base, error: err };
+  const blob = `${r.out}\n${r.err}`;
+  if (/Usage:\s*ddcctl/i.test(blob)) {
+    const err = `ddcctl 参数被拒绝（输入源必须是 1-18 的十进制，当前值 ${hexValue} → ${decimal}）`;
+    if (logger) logger.warn('DDC', err);
+    return {
+      ok: false,
+      via: base,
+      error: err
+    };
   }
+  if (r.ok) {
+    if (logger) logger.info('DDC', `macSet success: index=${idx}, tool=${base}`);
+    return { ok: true, via: base };
+  }
+  const err = (r.err || r.out || '切换失败').trim().slice(0, 200);
+  if (logger) logger.warn('DDC', `macSet error: index=${idx}, err=${err}`);
+  return { ok: false, via: base, error: err };
 }
 
 async function macWake(index, hexValue) {
@@ -505,7 +362,7 @@ async function macWake(index, hexValue) {
     return { ok: true, via: 'caffeinate', total: 1, success: 1, error: '' };
   }
   const base = path.basename(tool);
-  const idx = typeof index === 'number' ? index : 1;
+  const idx = typeof index === 'number' && index > 0 ? index : 1;
   const decimal = hexValue ? String(parseInt(hexValue, 16)) : '';
 
   if (base === 'm1ddc') {
@@ -542,7 +399,7 @@ function sameName(a, b) {
  */
 async function macSetAll(plan, names) {
   const label = (p) => (names && names[p.index]) || p.name || '';
-  let queue = plan.map((p) => ({ value: p.value, name: label(p), index: p.index, uuid: p.uuid || '' }));
+  let queue = plan.map((p) => ({ value: p.value, name: label(p), index: p.index }));
   const results = [];
   const seen = new Set();
 
@@ -553,7 +410,7 @@ async function macSetAll(plan, names) {
     // 第一轮显示器都在，直接按计划里的 index 连续快速下发
     if (round === 0) {
       for (const item of queue) {
-        const r = await macSet(item.index, item.value, item.uuid, item.name);
+        const r = await macSet(item.index, item.value);
         if (r.ok) {
           if (!seen.has(item.name)) { seen.add(item.name); results.push({ index: item.index, name: item.name, ...r }); }
         } else {
@@ -570,27 +427,22 @@ async function macSetAll(plan, names) {
 
       for (const item of queue) {
         let idx = null;
-        let uuid = item.uuid || '';
         if (list.length === 1 && queue.length === 1) {
           // 当前系统仅剩 1 块外接屏，且只剩 1 块待切：它就是第 1 块，绝不传失效的 2
           idx = list[0].index;
-          if (list[0].uuid) uuid = list[0].uuid;
         } else if (list.length > 0) {
           const hit = list.find((d) => sameName(d.name, item.name));
-          if (hit) {
-            idx = hit.index;
-            if (hit.uuid) uuid = hit.uuid;
-          }
+          if (hit) idx = hit.index;
         }
         if (idx === null) idx = (list.length === 1 ? list[0].index : item.index);
 
-        const r = await macSet(idx, item.value, uuid, item.name);
+        const r = await macSet(idx, item.value);
         if (r.ok) {
           if (!seen.has(item.name)) { seen.add(item.name); results.push({ index: idx, name: item.name, ...r }); }
         } else if (round === 2) {
           if (!seen.has(item.name)) { seen.add(item.name); results.push({ index: idx, name: item.name, ...r }); }
         } else {
-          next.push({ ...item, index: idx, uuid });
+          next.push({ ...item, index: idx });
         }
       }
     }
@@ -703,14 +555,14 @@ async function setInputAll(target, opts) {
         continue;
       }
     }
-    // 硬件防重复过滤：同一块显示器 3 秒内写入过相同目标输入源，绝不再次写入（杜绝黑屏两次）
+    // 硬件防重复过滤：同一块显示器 4.5 秒内写入过相同目标输入源，绝不再次写入（杜绝黑屏两次）
     const key = `${d.index}|${d.name || ''}`;
     const last = hardwareDdcCache.get(key);
-    if (!o.force && last && last.hexValue === v && Date.now() - last.time < 3000) {
+    if (!o.force && last && last.hexValue === v && Date.now() - last.time < 4500) {
       continue;
     }
     hardwareDdcCache.set(key, { hexValue: v, time: Date.now() });
-    plan.push({ index: d.index, uuid: d.uuid || '', name: d.name, value: v });
+    plan.push({ index: d.index, name: d.name, value: v });
   }
   if (!plan.length) {
     return { ok: false, total: list.length, success: 0, via: l.via, error: '没有可用的接口配置' };
