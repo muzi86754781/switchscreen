@@ -238,17 +238,16 @@ public class SsDdc
             ts[kk] = new Thread(delegate()
             {
                 go.WaitOne();
-                uint cur = 0, max = 0;
-                if (GetVCPFeatureAndVCPFeatureReply(h, 0x60, IntPtr.Zero, ref cur, ref max))
-                {
-                    if (cur == v)
-                    {
-                        okRes[kk] = true;
-                        codes[kk] = 0;
-                        return;
-                    }
-                }
+                // Direct write without pre-querying VCP 0x60 (querying non-active port times out and locks DDC bus).
+                // Ensure monitor power state is awake first:
+                SetVCPFeature(h, 0xD6, 1);
                 bool r = SetVCPFeature(h, 0x60, v);
+                if (!r)
+                {
+                    Thread.Sleep(80);
+                    SetVCPFeature(h, 0xD6, 1);
+                    r = SetVCPFeature(h, 0x60, v);
+                }
                 okRes[kk] = r;
                 if (!r) codes[kk] = Marshal.GetLastWin32Error();
             });
@@ -275,6 +274,16 @@ public class SsDdc
     // plan: "0=17;1=18" (index=decimal VCP value) or "*=17" (every monitor).
     public static string SetPlan(string plan)
     {
+        try
+        {
+            SendMessage(new IntPtr(0xFFFF), 0x0112, new IntPtr(0xF170), new IntPtr(-1));
+            mouse_event(0x0001, 0, 1, 0, UIntPtr.Zero);
+            mouse_event(0x0001, 0, unchecked((uint)-1), 0, UIntPtr.Zero);
+            SetThreadExecutionState(0x80000000 | 0x00000002 | 0x00000001);
+            ChangeDisplaySettingsEx(null, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero);
+        }
+        catch {}
+
         Dictionary<int, uint> map = ParsePlan(plan);
         List<SsMon> all = Enum();
         List<Job> jobs = new List<Job>();
@@ -284,17 +293,6 @@ public class SsDdc
         {
             uint v;
             if (!Pick(map, i, out v)) continue;
-            uint cur = 0, max = 0;
-            if (GetVCPFeatureAndVCPFeatureReply(all[i].pm.hPhysicalMonitor, 0x60, IntPtr.Zero, ref cur, ref max))
-            {
-                if (cur == v)
-                {
-                    Job j = new Job(i, all[i].pm.hPhysicalMonitor, Desc(all[i].pm), v);
-                    j.done = true;
-                    jobs.Add(j);
-                    continue;
-                }
-            }
             jobs.Add(new Job(i, all[i].pm.hPhysicalMonitor, Desc(all[i].pm), v));
         }
         foreach (int key in map.Keys)

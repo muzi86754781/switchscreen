@@ -2143,17 +2143,15 @@ async function doDetectMonitors() {
       const r = await ddc.listDisplays();
       if (r.ok && r.displays.length) {
         via = r.via;
-        let ddcList = r.displays;
-        if (friendly.length < ddcList.length) ddcList = ddcList.slice(0, friendly.length);
+        let ddcList = r.displays.filter((d) => !INTERNAL_LABEL.test(d.name || ''));
         const byHwid = new Map();
         for (const f of friendly) if (f.hwid) byHwid.set(f.hwid, f);
-        const aligned = friendly.length === ddcList.length;
         list = ddcList.map((d, i) => {
           let f = d.hwid ? (byHwid.get(d.hwid) || null) : null;
           if (!f && d.name) {
             f = friendly.find((item) => modelNameHit(item.name, d.name) || (item.serial && d.serial && item.serial === d.serial));
           }
-          if (!f && aligned) f = friendly[i];
+          if (!f && friendly[i]) f = friendly[i];
           const isGeneric = (n) => !n || /^(显示器|默认显示器)\s*\d*$/i.test(String(n).trim());
           const bestName = (!isGeneric(d.name) ? d.name : (f && !isGeneric(f.name) ? f.name : (d.name || (f && f.name) || `显示器 ${d.index}`)));
           return {
@@ -2168,11 +2166,31 @@ async function doDetectMonitors() {
             currentInputLabel: d.currentInputLabel || ''
           };
         });
+
+        // 若系统层 friendly 中有未被 ddcList 探测到的外接屏（如 Apple Silicon 原生 HDMI 口被 m1ddc 忽略），
+        // 依然加入 list，赋予可用虚拟 index，使 BetterDisplay / Lunar / 系统层能对准型号切换
+        for (let i = 0; i < friendly.length; i++) {
+          const f = friendly[i];
+          if (!list.some((item) => modelNameHit(item.name, f.name) || (f.serial && item.serial && f.serial === item.serial))) {
+            const fallbackIdx = list.length + 1;
+            list.push({
+              id: `ddc:${fallbackIdx}`,
+              index: fallbackIdx,
+              uuid: f.uuid || '',
+              name: f.name || `显示器 ${fallbackIdx}`,
+              serial: f.serial || '',
+              size: f.size || '',
+              internal: false,
+              currentInput: '',
+              currentInputLabel: ''
+            });
+          }
+        }
       } else {
         if (r && r.error) ddcError = r.error;
         list = friendly.map((m, i) => ({
           ...m,
-          index: null,
+          index: r.via === 'ddcctl' ? (i + 1) : null,
           id: m.id || `sys:${i}`,
           internal: false,
           currentInput: '',
@@ -2631,6 +2649,10 @@ function onFileUpdate(list) {
  */
 async function onSwitchRequest({ input, label, from, index, target }) {
   logger.info('SWITCH', `onSwitchRequest: index=${index}, input=${JSON.stringify(input)}, label=${label}, target=${target}, from=${from || 'local'}`);
+  // 当目标是切回本机，前置触发硬件视频管道唤醒（激活 DPMS、鼠标微动、唤醒显卡像素时钟输出），为外接屏（如 DELL U2414H）提供稳定的视频同步信号
+  if (!target || target === cfg.peerName) {
+    try { await ddc.wakeDisplay(typeof index === 'number' ? index : -1, typeof input === 'string' ? input : ''); } catch {}
+  }
   // 指定了 index = 只切这一台显示器
   if (typeof index === 'number') {
     const value = typeof input === 'string' ? input : Object.values(input || {})[0];
