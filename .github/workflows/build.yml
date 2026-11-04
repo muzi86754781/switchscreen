@@ -41,26 +41,21 @@ jobs:
           path: dist/*.exe
 
   macos:
-    # macOS 两种架构分别出包：
-    # x64 使用 macos-15-intel（Intel 独立资源池，避免 ARM64 资源池拥堵超时）；
-    # arm64 使用 macos-15（Apple Silicon）。
+    # macOS 使用 macos-15-intel（Intel 独立资源池，避免 GitHub ARM64 资源池长时间排队超时）；
+    # Apple clang 支持跨架构编译 x64 与 arm64，产出对应独立 dmg。
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: x64
-            os: macos-15-intel
-          - arch: arm64
-            os: macos-15
-    runs-on: ${{ matrix.os }}
+        arch: [x64, arm64]
+    runs-on: macos-15-intel
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      # macOS 12+ 的 Python 3.12+ 移除了 distutils，node-gyp 需要它 -> 用 setuptools 补回（PEP668 需 --break-system-packages）
-      - run: python3 -m pip install --break-system-packages --upgrade "setuptools<81" wheel
+      # macOS 12+ 的 Python 3.12+ 移除了 distutils，node-gyp 需要它 -> 用 setuptools 补回
+      - run: python3 -m pip install --break-system-packages --ignore-installed "setuptools<81" || true
       - run: echo "npm_config_python=$(which python3)" >> "$GITHUB_ENV"
       - run: npm install --ignore-scripts
       - run: node node_modules/electron/install.js
@@ -73,7 +68,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/build/tools"
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             git clone --depth 1 https://github.com/waydabber/m1ddc.git /tmp/m1ddc
-            make -C /tmp/m1ddc
+            make -C /tmp/m1ddc CC="clang -arch arm64" || make -C /tmp/m1ddc
             cp /tmp/m1ddc/m1ddc "$GITHUB_WORKSPACE/build/tools/m1ddc"
             chmod +x "$GITHUB_WORKSPACE/build/tools/m1ddc"
           else
