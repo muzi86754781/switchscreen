@@ -967,20 +967,34 @@ function learnPorts() {
       continue;
     }
 
-    // Windows：dxva2 只枚举活动屏，切走的屏会从系统里消失。
-    // 枚举得到这块屏 = 它此刻正在显示本机 → 归属一定是本机（不管读不读得到输入源）
-    // （刚切完的那一下系统还没把它摘掉，这时别急着认领 —— 见上面的 settle 说明）
+    // Windows：HDMI / DVI 接口即使显示器切到其它电脑，HPD 仍可能保持高电平而被枚举到，
+    // 且部分显示器（如 DELL U2414H）在非活动端口会关闭 DDC 响应导致 cur 为空。
+    // 因此当 cur 为空时，仅在尚未记录过归属时才默认归本机，绝不强行覆盖已有的对端归属。
     const pinnedNow = settling(mk) ? settleOwner.get(mk) : '';
-    if (cfg.ui.ownerMap[mk] !== me && (!pinnedNow || pinnedNow === me)) {
+    if (pinnedNow && pinnedNow !== me) continue;
+
+    if (!cur) {
+      if (!cfg.ui.ownerMap[mk]) {
+        cfg.ui.ownerMap[mk] = me;
+        n += 1;
+      }
+      continue;
+    }
+
+    const t = cfg.ui.portMap[mk] || {};
+    const claimed = ids.find((id) => t[id] && sameInput(t[id], cur));
+    if (claimed && claimed !== me) {
+      if (cfg.ui.ownerMap[mk] !== claimed) {
+        cfg.ui.ownerMap[mk] = claimed;
+        n += 1;
+      }
+      continue;
+    }
+
+    if (cfg.ui.ownerMap[mk] !== me) {
       cfg.ui.ownerMap[mk] = me;
       n += 1;
     }
-    // 公认归属是别的机器（刚切走，系统还没把它摘掉）：这块屏此刻不是本机的，
-    // 别拿它的读数去改本机的接口配置
-    if (pinnedNow && pinnedNow !== me) continue;
-
-    if (!cur) continue; // 读不到就别碰接口配置，免得把对的改错
-    const t = cfg.ui.portMap[mk] || {};
 
     // 铁证：这块屏正在显示本机 → 当前输入源就是本机的口（存错了就纠正）
     if (!sameInput(t[me], cur)) {
@@ -1027,25 +1041,21 @@ function ownerOf(m) {
     for (const id of deviceIds()) {
       if (sameInput(portFor(m.id, id), cur)) return id;
     }
-    // 读到了但对不上任何已配口 —— 这块屏正显示「某个还没配过的口」。
-    // 在 Mac 上它很可能是另一台电脑的线（Mac 的系统枚举把切走的屏也列出来），不能判本机。
-  } else if (!m.currentInput && m.present !== false && IS_WIN) {
-    // 2) 只在 Windows 上「枚举得到它 = 它就在显示本机」：
-    //    dxva2 只枚举活动屏，切到别的电脑后系统里就看不到它了。
-    //    Mac 的 system_profiler 会把切走的屏一起列出来，绝不能这么判。
-    //    刚切完的那一下系统还没把它摘掉 —— 这时别抢回来，按公认归属走
-    const pin = settling(portKey(m)) ? settleOwner.get(portKey(m)) : '';
-    if (!pin || pin === cfg.peerName) return cfg.peerName;
   }
 
-  // 3) 本机看不到这块屏（或读到的口谁都对不上）→ 用局域网公认的归属
-  //    （键的口径可能和对端不一样，按键找不到再按接口指纹找）
+  // 2) 读不到当前输入源（如非活动 HDMI 端口关闭了 DDC，或 VGA / ddcctl 不支持读取）→
+  //    优先采用局域网公认归属（authority）与本机上次确认过的归属（ownerMap）
   const hit = authorityEntryFor(m);
   if (hit && hit.owner && deviceIds().includes(hit.owner)) return hit.owner;
 
-  // 4) 本机上一次确认过的归属
   const saved = (cfg.ui.ownerMap && cfg.ui.ownerMap[portKey(m)]) || '';
   if (saved && deviceIds().includes(saved)) return saved;
+
+  // 3) 没有任何归属记录时的初始兜底：Windows 上当前连接的显示器默认归本机
+  if (!m.currentInput && m.present !== false && IS_WIN) {
+    const pin = settling(portKey(m)) ? settleOwner.get(portKey(m)) : '';
+    if (!pin || pin === cfg.peerName) return cfg.peerName;
+  }
   return '';
 }
 
@@ -1812,7 +1822,6 @@ function refreshScreenLayout() {
 /** 所有参与切换的屏用的是同一个接口时，压成单个值：执行端就能「所有屏一起切」 */
 function unifyInput(map, involved) {
   const vals = Object.values(map);
-  if (vals.length === 1) return vals[0];
   if (involved > 1 && vals.length === involved && new Set(vals).size === 1) return vals[0];
   return map;
 }
@@ -1850,9 +1859,15 @@ function buildSwitchPlan(targetId) {
       continue;
     }
 
-    // 检查这块屏当前是否确实已经属于目标设备且正在显示目标设备
+    // 匹配本地显示器缓存，判断本机是否可以直接下发 DDC
+    const localHit = monitorsCache.find((x) => !x.internal && (x.id === m.id || (m.key && portKey(x) === m.key) || modelNameHit(x.name, m.name)));
+    const localIdx = localHit && typeof localHit.index === 'number' ? localHit.index : (typeof m.index === 'number' && !m.isOffline ? m.index : null);
+
+    // 与单屏切换 monitorSwitchPlan 及 v0.9.19 严格保持一致：
+    // 只有当归属已是目标设备，且实测读取到的当前输入源确实等于目标端口时，才跳过不切
+    const cur = trustedInput(localHit || m);
     const curOwner = m.ownerId || ownerOf(m);
-    if (curOwner === targetId) {
+    if (curOwner === targetId && cur && sameInput(cur, value)) {
       already += 1;
       continue;
     }
@@ -1865,10 +1880,6 @@ function buildSwitchPlan(targetId) {
     }
 
     if (!label) label = labelForInput(value);
-
-    // 匹配本地显示器缓存，判断本机是否可以直接下发 DDC
-    const localHit = monitorsCache.find((x) => !x.internal && (x.id === m.id || (m.key && portKey(x) === m.key) || modelNameHit(x.name, m.name)));
-    const localIdx = localHit && typeof localHit.index === 'number' ? localHit.index : (typeof m.index === 'number' && !m.isOffline ? m.index : null);
 
     if (typeof localIdx === 'number') {
       map[localIdx] = value;
@@ -1896,7 +1907,7 @@ function buildSwitchPlan(targetId) {
     already,
     unreachable: 0,
     missing,
-    plan: count ? (already ? map : unifyInput(map, count)) : null,
+    plan: count ? (already ? map : unifyInput(map, total)) : null,
     monitors,
     label: label || (targetId === cfg.peerName ? cfg.ui.localInputLabel : cfg.ui.remoteInputLabel) || ''
   };
@@ -2260,6 +2271,7 @@ async function doDetectMonitors() {
       if (r.ok && r.displays.length) {
         via = r.via;
         let ddcList = r.displays.filter((d) => !INTERNAL_LABEL.test(d.name || ''));
+        if (friendly.length && friendly.length < ddcList.length) ddcList = ddcList.slice(0, friendly.length);
         const byHwid = new Map();
         for (const f of friendly) if (f.hwid) byHwid.set(f.hwid, f);
         list = ddcList.map((d, i) => {
@@ -2432,7 +2444,14 @@ async function switchMonitorInput(value, label, targetDeviceId) {
   const monitorsList = [];
   for (const m of monitorsCache) {
     if (typeof m.index === 'number') {
-      monitorsList.push({ name: m.name, key: portKey(m), index: m.index });
+      const mk = portKey(m);
+      monitorsList.push({
+        name: m.name,
+        key: mk,
+        index: m.index,
+        currentInput: m.currentInput || '',
+        value: targetDeviceId ? portFor(mk || m.id, targetDeviceId) : ''
+      });
     }
   }
   const native = await ddc.setInputAll(value, {
@@ -2445,6 +2464,7 @@ async function switchMonitorInput(value, label, targetDeviceId) {
     return {
       ok: true,
       partial: !!native.partial,
+      results: native.results || [],
       via: native.via,
       label,
       success: native.success,

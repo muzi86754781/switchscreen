@@ -310,11 +310,14 @@ async function macList() {
     }
     return { ok: false, via: 'm1ddc', displays: [], error: r.err || 'm1ddc 未返回显示器列表' };
   }
-  // ddcctl 自身无 list 命令，老实返回空数组交由系统层（system_profiler）枚举真实外接屏
+  // ddcctl 无稳定 list 输出，按 1..2 探测（外层 doDetectMonitors 会按系统真实外接屏数量裁剪）
   return {
     ok: true,
     via: 'ddcctl',
-    displays: []
+    displays: [
+      { index: 1, name: '显示器 1', currentInput: '', currentInputLabel: '' },
+      { index: 2, name: '显示器 2', currentInput: '', currentInputLabel: '' }
+    ]
   };
 }
 
@@ -386,7 +389,9 @@ function sameName(a, b) {
   const x = String(a || '').toLowerCase().replace(/[\s\-_()（）]/g, '');
   const y = String(b || '').toLowerCase().replace(/[\s\-_()（）]/g, '');
   if (!x || !y) return false;
-  if (x === y || x.includes(y) || y.includes(x)) return true;
+  if (/^\d+$/.test(x) || /^\d+$/.test(y)) return false;
+  if (x === y) return true;
+  if (x.length >= 3 && y.length >= 3 && (x.includes(y) || y.includes(x))) return true;
   const tx = (String(a || '').toLowerCase().match(/[a-z0-9]{4,}/g) || []).filter((t) => !/^(dell|generic|monitor|display|screen|color|colour|pnpmonitor)$/i.test(t));
   const ty = (String(b || '').toLowerCase().match(/[a-z0-9]{4,}/g) || []).filter((t) => !/^(dell|generic|monitor|display|screen|color|colour|pnpmonitor)$/i.test(t));
   return tx.some((t) => ty.includes(t));
@@ -505,11 +510,25 @@ async function setInputAll(target, opts) {
     }
   }
 
-  const l = await listDisplays();
-  const list = (l.displays || []).slice();
+  let list = [];
+  let via = IS_WIN ? 'dxva2' : (IS_MAC ? 'm1ddc' : 'none');
+
+  // 优先使用服务层已探明并配对好 index/型号的 monitorsCache（与单点显示器切换 doSwitchMonitor 完全同源）
+  if (Array.isArray(o.monitors) && o.monitors.length) {
+    list = o.monitors.map((m, i) => ({
+      index: typeof m.index === 'number' ? m.index : (i + 1),
+      name: m.name || `显示器 ${i + 1}`,
+      key: m.key || '',
+      currentInput: m.currentInput || ''
+    }));
+  } else {
+    const l = await listDisplays();
+    via = l.via || via;
+    list = (l.displays || []).slice();
+  }
 
   if (!list.length) {
-    return { ok: false, total: 0, success: 0, via: l.via, error: l.error || '未检测到显示器' };
+    return { ok: false, total: 0, success: 0, via, error: '未检测到显示器' };
   }
 
   const plan = [];
@@ -518,30 +537,27 @@ async function setInputAll(target, opts) {
     if (IS_MAC && /built-?in|内建|color lcd/i.test(d.name || '')) continue;
     let v = '';
     if (isMap) {
-      // 1. 若 target 直接包含显示器名字/型号/key/ID，优先采用（跨平台最准）
-      for (const [k, val] of Object.entries(target)) {
-        if (typeof k === 'string' && (sameName(k, d.name) || (d.serial && k.includes(d.serial)))) {
-          v = val;
-          break;
-        }
+      // 1. 优先按本地物理序号直接匹配（与 v0.9.19 完全一致，target 键就是 d.index）
+      if (target[d.index] !== undefined || target[`ddc:${d.index}`] !== undefined) {
+        v = target[d.index] || target[`ddc:${d.index}`];
       }
       // 2. 若附带了 monitors 协同清单（带有 name 和 value），按型号名精准匹配
       if (!v && Array.isArray(o.monitors)) {
         const pm = o.monitors.find((m) => m && (sameName(m.name, d.name) || (m.key && d.serial && m.key.includes(d.serial))));
         if (pm && pm.value) v = pm.value;
       }
-      // 3. 本地接口映射表中如果提供了 portGetter
+      // 3. 若 target 包含非数字的显示器型号名/序列号键，按名字匹配
+      if (!v) {
+        for (const [k, val] of Object.entries(target)) {
+          if (typeof k === 'string' && !/^(ddc:)?\d+$/.test(k) && (sameName(k, d.name) || (d.serial && k.includes(d.serial)))) {
+            v = val;
+            break;
+          }
+        }
+      }
+      // 4. 本地接口映射表中如果提供了 portGetter
       if (!v && typeof o.portGetter === 'function') {
         v = o.portGetter(d);
-      }
-      // 4. 尝试本地物理序号匹配（同机下发时 target 键就是 d.index）
-      if (!v && (target[d.index] !== undefined || target[`ddc:${d.index}`] !== undefined)) {
-        v = target[d.index] || target[`ddc:${d.index}`];
-      }
-      // 5. 若 target map 只有一个值，则所有外接屏统一采纳
-      if (!v) {
-        const vals = Object.values(target);
-        if (vals.length === 1) v = vals[0];
       }
     } else {
       v = target;
@@ -555,36 +571,51 @@ async function setInputAll(target, opts) {
         continue;
       }
     }
-    // 硬件防重复过滤：同一块显示器 4.5 秒内写入过相同目标输入源，绝不再次写入（杜绝黑屏两次）
+    // 硬件防重复过滤：同一块显示器 4.5 秒内成功写入过相同目标输入源，绝不再次写入（杜绝黑屏两次）
     const key = `${d.index}|${d.name || ''}`;
     const last = hardwareDdcCache.get(key);
     if (!o.force && last && last.hexValue === v && Date.now() - last.time < 4500) {
       continue;
     }
-    hardwareDdcCache.set(key, { hexValue: v, time: Date.now() });
-    plan.push({ index: d.index, name: d.name, value: v });
+    plan.push({ index: d.index, name: d.name, value: v, cacheKey: key });
   }
   if (!plan.length) {
-    return { ok: false, total: list.length, success: 0, via: l.via, error: '没有可用的接口配置' };
+    return { ok: false, total: list.length, success: 0, via, error: '没有可用的接口配置' };
   }
+
+  const markSuccess = (resList) => {
+    for (const p of plan) {
+      const hit = Array.isArray(resList) ? resList.find((r) => r.index === p.index) : null;
+      if (!hit || hit.ok !== false) {
+        hardwareDdcCache.set(p.cacheKey, { hexValue: p.value, time: Date.now() });
+      }
+    }
+  };
 
   if (IS_WIN) {
     const str = plan.map((p) => `${p.index}=${parseInt(p.value, 16)}`).join(';');
     const all = await winApply(str);
-    if (all.total > 0) return all;
+    if (all.total > 0) {
+      if (all.ok) markSuccess(all.results);
+      return all;
+    }
   }
 
   if (IS_MAC) {
     const r = await macSetAll(plan, o.names || {});
-    if (r.total > 0) return r;
+    if (r.total > 0) {
+      if (r.ok) markSuccess(r.results);
+      return r;
+    }
   }
 
   const results = [];
   for (const p of plan) {
     const r = await setInput(p.index, p.value);
+    if (r && r.ok) hardwareDdcCache.set(p.cacheKey, { hexValue: p.value, time: Date.now() });
     results.push({ index: p.index, name: p.name, ...r });
   }
-  return summarize(results, l.via, '');
+  return summarize(results, via, '');
 }
 
 module.exports = { wakeDisplay, listDisplays, setInput, setInputAll, labelOf, INPUT_LABELS, IS_WIN, IS_MAC };
