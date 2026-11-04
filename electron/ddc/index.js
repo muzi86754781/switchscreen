@@ -290,8 +290,9 @@ async function macList() {
     const r = await run(tool, ['display', 'list']);
     if (r.ok) {
       const lines = r.out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-      const displays = await Promise.all(lines.map(async (line, i) => {
-        const hex = await macReadInput(tool, i + 1);
+      const rawItems = lines.map((line, i) => {
+        const idxMatch = line.match(/^\[(\d+)\]/);
+        const dispIdx = idxMatch ? parseInt(idxMatch[1], 10) : (i + 1);
         // m1ddc 的输出形如「[1] DELL U2414H (XXXXXXXX)」：序号和括号尾巴都要剥掉，
         // 只留下真实型号名 —— 它是跨机器认屏（稳定键 / 接口同步）的依据
         const name = line
@@ -299,9 +300,13 @@ async function macList() {
           .replace(/^\d+[.:)]\s*/, '')
           .replace(/\s*\([^)]*\)\s*$/, '')
           .trim();
+        return { index: dispIdx, name };
+      }).filter((d) => !/^(?:\(?null\)?|built-?in.*|内建.*|内置.*|internal\s*display|colou?r\s*lcd)$/i.test(d.name));
+      const displays = await Promise.all(rawItems.map(async (item) => {
+        const hex = await macReadInput(tool, item.index);
         return {
-          index: i + 1,
-          name: name || `显示器 ${i + 1}`,
+          index: item.index,
+          name: item.name || `显示器 ${item.index}`,
           currentInput: hex,
           currentInputLabel: hex ? labelOf(hex) : ''
         };
@@ -531,6 +536,7 @@ async function setInputAll(target, opts) {
     return { ok: false, total: 0, success: 0, via, error: '未检测到显示器' };
   }
 
+  const isNumericIndexMap = isMap && Object.keys(target).length > 0 && Object.keys(target).every((k) => /^(ddc:)?\d+$/.test(k));
   const plan = [];
   for (const d of list) {
     // Mac 自带屏没有 DDC，绝不参与切屏
@@ -541,23 +547,27 @@ async function setInputAll(target, opts) {
       if (target[d.index] !== undefined || target[`ddc:${d.index}`] !== undefined) {
         v = target[d.index] || target[`ddc:${d.index}`];
       }
-      // 2. 若附带了 monitors 协同清单（带有 name 和 value），按型号名精准匹配
-      if (!v && Array.isArray(o.monitors)) {
-        const pm = o.monitors.find((m) => m && (sameName(m.name, d.name) || (m.key && d.serial && m.key.includes(d.serial))));
-        if (pm && pm.value) v = pm.value;
-      }
-      // 3. 若 target 包含非数字的显示器型号名/序列号键，按名字匹配
-      if (!v) {
-        for (const [k, val] of Object.entries(target)) {
-          if (typeof k === 'string' && !/^(ddc:)?\d+$/.test(k) && (sameName(k, d.name) || (d.serial && k.includes(d.serial)))) {
-            v = val;
-            break;
+      // 若 target 是明确的本地物理序号表（如 { "1": "0x01" }），未在表中的显示器说明已被上层过滤跳过
+      // （例如对端已拔掉该显示器或该显示器已在目标设备上），绝不通过 fallback 强行补切！
+      if (!v && !isNumericIndexMap) {
+        // 2. 若附带了 monitors 协同清单（带有 name 和 value），按型号名精准匹配
+        if (Array.isArray(o.monitors)) {
+          const pm = o.monitors.find((m) => m && (sameName(m.name, d.name) || (m.key && d.serial && m.key.includes(d.serial))));
+          if (pm && pm.value) v = pm.value;
+        }
+        // 3. 若 target 包含非数字的显示器型号名/序列号键，按名字匹配
+        if (!v) {
+          for (const [k, val] of Object.entries(target)) {
+            if (typeof k === 'string' && !/^(ddc:)?\d+$/.test(k) && (sameName(k, d.name) || (d.serial && k.includes(d.serial)))) {
+              v = val;
+              break;
+            }
           }
         }
-      }
-      // 4. 本地接口映射表中如果提供了 portGetter
-      if (!v && typeof o.portGetter === 'function') {
-        v = o.portGetter(d);
+        // 4. 本地接口映射表中如果提供了 portGetter
+        if (!v && typeof o.portGetter === 'function') {
+          v = o.portGetter(d);
+        }
       }
     } else {
       v = target;

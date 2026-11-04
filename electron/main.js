@@ -681,6 +681,12 @@ async function doSwitchAll(explicitTarget) {
   logger.info('SWITCH', `doSwitchAll start: target=${target} (${name})`);
   const plan0 = services.buildSwitchPlan(target);
   const missing = (plan0.missing || []).slice();
+  if (plan0.total === 0) {
+    logger.info('SWITCH', `doSwitchAll: no shared connected monitors for ${name}`);
+    services.pushStatus(`当前没有同时连接在两端且可切换到 ${name} 的共享显示器`, 'warn');
+    broadcastState();
+    return { ok: false, reason: 'no-shared-monitors', target };
+  }
   // 仅当所有显示器 100% 确认都已显示在目标设备上，且没有任何一块屏需要切换时，才静默跳过
   if (!plan0.ok && !missing.length && plan0.already > 0 && plan0.already >= plan0.total) {
     logger.info('SWITCH', `doSwitchAll: all monitors (${plan0.already}/${plan0.total}) already showing ${name}`);
@@ -1695,19 +1701,26 @@ app.whenReady().then(() => {
   }
 
   services.detectMonitors()
-    .then(() => { registerHotkeys(); broadcastState(); })
+    .then(() => {
+      registerHotkeys();
+      broadcastState();
+      if (peer && typeof peer.resendMeta === 'function') peer.resendMeta();
+    })
     .catch(() => { registerHotkeys(); broadcastState(); });
 
   // 显示器插拔 / 改分辨率 / 换排列：重新算桌面范围与显示器顺序
-  // 兜底自愈：显示器上的按键被人手动按过、或对端的快照没送到时，本机状态会停在旧的。
-  // 定期轻扫一次（只读当前输入源），界面就不会长时间停在过期的归属上。
+  // 兜底自愈：显示器上的按键被人手动按过、非活动端口拔插视频线、或对端的快照没送到时，
+  // 定期轻扫一次（8 秒周期），几秒内即可自动识别显示器拔出/插入并同步给对端。
   setInterval(() => {
-    if (switching) return;
-    services.detectMonitors().then(() => broadcastState()).catch(() => {});
-  }, 30000);
+    if (switching || services.settleRemain() > 0) return;
+    services.detectMonitors().then(() => {
+      registerHotkeys();
+      broadcastState();
+    }).catch(() => {});
+  }, 8000);
 
-  const onDisplayChange = () => {
-    logger.info('MAIN', 'Display configuration changed (display-added/removed/metrics-changed)');
+  let displayChangeTimers = [];
+  const runDisplayChangeDetect = () => {
     try {
       services.refreshScreenLayout();
     } catch (e) {
@@ -1716,9 +1729,19 @@ app.whenReady().then(() => {
     services.detectMonitors().then(() => {
       registerHotkeys();
       broadcastState();
+      if (peer && typeof peer.resendMeta === 'function') peer.resendMeta();
     }).catch((e) => {
       logger.warn('MAIN', `onDisplayChange detect error: ${e.message}`);
     });
+  };
+  const onDisplayChange = () => {
+    logger.info('MAIN', 'Display configuration changed (display-added/removed/metrics-changed)');
+    displayChangeTimers.forEach((t) => clearTimeout(t));
+    displayChangeTimers = [];
+    runDisplayChangeDetect();
+    // 刚插上显示器时系统 EDID / DDC 通道握手通常需要 1~3 秒才完全就绪，追加两次延迟重扫确保 100% 识别
+    displayChangeTimers.push(setTimeout(runDisplayChangeDetect, 1800));
+    displayChangeTimers.push(setTimeout(runDisplayChangeDetect, 4200));
   };
   try {
     screen.on('display-added', onDisplayChange);

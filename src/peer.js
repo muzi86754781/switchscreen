@@ -57,9 +57,12 @@ function createPeer(userConfig, hooks) {
   }
 
   function metaPayload() {
-    let displays = [];
+    let displays = null;
     if (typeof h.getDisplaysMeta === 'function') {
-      try { displays = h.getDisplaysMeta() || []; } catch { /* ignore */ }
+      try {
+        const res = h.getDisplaysMeta();
+        if (Array.isArray(res)) displays = res;
+      } catch { /* ignore */ }
     }
     return { type: 'meta', platform, screen: localScreenSize(), displays, name: myName, displayName: myLabel(), bootAt: BOOT_AT };
   }
@@ -75,7 +78,7 @@ function createPeer(userConfig, hooks) {
         label: m.label || n,
         platform: m.platform || 'unknown',
         screen: m.screen || null,
-        displays: m.displays || [],
+        displays: Array.isArray(m.displays) ? m.displays : null,
         bootAt: Number(m.bootAt) || 0
       };
     });
@@ -475,7 +478,7 @@ function createPeer(userConfig, hooks) {
     else if (msg.type === 'meta') {
       const meta = peersMeta.get(name) || { name };
       const before = meta.label;
-      const beforeDisplays = JSON.stringify(meta.displays || []);
+      const beforeDisplays = JSON.stringify(meta.displays || null);
       meta.platform = msg.platform || meta.platform || 'unknown';
       if (msg.screen && msg.screen.width) {
         meta.screen = msg.screen;
@@ -485,7 +488,7 @@ function createPeer(userConfig, hooks) {
       if (Array.isArray(msg.displays)) meta.displays = msg.displays;
       if (msg.displayName) meta.label = msg.displayName;
       peersMeta.set(name, meta);
-      if (meta.label !== before || JSON.stringify(meta.displays || []) !== beforeDisplays) notifyPeers();
+      if (meta.label !== before || JSON.stringify(meta.displays || null) !== beforeDisplays) notifyPeers();
     }
     else if (msg.type === 'input') {
       const ev = msg.ev || {};

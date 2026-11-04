@@ -65,6 +65,12 @@ let selfAwake = true;
 
 // 远端设备上报的内建屏信息：peerName -> { name, pos }
 const remoteInternals = new Map();
+// 远端设备上报的外接屏信息：peerName -> Array<{ key, name, serial, pos, internal }>
+const remoteExternalDisplays = new Map();
+// 本机是否已完成首次显示器扫描（未完成前不向对端广播空列表，防止把已连接的屏误判为已拔掉）
+let hasDetectedMonitors = false;
+// 上一次扫描到的本机显示器拓扑签名，用于感知显示器插拔并立即同步对端
+let lastMonitorsSig = '';
 // 跨机器 key 别名映射：foreignKey -> local monitorId
 const keyAliases = new Map();
 
@@ -80,12 +86,66 @@ function recordAlias(m, foreignKey) {
 
 /** 主进程获取当前显示器简要拓扑，用于同步给局域网对端 */
 function exportDisplaysMeta() {
-  return monitorsCache.map((m) => ({
-    name: m.name,
-    internal: !!m.internal,
-    pos: m.pos || null,
-    serial: m.serial || ''
-  }));
+  if (!hasDetectedMonitors) return null;
+  return monitorsCache
+    .filter((m) => m && m.id !== 'default')
+    .map((m) => ({
+      key: screenKey(m),
+      name: m.name,
+      internal: !!m.internal,
+      pos: m.pos || null,
+      serial: m.serial || ''
+    }));
+}
+
+function matchDisplayEntry(m, d) {
+  if (!m || !d || d.internal) return false;
+  const mk = m.key || screenKey(m);
+  const dk = d.key || screenKey(d);
+  if (mk && dk && mk === dk) return true;
+  if (mk && dk && cfg.ui && cfg.ui.portAlias && (cfg.ui.portAlias[mk] === dk || cfg.ui.portAlias[dk] === mk)) {
+    return true;
+  }
+  if (m.serial && d.serial && String(m.serial).trim().toLowerCase() === String(d.serial).trim().toLowerCase()) {
+    return true;
+  }
+  if (m.name && d.name && !isGenericName(m.name) && !isGenericName(d.name) && modelNameHit(m.name, d.name)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * 判断某块外接显示器 m 当前是否物理连接在指定设备 deviceId 上。
+ * - 若 deviceId 是本机：检查本机当前 monitorsCache 是否存在该外接屏；
+ * - 若 deviceId 是远端在线设备：若已收到该设备上报的 displays 列表，检查其中是否存在该外接屏；
+ *   若对端刚连上尚未上报 displays（remoteExternalDisplays.has(deviceId) === false），默认视为已连接。
+ */
+function isMonitorConnectedToDevice(m, deviceId) {
+  if (!m || !deviceId) return false;
+  if (deviceId === cfg.peerName) {
+    return monitorsCache.some((x) => !x.internal && x.id !== 'default' && (x.id === m.id || matchDisplayEntry(m, x)));
+  }
+  if (remoteExternalDisplays.has(deviceId)) {
+    const remList = remoteExternalDisplays.get(deviceId) || [];
+    return remList.some((d) => matchDisplayEntry(m, d));
+  }
+  if (!peersNow.some((p) => p.name === deviceId)) return false;
+  return true;
+}
+
+/**
+ * 计算某块外接显示器当前同时物理连接在几台在线设备上（本机 + 在线对端）。
+ * 当某块显示器在一端被拔掉（connectedDeviceCount < 2）时，全部切换无需再切换该显示器。
+ */
+function connectedDeviceCount(m) {
+  if (!m || m.internal) return 0;
+  let count = 0;
+  if (isMonitorConnectedToDevice(m, cfg.peerName)) count += 1;
+  for (const p of peersNow) {
+    if (p && p.name && isMonitorConnectedToDevice(m, p.name)) count += 1;
+  }
+  return count;
 }
 
 /** 主进程监听 powerMonitor 的锁屏/休眠事件后调用 */
@@ -1034,27 +1094,32 @@ function ownerOf(m) {
   // 内建屏只能显示笔记本自己（合盖休眠时不算）
   if (m.internal) return selfAwake ? cfg.peerName : '';
 
-  // 1) 本机自证：读得到当前输入源，并且它等于某台设备配过的口
+  // 若该显示器仅连接在本机（对端未连接或已拔掉视频线），则必然归属本机
+  if (connectedDeviceCount(m) === 1 && isMonitorConnectedToDevice(m, cfg.peerName)) {
+    return cfg.peerName;
+  }
+
+  // 1) 本机自证：读得到当前输入源，并且它等于某台当前已连接该屏的设备配过的口
   //    （刚切完那几秒里，与公认归属矛盾的读数不算数，见 trustedInput）
   const cur = trustedInput(m);
   if (cur) {
     for (const id of deviceIds()) {
-      if (sameInput(portFor(m.id, id), cur)) return id;
+      if (sameInput(portFor(m.id, id), cur) && isMonitorConnectedToDevice(m, id)) return id;
     }
   }
 
   // 2) 读不到当前输入源（如非活动 HDMI 端口关闭了 DDC，或 VGA / ddcctl 不支持读取）→
-  //    优先采用局域网公认归属（authority）与本机上次确认过的归属（ownerMap）
+  //    优先采用局域网公认归属（authority）与本机上次确认过的归属（ownerMap），但前提是该设备仍连接着这块屏
   const hit = authorityEntryFor(m);
-  if (hit && hit.owner && deviceIds().includes(hit.owner)) return hit.owner;
+  if (hit && hit.owner && deviceIds().includes(hit.owner) && isMonitorConnectedToDevice(m, hit.owner)) return hit.owner;
 
   const saved = (cfg.ui.ownerMap && cfg.ui.ownerMap[portKey(m)]) || '';
-  if (saved && deviceIds().includes(saved)) return saved;
+  if (saved && deviceIds().includes(saved) && isMonitorConnectedToDevice(m, saved)) return saved;
 
-  // 3) 没有任何归属记录时的初始兜底：Windows 上当前连接的显示器默认归本机
-  if (!m.currentInput && m.present !== false && IS_WIN) {
+  // 3) 没有任何归属记录时的初始兜底：当前连接在本机的显示器默认归本机
+  if (!m.currentInput && m.present !== false && isMonitorConnectedToDevice(m, cfg.peerName)) {
     const pin = settling(portKey(m)) ? settleOwner.get(portKey(m)) : '';
-    if (!pin || pin === cfg.peerName) return cfg.peerName;
+    if (!pin || pin === cfg.peerName || !isMonitorConnectedToDevice(m, pin)) return cfg.peerName;
   }
   return '';
 }
@@ -1355,35 +1420,43 @@ function trustedInput(m) {
 /** 本机视角的归属：只认本机能自证的证据，不看别的机器怎么说 */
 function ownViewOf(m) {
   if (!m) return '';
+  if (connectedDeviceCount(m) === 1 && isMonitorConnectedToDevice(m, cfg.peerName)) {
+    return cfg.peerName;
+  }
   const cur = trustedInput(m);
   if (cur) {
     for (const id of deviceIds()) {
-      if (sameInput(portFor(m.id, id), cur)) return id;
+      if (sameInput(portFor(m.id, id), cur) && isMonitorConnectedToDevice(m, id)) return id;
     }
     return '';
   }
   // 本机没有证据（读不到 / 读数刚被判为不可信）→ 用局域网公认的归属，
   // 否则会把过期结论广播出去，把对端刚同步好的界面又带回去
   const hit = authorityEntryFor(m);
-  if (hit && hit.owner && deviceIds().includes(hit.owner)) return hit.owner;
+  if (hit && hit.owner && deviceIds().includes(hit.owner) && isMonitorConnectedToDevice(m, hit.owner)) return hit.owner;
   const saved = (cfg.ui.ownerMap && cfg.ui.ownerMap[portKey(m)]) || '';
-  return saved && deviceIds().includes(saved) ? saved : '';
+  return saved && deviceIds().includes(saved) && isMonitorConnectedToDevice(m, saved) ? saved : '';
 }
 
-/** 汇总一份「每块屏归谁」的快照：本机知道的覆盖，本机看不到的保留原样 */
+/** 汇总一份「每块屏归谁」的快照：本机知道的覆盖，本机看不到的仅保留对端仍连接着的屏 */
 function buildAuthority() {
   const prev = (cfg.ui.authority && cfg.ui.authority.screens) || [];
-  const byKey = new Map(prev.filter((s) => s && s.key).map((s) => [s.key, { ...s }]));
+  const byKey = new Map(
+    prev
+      .filter((s) => s && s.key && (localMonitorForEntry(s) || peersNow.some((p) => isMonitorConnectedToDevice(s, p.name))))
+      .map((s) => [s.key, { ...s }])
+  );
   for (const m of monitorsCache) {
     if (m.internal) continue;
     if (isGenericName(m.name) || /^(显示器|默认显示器)\s*\d*$/i.test(String(m.name).trim())) continue;
     const k = screenKey(m);
     const old = byKey.get(k) || {};
     const ps = portsOfKey(portKey(m));
+    const validOldOwner = old.owner && isMonitorConnectedToDevice(m, old.owner) ? old.owner : '';
     byKey.set(k, {
       key: k,
       name: m.name || old.name || '',
-      owner: ownViewOf(m) || old.owner || '',
+      owner: ownViewOf(m) || validOldOwner || '',
       // 接口指纹：对端键的口径跟本机不一样时，靠它认领同一块屏
       ports: Object.keys(ps).length ? ps : (old.ports || {})
     });
@@ -1487,58 +1560,11 @@ function applyAuthority(a) {
 }
 
 /**
- * 局域网里存在、但本机此刻枚举不到的屏 —— 它正显示着别的电脑。
- * 不补出来的话，一切走这行屏就从界面上凭空消失了，用户会以为软件丢了屏。
+ * 离线记忆屏：当显示器物理线被拔掉后，不应再从历史 authority 或 screenMemo 中把已拔掉的屏强行塞回列表，
+ * 确保拔掉显示器后本机与对端都能立即识别出该显示器已不在。
  */
 function offlineRows() {
-  const a = cfg.ui.authority;
-  if (!a || !Array.isArray(a.screens)) return [];
-  const have = new Set(monitorsCache.map(screenKey));
-  const out = [];
-  for (const s of a.screens) {
-    if (!s || !s.key) continue;
-    // 忽略通用占位名（显示器 1/2、默认显示器等幽灵屏）
-    if (isGenericName(s.name) || /^(显示器|默认显示器)\s*\d*$/i.test(String(s.name).trim())) continue;
-    if (have.has(s.key)) continue;
-
-    // 键对不上、但能认领到本机的屏：不是离线屏，绝不补成重复的一行
-    if (localMonitorForEntry(s)) continue;
-
-    // 只补「本机真的见过、且有真实型号名的屏」
-    const memo = (cfg.ui.screenMemo && cfg.ui.screenMemo[s.key]) || {};
-    if (!memo.name && !memo.pos) continue;
-    if (isGenericName(memo.name) || /^(显示器|默认显示器)\s*\d*$/i.test(String(memo.name).trim())) continue;
-
-    const sName = memo.name || s.name;
-    // 如果这块屏的名字与本地已有某块外接屏型号一致，说明只是稳定键口径不同，绝不重复生成
-    if (monitorsCache.some((m) => !m.internal && modelNameHit(m.name, sName))) {
-      continue;
-    }
-    // 自身已添加的离线列表中若已有同型号，坚决不重复生成！
-    if (out.some((item) => modelNameHit(item.name, sName))) {
-      continue;
-    }
-
-    out.push({
-      key: s.key,
-      id: 'mem:' + String(s.key).replace(/[^a-zA-Z0-9]+/g, '_'),
-      index: null,
-      displayId: null,
-      name: memo.name || s.name || '显示器',
-      serial: memo.serial || '',
-      size: '',
-      currentInput: '',
-      currentInputLabel: '',
-      internal: false,
-      present: false,
-      pos: memo.pos || null,
-      ownerId: s.owner || '',
-      ownerLabel: s.owner ? deviceInfo(s.owner).name : '',
-      ports: {},
-      deviceCount: 0
-    });
-  }
-  return out;
+  return [];
 }
 
 function monitorRows() {
@@ -1848,9 +1874,14 @@ function buildSwitchPlan(targetId) {
   let already = 0;
   let label = '';
 
-  // 跨机全局显示器拓扑：包括当前本地活跃外接屏与目前正显示在对端上的外接屏（allMonitors() 包含 offlineRows()）
+  // 跨机全局显示器拓扑：遍历当前本地外接屏，仅对「同时连接在目标设备与至少另一台在线设备上」的共享屏幕生成切换计划
   const allExt = allMonitors().filter((m) => !m.internal);
   for (const m of allExt) {
+    // 若该显示器未连接在目标设备上，或者当前仅连接在单台设备上（如已从 Mac 或 Windows 拔掉视频线），
+    // 则在「全部切换」时直接跳过该显示器，不需要切换它
+    if (!isMonitorConnectedToDevice(m, targetId)) continue;
+    if (peersNow.length > 0 && connectedDeviceCount(m) < 2) continue;
+
     total += 1;
     const value = portFor(m.key || m.id, targetId);
     if (!value) {
@@ -1907,7 +1938,7 @@ function buildSwitchPlan(targetId) {
     already,
     unreachable: 0,
     missing,
-    plan: count ? (already ? map : unifyInput(map, total)) : null,
+    plan: count ? map : null,
     monitors,
     label: label || (targetId === cfg.peerName ? cfg.ui.localInputLabel : cfg.ui.remoteInputLabel) || ''
   };
@@ -1925,6 +1956,10 @@ function onSwitchTargetFallback(targetId, peerMonitors, peerPlan) {
 
   for (const m of monitorsCache) {
     if (m.internal || typeof m.index !== 'number' || m.isOffline) continue;
+    // 若该显示器未连接在目标设备上，或者仅连接在单台设备上（某端已拔线），在全部切换中直接跳过
+    if (!isMonitorConnectedToDevice(m, targetId)) continue;
+    if (peersNow.length > 0 && connectedDeviceCount(m) < 2) continue;
+
     let val = portFor(m.id || m.key, targetId);
     if (!val && list.length) {
       const pm = list.find((p) => p && (
@@ -1937,7 +1972,7 @@ function onSwitchTargetFallback(targetId, peerMonitors, peerPlan) {
         if (val) setPort(m.id || m.key, targetId, val);
       }
     }
-    if (!val && typeof peerPlan === 'string' && normInput(peerPlan)) {
+    if (!val && !list.length && typeof peerPlan === 'string' && normInput(peerPlan)) {
       val = normInput(peerPlan);
     }
     if (!val) continue;
@@ -1965,6 +2000,10 @@ function monitorSwitchPlan(monitorId, targetId) {
   const m = findMonitor(monitorId);
   if (!m) return { ok: false, error: '找不到这台显示器' };
   if (m.internal) return { ok: false, error: '内建屏无法切换输入源' };
+  if (!isMonitorConnectedToDevice(m, targetId)) {
+    const devName = (deviceInfo(targetId) && deviceInfo(targetId).name) || targetId;
+    return { ok: false, error: `「${m.name}」当前未连接到 ${devName}` };
+  }
 
   const stableKey = m.key || screenKey(m) || m.id;
   const value = portFor(stableKey, targetId);
@@ -1995,13 +2034,14 @@ function monitorSwitchPlan(monitorId, targetId) {
   };
 }
 
-/** 单块屏的快捷键：在这块屏上配置过的设备之间轮换 */
+/** 单块屏的快捷键：在这块屏上配置过且当前连接的设备之间轮换 */
 function monitorCyclePlan(monitorId) {
   const m = findMonitor(monitorId);
   if (!m) return { ok: false, error: '找不到这台显示器' };
   const stableKey = m.key || screenKey(m) || m.id;
-  const ids = deviceIds().filter((id) => portFor(stableKey, id));
+  const ids = deviceIds().filter((id) => portFor(stableKey, id) && isMonitorConnectedToDevice(m, id));
   if (!ids.length) return { ok: false, error: `「${m.name}」还没配置任何一台电脑的接口` };
+  if (ids.length < 2) return { ok: false, error: `「${m.name}」当前仅连接在单台设备上，无需切换` };
   const owner = ownerOf(m);
   const i = ids.indexOf(owner);
   let target = '';
@@ -2103,7 +2143,16 @@ async function probePort(monitorId, deviceId, opts) {
 function nextDevice() {
   const list = arrangeOrder().filter((id) => id === cfg.peerName || peersNow.some((p) => p.name === id));
   if (!list.length) return cfg.peerName;
-  const i = list.indexOf(activeTarget);
+  // 若当前多端共享的外接屏一致归属于某台在线设备，以该设备为基准切往下一台
+  const sharedExt = allMonitors().filter((m) => !m.internal && connectedDeviceCount(m) >= 2 && m.ownerId);
+  let base = activeTarget;
+  if (sharedExt.length > 0) {
+    const firstOwner = sharedExt[0].ownerId;
+    if (list.includes(firstOwner) && sharedExt.every((m) => m.ownerId === firstOwner)) {
+      base = firstOwner;
+    }
+  }
+  const i = list.indexOf(base);
   return list[(i + 1) % list.length];
 }
 
@@ -2217,7 +2266,7 @@ async function enrichMacEdid() {
 function detectWin() {
   return new Promise((resolve) => {
     const script = [
-      'Get-CimInstance -Namespace root\\wmi -ClassName WmiMonitorID | ForEach-Object {',
+      'Get-CimInstance -Namespace root\\wmi -ClassName WmiMonitorID | Where-Object { $_.Active -ne $false } | ForEach-Object {',
       "  $n = ($_.UserFriendlyName | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join '';",
       "  $s = ($_.SerialNumberID  | Where-Object {$_ -ne 0} | ForEach-Object {[char]$_}) -join '';",
       "  \"$n|$s|$($_.InstanceName)\" }"
@@ -2270,8 +2319,10 @@ async function doDetectMonitors() {
       const r = await ddc.listDisplays();
       if (r.ok && r.displays.length) {
         via = r.via;
-        let ddcList = r.displays.filter((d) => !INTERNAL_LABEL.test(d.name || ''));
-        if (friendly.length && friendly.length < ddcList.length) ddcList = ddcList.slice(0, friendly.length);
+        let ddcList = r.displays.filter((d) => !INTERNAL_LABEL.test(d.name || '') && !/^\(?null\)?$/i.test(String(d.name || '').trim()));
+        if (r.via === 'ddcctl' && friendly.length && friendly.length < ddcList.length) {
+          ddcList = ddcList.slice(0, friendly.length);
+        }
         const byHwid = new Map();
         for (const f of friendly) if (f.hwid) byHwid.set(f.hwid, f);
         list = ddcList.map((d, i) => {
@@ -2295,23 +2346,26 @@ async function doDetectMonitors() {
           };
         });
 
-        // 若系统层 friendly 中有未被 ddcList 探测到的外接屏（如 Apple Silicon 原生 HDMI 口被 m1ddc 忽略），
-        // 依然加入 list，赋予可用虚拟 index，使 BetterDisplay / Lunar / 系统层能对准型号切换
-        for (let i = 0; i < friendly.length; i++) {
-          const f = friendly[i];
-          if (!list.some((item) => modelNameHit(item.name, f.name) || (f.serial && item.serial && f.serial === item.serial))) {
-            const fallbackIdx = list.length + 1;
-            list.push({
-              id: `ddc:${fallbackIdx}`,
-              index: fallbackIdx,
-              uuid: f.uuid || '',
-              name: f.name || `显示器 ${fallbackIdx}`,
-              serial: f.serial || '',
-              size: f.size || '',
-              internal: false,
-              currentInput: '',
-              currentInputLabel: ''
-            });
+        // macOS 下若系统层 friendly 中有未被 ddcList 探测到的外接屏（如 Apple Silicon 原生 HDMI 口被 m1ddc 忽略），
+        // 依然加入 list，赋予可用虚拟 index
+        if (IS_MAC) {
+          for (let i = 0; i < friendly.length; i++) {
+            const f = friendly[i];
+            if (!list.some((item) => modelNameHit(item.name, f.name) || (f.serial && item.serial && f.serial === item.serial))) {
+              const maxIdx = list.reduce((mx, x) => Math.max(mx, typeof x.index === 'number' ? x.index : 0), 0);
+              const fallbackIdx = maxIdx + 1;
+              list.push({
+                id: `ddc:${fallbackIdx}`,
+                index: fallbackIdx,
+                uuid: f.uuid || '',
+                name: f.name || `显示器 ${fallbackIdx}`,
+                serial: f.serial || '',
+                size: f.size || '',
+                internal: false,
+                currentInput: '',
+                currentInputLabel: ''
+              });
+            }
           }
         }
       } else {
@@ -2376,6 +2430,21 @@ async function doDetectMonitors() {
   learnPorts();
   rememberScreens();
   ensureMonitorHotkeys();
+
+  hasDetectedMonitors = true;
+  const curSig = monitorsCache
+    .filter((m) => m && m.id !== 'default')
+    .map((m) => `${screenKey(m)}:${m.name}:${m.serial || ''}:${m.index}:${m.internal ? 1 : 0}`)
+    .join('|');
+  if (curSig !== lastMonitorsSig) {
+    lastMonitorsSig = curSig;
+    logger.info('DETECT', `Monitors topology changed (${monitorsCache.length}): ${curSig || 'empty'}`);
+    if (peer) {
+      try { if (typeof peer.resendMeta === 'function') peer.resendMeta(); } catch { /* ignore */ }
+      try { if (typeof peer.sendPorts === 'function') peer.sendPorts(exportPorts()); } catch { /* ignore */ }
+      try { if (typeof peer.sendAuthority === 'function') peer.sendAuthority(publishAuthority()); } catch { /* ignore */ }
+    }
+  }
 
   pushStatus(
     via === 'dxva2' || via === 'm1ddc' || via === 'ddcctl'
@@ -2561,19 +2630,21 @@ function getState() {
     const info = deviceInfo(id);
     const isThisLocal = info.local;
 
-    // 外接屏由所有设备共享
-    const sharedMonitors = rows.filter((m) => !m.internal).map((m) => ({
-      id: m.id,
-      name: m.name,
-      internal: false,
-      present: m.present !== false,
-      pos: m.pos || null,
-      letter: letterMap.get(m.id) || '?',
-      port: m.ports[id] ? m.ports[id].label : '未设置',
-      hasPort: !!(m.ports[id] && m.ports[id].value),
-      here: m.ownerId === '' ? null : m.ownerId === id,
-      ownerId: m.ownerId
-    }));
+    // 每台设备行只展示真正物理连接在该设备上的外接屏（拔掉后立即从该设备行移除）
+    const sharedMonitors = rows
+      .filter((m) => !m.internal && (isThisLocal || isMonitorConnectedToDevice(m, id)))
+      .map((m) => ({
+        id: m.id,
+        name: m.name,
+        internal: false,
+        present: m.present !== false,
+        pos: m.pos || null,
+        letter: letterMap.get(m.id) || '?',
+        port: m.ports[id] ? m.ports[id].label : '未设置',
+        hasPort: !!(m.ports[id] && m.ports[id].value),
+        here: m.ownerId === '' ? null : m.ownerId === id,
+        ownerId: m.ownerId
+      }));
 
     // 本机若物理上没有外接屏且处于单机状态（无任何对端在线），本机拓扑只展示内建屏
     const localExtPresent = monitorsCache.some((m) => !m.internal);
@@ -2731,6 +2802,14 @@ function setPeer(p) { peer = p; }
 
 function onPeers(list) {
   peersNow = list;
+  // 清理已断开设备的远端屏幕缓存
+  const onlineSet = new Set(list.map((p) => p.name));
+  for (const k of remoteInternals.keys()) {
+    if (!onlineSet.has(k)) remoteInternals.delete(k);
+  }
+  for (const k of remoteExternalDisplays.keys()) {
+    if (!onlineSet.has(k)) remoteExternalDisplays.delete(k);
+  }
   // 记住显示名（改名会通过 meta 同步过来）
   if (!cfg.ui.peerLabels) cfg.ui.peerLabels = {};
   if (!cfg.ui.knownPeers) cfg.ui.knownPeers = {};
@@ -2744,7 +2823,11 @@ function onPeers(list) {
           name: intDisp.name || '内建视网膜显示器',
           pos: intDisp.pos || null
         });
+      } else {
+        remoteInternals.delete(p.name);
       }
+      const extDisps = p.displays.filter((d) => d && !d.internal && d.name !== '默认显示器');
+      remoteExternalDisplays.set(p.name, extDisps);
     }
   }
   // 只留最近见过的 8 台，配置文件别无限长
