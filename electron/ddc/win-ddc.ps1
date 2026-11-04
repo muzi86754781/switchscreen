@@ -111,9 +111,10 @@ public class SsDdc
         public uint value;
         public bool done;
         public int code;
+        public bool noRetry;
         public Job(int i, IntPtr h, string d, uint v)
         {
-            index = i; handle = h; desc = d; value = v; done = false; code = 0;
+            index = i; handle = h; desc = d; value = v; done = false; code = 0; noRetry = false;
         }
     }
 
@@ -304,7 +305,7 @@ public class SsDdc
         for (int round = 0; round < 4; round++)
         {
             List<Job> pending = new List<Job>();
-            for (int k = 0; k < jobs.Count; k++) if (!jobs[k].done) pending.Add(jobs[k]);
+            for (int k = 0; k < jobs.Count; k++) if (!jobs[k].done && !jobs[k].noRetry) pending.Add(jobs[k]);
             if (pending.Count == 0) break;
             if (round > 0) Thread.Sleep(round == 1 ? 450 : 800);
 
@@ -314,7 +315,15 @@ public class SsDdc
             for (int k = 0; k < pending.Count; k++)
             {
                 if (okRes[k]) { pending[k].done = true; pending[k].code = 0; }
-                else pending[k].code = codes[k];
+                else
+                {
+                    pending[k].code = codes[k];
+                    uint uc = unchecked((uint)codes[k]);
+                    if (uc == 0xC0262588 || uc == 0xC0262589 || uc == 0xC0262582)
+                    {
+                        pending[k].noRetry = true;
+                    }
+                }
             }
             if (round == 3) break;
 
@@ -326,7 +335,7 @@ public class SsDdc
             for (int k = 0; k < pending.Count; k++)
             {
                 Job j = pending[k];
-                if (j.done) continue;
+                if (j.done || j.noRetry) continue;
                 int hit = TakeBest(fresh, j.desc);
                 if (hit < 0) { j.done = true; j.code = 0; continue; }
 

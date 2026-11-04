@@ -1336,6 +1336,24 @@ textarea.input {
   color: #fff;
 }
 .wb-go:disabled { opacity: 0.45; cursor: default; }
+.wb-remove {
+  appearance: none;
+  font-family: inherit;
+  font-size: 11px;
+  color: #ff8585;
+  background: rgba(255, 90, 90, 0.08);
+  border: 1px solid rgba(255, 90, 90, 0.22);
+  border-radius: 8px;
+  padding: 5px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.wb-remove:hover {
+  background: rgba(255, 70, 70, 0.22);
+  border-color: rgba(255, 90, 90, 0.5);
+  color: #fff;
+}
 
 /* 右列：电脑 + 按系统真实坐标摆开的显示器 */
 .wb-chain { display: flex; align-items: center; gap: 0; min-width: 0; }

@@ -228,7 +228,12 @@ function createPeer(userConfig, hooks) {
       sendToAny({
         type: 'switch-target',
         target,
-        monitors: plan ? (plan.monitors || []) : [],
+        monitors: plan ? (plan.monitors || []).map((m) => ({
+          key: m.key || '',
+          name: m.name || '',
+          value: m.value,
+          label: m.label || ''
+        })) : [],
         plan: plan ? plan.plan : null,
         label
       });
@@ -531,8 +536,12 @@ function createPeer(userConfig, hooks) {
         try {
           const fallback = h.onSwitchTargetFallback(t, msg.monitors, msg.plan);
           if (fallback && fallback.plan) {
-            inputPlan = fallback.plan;
-            if (fallback.label) inputLabel = fallback.label;
+            if (!inputPlan) {
+              inputPlan = fallback.plan;
+            } else if (typeof inputPlan === 'object' && typeof fallback.plan === 'object') {
+              inputPlan = Object.assign({}, fallback.plan, inputPlan);
+            }
+            if (fallback.label && !inputLabel) inputLabel = fallback.label;
           }
         } catch { /* ignore */ }
       }

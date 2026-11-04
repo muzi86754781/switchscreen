@@ -1,7 +1,7 @@
 {
   "name": "switchscreen",
-  "version": "0.9.41",
-  "description": "跨平台软件 KVM：共用键鼠 + 快捷键切换显示器 + 剪贴板跨机同步",
+  "version": "0.9.42",
+  "description": "纯局域网轻量跨平台软件 KVM：键鼠无缝流转共用、硬件级 DDC/CI 多显示器独立/统一切换、极速剪贴板实时同步、P2P 局域网大文件传输、手机扫码免 App 快传",
   "main": "electron/main.js",
   "bin": {
     "switchscreen": "src/cli.js"

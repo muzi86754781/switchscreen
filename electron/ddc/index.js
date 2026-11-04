@@ -341,24 +341,39 @@ async function macBetterDisplaySet(name, decimal) {
   for (const bin of candidates) {
     if (fs.existsSync(bin)) {
       if (name) {
-        const rName = await run(bin, ['set', `-namelike=${name}`, '-vcp=inputSelect', `-ddc=${decimal}`], 4000);
-        if (rName.ok) {
-          if (logger) logger.info('DDC', `macSet success via BetterDisplay CLI (named): name=${name}, ddc=${decimal}`);
+        const r1 = await run(bin, ['set', `-namelike=${name}`, '-vcp=inputSelect', `-value=${decimal}`], 4000);
+        if (r1.ok) {
+          if (logger) logger.info('DDC', `macSet success via BetterDisplay CLI (namelike inputSelect): name=${name}, value=${decimal}`);
+          return { ok: true, via: 'betterdisplay' };
+        }
+        const r2 = await run(bin, ['set', `-namelike=${name}`, '-vcp=0x60', `-value=${decimal}`], 4000);
+        if (r2.ok) {
+          if (logger) logger.info('DDC', `macSet success via BetterDisplay CLI (namelike 0x60): name=${name}, value=${decimal}`);
+          return { ok: true, via: 'betterdisplay' };
+        }
+        const r3 = await run(bin, ['set', `-namelike=${name}`, '-vcp=inputSelect', `-ddc=${decimal}`], 4000);
+        if (r3.ok) {
+          if (logger) logger.info('DDC', `macSet success via BetterDisplay CLI (named ddc fallback): name=${name}, ddc=${decimal}`);
           return { ok: true, via: 'betterdisplay' };
         }
       }
+      const rGenVal = await run(bin, ['set', '-vcp=inputSelect', `-value=${decimal}`], 4000);
+      if (rGenVal.ok) {
+        if (logger) logger.info('DDC', `macSet success via BetterDisplay CLI (generic value): value=${decimal}`);
+        return { ok: true, via: 'betterdisplay' };
+      }
       const rGen = await run(bin, ['set', '-vcp=inputSelect', `-ddc=${decimal}`], 4000);
       if (rGen.ok) {
-        if (logger) logger.info('DDC', `macSet success via BetterDisplay CLI (generic): ddc=${decimal}`);
+        if (logger) logger.info('DDC', `macSet success via BetterDisplay CLI (generic ddc fallback): ddc=${decimal}`);
         return { ok: true, via: 'betterdisplay' };
       }
     }
   }
   try {
-    const q = name ? `namelike=${encodeURIComponent(name)}&ddc=${decimal}&vcp=inputSelect` : `ddc=${decimal}&vcp=inputSelect`;
+    const q = name ? `namelike=${encodeURIComponent(name)}&value=${decimal}&vcp=inputSelect` : `value=${decimal}&vcp=inputSelect`;
     const rHttp = await run('/usr/bin/curl', ['-s', '--max-time', '2', `http://127.0.0.1:55777/set?${q}`], 3000);
     if (rHttp.ok && !/error|failed/i.test(rHttp.out)) {
-      if (logger) logger.info('DDC', `macSet success via BetterDisplay HTTP: ddc=${decimal}`);
+      if (logger) logger.info('DDC', `macSet success via BetterDisplay HTTP: value=${decimal}`);
       return { ok: true, via: 'betterdisplay-http' };
     }
   } catch {}
@@ -414,11 +429,22 @@ async function macSet(index, hexValue, uuid, name) {
   try { await run('/usr/bin/caffeinate', ['-u', '-t', '2'], 2000); } catch {}
 
   if (base === 'm1ddc') {
+    // 切换前唤醒显示器（VCP 0xD6 = 1）
+    try {
+      if (uuid) await run(tool, ['display', uuid, 'set', '0xd6', '1'], 1500);
+      else await run(tool, ['display', String(index), 'set', '0xd6', '1'], 1500);
+    } catch {}
+
     // 1) 优先尝试按 UUID 切换（最精确，抗序号抖动）
     if (uuid) {
       const rUuid = await run(tool, ['display', uuid, 'set', 'input', decimal]);
       if (rUuid.ok) {
         if (logger) logger.info('DDC', `macSet success via UUID: uuid=${uuid}`);
+        return { ok: true, via: base };
+      }
+      const rUuidAlt = await run(tool, ['display', uuid, 'set', 'input-alt', decimal]);
+      if (rUuidAlt.ok) {
+        if (logger) logger.info('DDC', `macSet success via UUID (input-alt): uuid=${uuid}`);
         return { ok: true, via: base };
       }
     }
@@ -428,16 +454,16 @@ async function macSet(index, hexValue, uuid, name) {
       if (logger) logger.info('DDC', `macSet success: index=${index}`);
       return { ok: true, via: base };
     }
-    // 3) 若失败，尝试不带 display 前缀切（默认当前外接屏）
-    const rDef = await run(tool, ['set', 'input', decimal]);
-    if (rDef.ok) {
-      if (logger) logger.info('DDC', `macSet success via default display`);
-      return { ok: true, via: base };
-    }
-    // 4) 尝试 input-alt（部分 LG/DELL 固件版本使用 input-alt）
+    // 3) 尝试 input-alt（部分 LG/DELL 固件版本使用 input-alt）
     const rAlt = await run(tool, ['display', String(index), 'set', 'input-alt', decimal]);
     if (rAlt.ok) {
       if (logger) logger.info('DDC', `macSet success via input-alt: index=${index}`);
+      return { ok: true, via: base };
+    }
+    // 4) 若失败，尝试不带 display 前缀切（默认当前外接屏）
+    const rDef = await run(tool, ['set', 'input', decimal]);
+    if (rDef.ok) {
+      if (logger) logger.info('DDC', `macSet success via default display`);
       return { ok: true, via: base };
     }
 
@@ -649,18 +675,37 @@ async function setInputAll(target, opts) {
   for (const d of list) {
     // Mac 自带屏没有 DDC，绝不参与切屏
     if (IS_MAC && /built-?in|内建|color lcd/i.test(d.name || '')) continue;
-    let v = isMap ? (target[d.index] || target[`ddc:${d.index}`]) : target;
-    if (!v && isMap && o.names) {
-      for (const [k, name] of Object.entries(o.names)) {
-        if (sameName(name, d.name) && (target[k] || target[`ddc:${k}`])) {
-          v = target[k] || target[`ddc:${k}`];
-          break;
+    let v = '';
+    if (isMap) {
+      // 1. 优先按显示器型号名字精准匹配 target 中的值（避免跨平台时数字 index 错配，如 Win 从 0 编号、Mac 从 1 编号）
+      if (o.names) {
+        for (const [k, name] of Object.entries(o.names)) {
+          if (sameName(name, d.name) && (target[k] !== undefined || target[`ddc:${k}`] !== undefined)) {
+            v = target[k] || target[`ddc:${k}`];
+            break;
+          }
         }
       }
-    }
-    if (!v && isMap) {
-      const vals = Object.values(target);
-      if (vals.length === 1) v = vals[0];
+      // 2. 尝试 target key 直接是显示器名称/UUID
+      if (!v) {
+        for (const [k, val] of Object.entries(target)) {
+          if (typeof k === 'string' && (sameName(k, d.name) || (d.uuid && k.includes(d.uuid)))) {
+            v = val;
+            break;
+          }
+        }
+      }
+      // 3. 兜底尝试本地物理序号匹配
+      if (!v && (target[d.index] !== undefined || target[`ddc:${d.index}`] !== undefined)) {
+        v = target[d.index] || target[`ddc:${d.index}`];
+      }
+      // 4. 若 target map 只有一个值，则所有外接屏统一采纳
+      if (!v) {
+        const vals = Object.values(target);
+        if (vals.length === 1) v = vals[0];
+      }
+    } else {
+      v = target;
     }
     if (!v) continue;
     // 显示器当前输入源若已是目标端口（例如已被对端协同提前切好），直接跳过不重复写，彻底消除二次黑屏
@@ -671,10 +716,10 @@ async function setInputAll(target, opts) {
         continue;
       }
     }
-    // 硬件防重复过滤：同一块显示器 4.5 秒内写入过相同目标输入源，绝不再次写入（杜绝黑屏两次）
+    // 硬件防重复过滤：同一块显示器 3 秒内写入过相同目标输入源，绝不再次写入（杜绝黑屏两次）
     const key = `${d.index}|${d.name || ''}`;
     const last = hardwareDdcCache.get(key);
-    if (last && last.hexValue === v && Date.now() - last.time < 4500) {
+    if (!o.force && last && last.hexValue === v && Date.now() - last.time < 3000) {
       continue;
     }
     hardwareDdcCache.set(key, { hexValue: v, time: Date.now() });

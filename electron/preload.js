@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('api', {
   setPort: (monitorId, deviceId, value) => ipcRenderer.invoke('monitor:port', { monitorId, deviceId, value }),
   probePort: (monitorId, deviceId) => ipcRenderer.invoke('monitor:probe', { monitorId, deviceId }),
   switchDevice: (deviceId) => ipcRenderer.invoke('switch:device', deviceId),
+  removeDevice: (deviceId) => ipcRenderer.invoke('device:remove', deviceId),
   switchMonitor: (monitorId, deviceId) => ipcRenderer.invoke('switch:monitor', { monitorId, deviceId }),
   wakeMonitor: (monitorId, deviceId) => ipcRenderer.invoke('monitor:wake', { monitorId, deviceId }),
 

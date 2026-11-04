@@ -671,6 +671,20 @@ function buildWorkbench(s) {
       switchToDevice(d.id);
     });
     actions.appendChild(go);
+
+    if (!d.local && !d.online) {
+      const rm = el('button', 'wb-remove', '移除');
+      rm.type = 'button';
+      rm.title = '移除此离线设备记录';
+      rm.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (confirm(`确定要移除离线设备「${d.name || d.id}」吗？`)) {
+          const res = await window.api.removeDevice(d.id);
+          if (res && res.state) apply(res.state);
+        }
+      });
+      actions.appendChild(rm);
+    }
     left.appendChild(actions);
     row.appendChild(left);
 

@@ -371,6 +371,93 @@ function setArrange(list) {
   return arrangeOrder();
 }
 
+/** 移除已离线的设备：清除其已知记录、接口映射与排布 */
+function removeDevice(deviceId) {
+  if (!deviceId || deviceId === cfg.peerName) return false;
+  // 若设备当前仍在线，不允许移除（先断开或关机后可移除）
+  if (peersNow.some((p) => p.name === deviceId)) {
+    pushStatus(`设备 ${deviceId} 仍在线，无法移除`, 'warn');
+    return false;
+  }
+  let changed = false;
+
+  // 1. 从已知设备表中移除
+  if (cfg.ui && cfg.ui.knownPeers && cfg.ui.knownPeers[deviceId]) {
+    delete cfg.ui.knownPeers[deviceId];
+    changed = true;
+  }
+  if (cfg.peers && cfg.peers[deviceId]) {
+    delete cfg.peers[deviceId];
+    changed = true;
+  }
+  if (cfg.ui && cfg.ui.peerLabels && cfg.ui.peerLabels[deviceId]) {
+    delete cfg.ui.peerLabels[deviceId];
+    changed = true;
+  }
+
+  // 2. 清理 portMap 与 portSrc 中的该设备端口配置
+  if (cfg.ui && cfg.ui.portMap) {
+    for (const [k, t] of Object.entries(cfg.ui.portMap)) {
+      if (t && Object.prototype.hasOwnProperty.call(t, deviceId)) {
+        delete t[deviceId];
+        changed = true;
+      }
+    }
+  }
+  if (cfg.ui && cfg.ui.portSrc) {
+    for (const [k, t] of Object.entries(cfg.ui.portSrc)) {
+      if (t && Object.prototype.hasOwnProperty.call(t, deviceId)) {
+        delete t[deviceId];
+        changed = true;
+      }
+    }
+  }
+
+  // 3. 清理 ownerMap 归属
+  if (cfg.ui && cfg.ui.ownerMap) {
+    for (const [k, owner] of Object.entries(cfg.ui.ownerMap)) {
+      if (owner === deviceId) {
+        delete cfg.ui.ownerMap[k];
+        changed = true;
+      }
+    }
+  }
+
+  // 4. 从设备排布、目标设备列表清理
+  if (cfg.ui && Array.isArray(cfg.ui.arrange)) {
+    const before = cfg.ui.arrange.length;
+    cfg.ui.arrange = cfg.ui.arrange.filter((id) => id !== deviceId);
+    if (cfg.ui.arrange.length !== before) changed = true;
+  }
+  if (cfg.ui && Array.isArray(cfg.ui.targetPeers)) {
+    const before = cfg.ui.targetPeers.length;
+    cfg.ui.targetPeers = cfg.ui.targetPeers.filter((id) => id !== deviceId);
+    if (cfg.ui.targetPeers.length !== before) changed = true;
+  }
+  if (cfg.ui && cfg.ui.targetPeer === deviceId) {
+    cfg.ui.targetPeer = '';
+    changed = true;
+  }
+  if (cfg._lastRemoteName === deviceId) {
+    delete cfg._lastRemoteName;
+    changed = true;
+  }
+
+  // 5. 清理 authority 快照中该设备的痕迹
+  if (cfg.ui && cfg.ui.authority && Array.isArray(cfg.ui.authority.screens)) {
+    for (const s of cfg.ui.authority.screens) {
+      if (s && s.owner === deviceId) s.owner = '';
+      if (s && s.ports && s.ports[deviceId]) delete s.ports[deviceId];
+    }
+  }
+
+  if (changed) {
+    persist();
+    pushStatus(`已移除离线设备 ${deviceId}`, 'ok');
+  }
+  return changed;
+}
+
 /* ---------------- 每块屏 × 每台设备的接口 ---------------- */
 
 /** 把各种写法的接口值归一成 0x11 这种形式（macOS 侧读到的是十进制 17） */
@@ -1770,7 +1857,7 @@ function buildSwitchPlan(targetId) {
     if (recent && recent.target === targetId && Date.now() - recent.at < 4500) { already += 1; continue; }
     if (!label) label = labelForInput(value);
     map[m.index] = value;
-    monitors.push({ name: m.name, index: m.index, value, label: labelForInput(value) });
+    monitors.push({ name: m.name, key: portKey(m), index: m.index, value, label: labelForInput(value) });
   }
 
   const count = Object.keys(map).length;
@@ -1804,7 +1891,11 @@ function onSwitchTargetFallback(targetId, peerMonitors, peerPlan) {
     if (m.internal || typeof m.index !== 'number' || m.isOffline) continue;
     let val = portFor(m.id || m.key, targetId);
     if (!val && list.length) {
-      const pm = list.find((p) => p && (modelNameHit(p.name, m.name) || (normName(p.name) && normName(p.name) === normName(m.name))));
+      const pm = list.find((p) => p && (
+        (p.key && p.key === portKey(m)) ||
+        modelNameHit(p.name, m.name) ||
+        (normName(p.name) && normName(p.name) === normName(m.name))
+      ));
       if (pm && pm.value) {
         val = normInput(pm.value);
         if (val) setPort(m.id || m.key, targetId, val);
@@ -1817,8 +1908,6 @@ function onSwitchTargetFallback(targetId, peerMonitors, peerPlan) {
 
     const cur = trustedInput(m);
     if (cur && sameInput(cur, val) && ownerOf(m) === targetId) continue;
-    const recent = recentSwitchLock.get(portKey(m));
-    if (recent && recent.target === targetId && Date.now() - recent.at < 4500) continue;
 
     if (!label) label = labelForInput(val);
     map[m.index] = val;
@@ -2649,10 +2738,8 @@ function onFileUpdate(list) {
  */
 async function onSwitchRequest({ input, label, from, index, target }) {
   logger.info('SWITCH', `onSwitchRequest: index=${index}, input=${JSON.stringify(input)}, label=${label}, target=${target}, from=${from || 'local'}`);
-  // 当目标是切回本机，前置触发硬件视频管道唤醒（激活 DPMS、鼠标微动、唤醒显卡像素时钟输出），为外接屏（如 DELL U2414H）提供稳定的视频同步信号
-  if (!target || target === cfg.peerName) {
-    try { await ddc.wakeDisplay(typeof index === 'number' ? index : -1, typeof input === 'string' ? input : ''); } catch {}
-  }
+  // 无论切回本机还是配合对端协同，先清空硬件写入缓存并唤醒视频管道（激活 DPMS、鼠标微动、唤醒显卡像素时钟输出）
+  try { await ddc.wakeDisplay(typeof index === 'number' ? index : -1, typeof input === 'string' ? input : ''); } catch {}
   // 指定了 index = 只切这一台显示器
   if (typeof index === 'number') {
     const value = typeof input === 'string' ? input : Object.values(input || {})[0];
@@ -2697,7 +2784,15 @@ async function onSwitchRequest({ input, label, from, index, target }) {
         }
       } else {
         for (const [idx, v] of Object.entries(input || {})) {
-          const m = monitorsCache.find((x) => x.index === Number(idx));
+          const numIdx = Number(idx);
+          if (r.results && Array.isArray(r.results)) {
+            const itemRes = r.results.find((res) => res.index === numIdx);
+            if (itemRes && itemRes.ok === false) {
+              logger.warn('SWITCH', `Display index=${numIdx} failed in local apply, skipping applySwitched`);
+              continue;
+            }
+          }
+          const m = monitorsCache.find((x) => x.index === numIdx);
           if (!m) continue;
           applySwitched(target, m, v);
           if (!portFor(m.id, target) && normInput(v)) {
@@ -3021,6 +3116,7 @@ module.exports = {
   migratePortKeys,
   refreshScreenLayout,
   nextDevice,
+  removeDevice,
   labelForInput,
   targetPeerNames,
   setTargetPeers,

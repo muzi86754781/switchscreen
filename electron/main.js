@@ -1118,6 +1118,13 @@ function registerIpc() {
     return { result: r, state: services.getState() };
   });
 
+  ipcMain.handle('device:remove', async (_e, deviceId) => {
+    logger.info('IPC', `ipc device:remove invoked: ${deviceId}`);
+    const ok = services.removeDevice(deviceId);
+    broadcastState();
+    return { ok, state: services.getState() };
+  });
+
   ipcMain.handle('switch:monitor', async (_e, { monitorId, deviceId } = {}) => {
     logger.info('IPC', `ipc switch:monitor invoked: monitorId=${monitorId}, deviceId=${deviceId}`);
     await doSwitchMonitor(monitorId, deviceId || '');
