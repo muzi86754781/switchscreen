@@ -668,10 +668,8 @@ function migratePortKeys() {
   return n;
 }
 
-function portFor(monitorId, deviceId) {
-  if (!monitorId || !deviceId) return '';
-  const m = findMonitor(monitorId);
-  const primaryKey = m ? portKey(m) : portKeyOf(monitorId);
+function lookupPortDirect(primaryKey, monName, monSerial, deviceId) {
+  if (!primaryKey || !deviceId) return '';
 
   // 1. 优先查候选 key 集合
   const candidateKeys = [];
@@ -680,15 +678,15 @@ function portFor(monitorId, deviceId) {
   const alias = (cfg.ui && cfg.ui.portAlias && (cfg.ui.portAlias[primaryKey] || cfg.ui.portAlias[String(primaryKey).toLowerCase()])) || '';
   if (alias && !candidateKeys.includes(alias)) candidateKeys.push(alias);
 
-  const monName = (m && m.name) || (cfg.ui && cfg.ui.screenMemo && cfg.ui.screenMemo[primaryKey] && cfg.ui.screenMemo[primaryKey].name) || '';
-  if (monName) {
-    const nmKey = 'nm:' + normName(monName);
+  const resolvedName = monName || (cfg.ui && cfg.ui.screenMemo && cfg.ui.screenMemo[primaryKey] && cfg.ui.screenMemo[primaryKey].name) || '';
+  if (resolvedName) {
+    const nmKey = 'nm:' + normName(resolvedName);
     if (!candidateKeys.includes(nmKey)) candidateKeys.push(nmKey);
   }
 
-  const monSerial = (m && m.serial) || (cfg.ui && cfg.ui.screenMemo && cfg.ui.screenMemo[primaryKey] && cfg.ui.screenMemo[primaryKey].serial) || '';
-  if (monSerial && monSerial.length > 2) {
-    const snKey = 'sn:' + String(monSerial).toLowerCase();
+  const resolvedSerial = monSerial || (cfg.ui && cfg.ui.screenMemo && cfg.ui.screenMemo[primaryKey] && cfg.ui.screenMemo[primaryKey].serial) || '';
+  if (resolvedSerial && String(resolvedSerial).trim().length > 2) {
+    const snKey = 'sn:' + String(resolvedSerial).trim().toLowerCase();
     if (!candidateKeys.includes(snKey)) candidateKeys.push(snKey);
   }
 
@@ -702,19 +700,41 @@ function portFor(monitorId, deviceId) {
     }
 
     // 2. 跨平台模糊认领（例如 Windows 存的是 sn:gn64v6cg08tl，而 macOS 只能读到 nm:dellu2414h）
-    if (monName) {
+    if (resolvedName) {
       for (const [pk, t] of Object.entries(cfg.ui.portMap)) {
         if (!t || !Object.prototype.hasOwnProperty.call(t, deviceId)) continue;
         const v = normInput(t[deviceId]);
         if (!v) continue;
-        if (pk.startsWith('nm:') && modelNameHit(pk.slice(3), monName)) return v;
+        if (pk.startsWith('nm:') && modelNameHit(pk.slice(3), resolvedName)) return v;
         const memo = cfg.ui.screenMemo && cfg.ui.screenMemo[pk];
-        if (memo && memo.name && modelNameHit(memo.name, monName)) return v;
+        if (memo && memo.name && modelNameHit(memo.name, resolvedName)) return v;
       }
     }
   }
 
+  // 3. 兜底从 authority.screens 查找
+  const authScreens = (cfg.ui && cfg.ui.authority && cfg.ui.authority.screens) || [];
+  for (const s of authScreens) {
+    if (!s || !s.ports || !s.ports[deviceId]) continue;
+    if (candidateKeys.includes(s.key) || (resolvedName && s.name && modelNameHit(s.name, resolvedName))) {
+      const v = normInput(s.ports[deviceId]);
+      if (v) return v;
+    }
+  }
+
   return '';
+}
+
+function portFor(monitorId, deviceId) {
+  if (!monitorId || !deviceId) return '';
+  if (typeof monitorId === 'object') {
+    const pk = monitorId.key || portKey(monitorId) || monitorId.id || '';
+    return lookupPortDirect(pk, monitorId.name, monitorId.serial, deviceId);
+  }
+  const m = findMonitor(monitorId);
+  const alias = (cfg.ui && cfg.ui.portAlias && (cfg.ui.portAlias[monitorId] || cfg.ui.portAlias[String(monitorId).toLowerCase()])) || '';
+  const primaryKey = m ? portKey(m) : (alias || String(monitorId));
+  return lookupPortDirect(primaryKey, m && m.name, m && m.serial, deviceId);
 }
 
 /**
@@ -1094,9 +1114,11 @@ function ownerOf(m) {
   // 内建屏只能显示笔记本自己（合盖休眠时不算）
   if (m.internal) return selfAwake ? cfg.peerName : '';
 
-  // 若该显示器仅连接在本机（对端未连接或已拔掉视频线），则必然归属本机
-  if (connectedDeviceCount(m) === 1 && isMonitorConnectedToDevice(m, cfg.peerName)) {
-    return cfg.peerName;
+  // 若该显示器当前仅连接在某一台设备上（其它设备未连接或已拔掉视频线），则必然归属该设备
+  if (connectedDeviceCount(m) === 1) {
+    if (isMonitorConnectedToDevice(m, cfg.peerName)) return cfg.peerName;
+    const onlyPeer = peersNow.find((p) => p && p.name && isMonitorConnectedToDevice(m, p.name));
+    if (onlyPeer) return onlyPeer.name;
   }
 
   // 1) 本机自证：读得到当前输入源，并且它等于某台当前已连接该屏的设备配过的口
@@ -1560,11 +1582,73 @@ function applyAuthority(a) {
 }
 
 /**
- * 离线记忆屏：当显示器物理线被拔掉后，不应再从历史 authority 或 screenMemo 中把已拔掉的屏强行塞回列表，
- * 确保拔掉显示器后本机与对端都能立即识别出该显示器已不在。
+ * 远端在线设备独连屏（本机未连接、但某台在线对端正物理连接的外接屏）：
+ * - 绝不从历史 authority 或 screenMemo 塞回已从所有设备拔掉的幽灵屏；
+ * - 但若某块屏从本机拔掉了（如从 Mac 拔掉了 DELL S2316M），而仍连接在远端（如 Windows 端），
+ *   必须把它加入全局显示器拓扑，这样 Mac 界面上的 Windows 设备行才能完整显示这台 2316 显示器，
+ *   同时 Mac 本机行通过 isMonitorConnectedToDevice 过滤，不会显示这台已从 Mac 拔掉的显示器。
  */
 function offlineRows() {
-  return [];
+  const out = [];
+  for (const [peerId, remList] of remoteExternalDisplays.entries()) {
+    if (!peersNow.some((p) => p && p.name === peerId)) continue;
+    for (const d of (remList || [])) {
+      if (!d || d.internal) continue;
+      if (isGenericName(d.name) || /^(显示器|默认显示器)\s*\d*$/i.test(String(d.name || '').trim())) continue;
+      // 若本机已连接该屏幕，已在 monitorRows() 中，跳过
+      if (monitorsCache.some((m) => !m.internal && matchDisplayEntry(m, d))) continue;
+      // 若已由其它在线对端加入 out，跳过
+      if (out.some((x) => matchDisplayEntry(x, d))) continue;
+
+      const sKey = d.key || screenKey(d);
+      const rowId = `mem:${sKey}`;
+      const ports = {};
+      for (const devId of deviceIds()) {
+        const pv = lookupPortDirect(sKey, d.name, d.serial, devId);
+        const srcMap = cfg.ui && cfg.ui.portSrc && cfg.ui.portSrc[sKey];
+        ports[devId] = {
+          value: pv,
+          label: pv ? labelForInput(pv) : '未设置',
+          src: (srcMap && srcMap[devId]) || ''
+        };
+      }
+
+      const tempMon = { id: rowId, key: sKey, name: d.name || '', serial: d.serial || '', internal: false };
+      const connPeers = peersNow.filter((p) => p && p.name && isMonitorConnectedToDevice(tempMon, p.name)).map((p) => p.name);
+      let ownerId = peerId;
+      if (connPeers.length === 1) {
+        ownerId = connPeers[0];
+      } else if (connPeers.length > 1) {
+        const authHit = authorityEntryFor(tempMon);
+        if (authHit && authHit.owner && connPeers.includes(authHit.owner)) {
+          ownerId = authHit.owner;
+        } else {
+          const saved = (cfg.ui && cfg.ui.ownerMap && cfg.ui.ownerMap[sKey]) || '';
+          ownerId = (saved && connPeers.includes(saved)) ? saved : connPeers[0];
+        }
+      }
+
+      out.push({
+        id: rowId,
+        key: sKey,
+        index: null,
+        name: d.name || sKey,
+        serial: d.serial || '',
+        internal: false,
+        hasDdc: false,
+        present: true,
+        isOffline: true,
+        currentInput: '',
+        currentInputLabel: '',
+        ownerId,
+        ownerLabel: ownerId ? deviceInfo(ownerId).name : '',
+        ports,
+        pos: d.pos || null,
+        deviceCount: Object.values(ports).filter((p) => p.value).length
+      });
+    }
+  }
+  return out;
 }
 
 function monitorRows() {
@@ -1598,6 +1682,31 @@ function monitorRows() {
   });
 }
 
+function sortCombinedMonitorRows(rows) {
+  if (!rows || rows.length <= 1) return rows;
+  let refList = null;
+  for (const [peerId, remList] of remoteExternalDisplays.entries()) {
+    if (!peersNow.some((p) => p && p.name === peerId)) continue;
+    if (Array.isArray(remList) && remList.length > 1) {
+      refList = remList;
+      break;
+    }
+  }
+  if (!refList) return rows;
+  const origIdx = new Map();
+  rows.forEach((r, i) => origIdx.set(r, i));
+  return rows.slice().sort((a, b) => {
+    if (a.internal !== b.internal) return a.internal ? 1 : -1;
+    if (a.internal && b.internal) return origIdx.get(a) - origIdx.get(b);
+    const ra = refList.find((d) => matchDisplayEntry(a, d));
+    const rb = refList.find((d) => matchDisplayEntry(b, d));
+    if (ra && rb && ra.pos && rb.pos && ra.pos.x !== rb.pos.x) {
+      return ra.pos.x - rb.pos.x;
+    }
+    return origIdx.get(a) - origIdx.get(b);
+  });
+}
+
 /**
  * 汇总当前所有显示器（活跃外接屏 + 活跃内建屏 + 离线记忆屏）。
  * 保证界面卡片、快捷键列表、托盘菜单里的显示器代号（A/B/C...）完全一致。
@@ -1605,7 +1714,7 @@ function monitorRows() {
 function allMonitors() {
   const active = monitorRows();
   const offline = offlineRows();
-  const all = active.concat(offline);
+  const all = sortCombinedMonitorRows(active.concat(offline));
   const letterMap = new Map();
   let seq = 0;
   for (const m of all) if (!m.internal) letterMap.set(m.id, String.fromCharCode(65 + (seq++ % 26)));
@@ -2319,19 +2428,36 @@ async function doDetectMonitors() {
       const r = await ddc.listDisplays();
       if (r.ok && r.displays.length) {
         via = r.via;
-        let ddcList = r.displays.filter((d) => !INTERNAL_LABEL.test(d.name || '') && !/^\(?null\)?$/i.test(String(d.name || '').trim()));
-        if (r.via === 'ddcctl' && friendly.length && friendly.length < ddcList.length) {
-          ddcList = ddcList.slice(0, friendly.length);
+        const isGeneric = (n) => !n || /^\(?null\)?$/i.test(String(n).trim()) || /^(显示器|默认显示器)\s*\d*$/i.test(String(n).trim());
+        let ddcList = r.displays.filter((d) => !INTERNAL_LABEL.test(d.name || ''));
+        if (IS_MAC && friendly.length && ddcList.length > friendly.length) {
+          // 优先剔除 m1ddc 中可能混入的无名占位项（如内建屏输出为 (null) 变成的 显示器 1），直到数量与系统外接屏数对齐
+          while (ddcList.length > friendly.length && ddcList.some((d) => isGeneric(d.name))) {
+            const idx = ddcList.findIndex((d) => isGeneric(d.name));
+            if (idx >= 0) ddcList.splice(idx, 1);
+            else break;
+          }
+          if (ddcList.length > friendly.length) {
+            ddcList = ddcList.slice(0, friendly.length);
+          }
         }
         const byHwid = new Map();
         for (const f of friendly) if (f.hwid) byHwid.set(f.hwid, f);
-        list = ddcList.map((d, i) => {
+        const usedFriendly = new Set();
+        const matchedFriendly = ddcList.map((d) => {
           let f = d.hwid ? (byHwid.get(d.hwid) || null) : null;
-          if (!f && d.name) {
-            f = friendly.find((item) => modelNameHit(item.name, d.name) || (item.serial && d.serial && item.serial === d.serial));
+          if (!f && d.name && !isGeneric(d.name)) {
+            f = friendly.find((item) => !usedFriendly.has(item) && (modelNameHit(item.name, d.name) || (item.serial && d.serial && item.serial === d.serial)));
           }
-          if (!f && friendly[i]) f = friendly[i];
-          const isGeneric = (n) => !n || /^(显示器|默认显示器)\s*\d*$/i.test(String(n).trim());
+          if (f) usedFriendly.add(f);
+          return f;
+        });
+        list = ddcList.map((d, i) => {
+          let f = matchedFriendly[i];
+          if (!f) {
+            f = friendly.find((item) => !usedFriendly.has(item)) || friendly[i] || null;
+            if (f) usedFriendly.add(f);
+          }
           const bestName = (!isGeneric(d.name) ? d.name : (f && !isGeneric(f.name) ? f.name : (d.name || (f && f.name) || `显示器 ${d.index}`)));
           return {
             id: `ddc:${d.index}`,
@@ -2614,7 +2740,7 @@ function getState() {
   const connected = peersNow.length > 0;
   // 本机此刻看不见、但局域网里公认存在的屏也要列出来 —— 被切到别的电脑上的屏
   // 如果凭空消失，用户只会以为软件丢了屏，看不出「它正在显示另一台电脑」
-  const rows = monitorRows().concat(offlineRows());
+  const rows = sortCombinedMonitorRows(monitorRows().concat(offlineRows()));
   const arrange = arrangeOrder();
   // 最早打开本软件的那台是主控：它的状态是初始权威，后开的都照它同步
   const primary = primaryDevice();
@@ -2629,22 +2755,28 @@ function getState() {
   const devices = arrange.map((id, di) => {
     const info = deviceInfo(id);
     const isThisLocal = info.local;
+    const remList = !isThisLocal && remoteExternalDisplays.has(id) ? (remoteExternalDisplays.get(id) || []) : null;
 
-    // 每台设备行只展示真正物理连接在该设备上的外接屏（拔掉后立即从该设备行移除）
+    // 每台设备行只展示真正物理连接在该设备上的外接屏：
+    // - 本机行只展示本机物理连接的外接屏（已从本机拔掉的屏绝不显示在本机行）
+    // - 远端设备行完整展示该远端设备物理连接的所有外接屏（含仅连接在远端的独连屏）
     const sharedMonitors = rows
-      .filter((m) => !m.internal && (isThisLocal || isMonitorConnectedToDevice(m, id)))
-      .map((m) => ({
-        id: m.id,
-        name: m.name,
-        internal: false,
-        present: m.present !== false,
-        pos: m.pos || null,
-        letter: letterMap.get(m.id) || '?',
-        port: m.ports[id] ? m.ports[id].label : '未设置',
-        hasPort: !!(m.ports[id] && m.ports[id].value),
-        here: m.ownerId === '' ? null : m.ownerId === id,
-        ownerId: m.ownerId
-      }));
+      .filter((m) => !m.internal && isMonitorConnectedToDevice(m, id))
+      .map((m) => {
+        const remHit = remList ? remList.find((d) => matchDisplayEntry(m, d)) : null;
+        return {
+          id: m.id,
+          name: m.name,
+          internal: false,
+          present: m.present !== false,
+          pos: (!isThisLocal && remHit && remHit.pos) ? remHit.pos : (m.pos || null),
+          letter: letterMap.get(m.id) || '?',
+          port: m.ports[id] ? m.ports[id].label : '未设置',
+          hasPort: !!(m.ports[id] && m.ports[id].value),
+          here: m.ownerId === '' ? null : m.ownerId === id,
+          ownerId: m.ownerId
+        };
+      });
 
     // 本机若物理上没有外接屏且处于单机状态（无任何对端在线），本机拓扑只展示内建屏
     const localExtPresent = monitorsCache.some((m) => !m.internal);
