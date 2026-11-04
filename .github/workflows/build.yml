@@ -43,11 +43,13 @@ jobs:
   macos:
     # macOS 13 (Ventura) 既可能是 Intel 也可能是 Apple Silicon，两种架构都要出包；
     # 原生模块(i hook/robotjs)必须按目标架构分别编译，所以用矩阵而不是一次编两个 arch。
+    # 显式使用 macos-15 并限制 max-parallel: 1，防止 GitHub Actions macOS 资源池因并发请求超限导致挂起超时
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
-        arch: [x64, arm64]
-    runs-on: macos-latest
+        arch: [arm64, x64]
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -128,4 +130,3 @@ jobs:
           prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
