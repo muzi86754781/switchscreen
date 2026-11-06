@@ -26,7 +26,9 @@ function startDiscovery({ port, peerName, displayName, onPeer }) {
     if (pkt.name === peerName) return; // 自己
     const key = `${pkt.name}@${rinfo.address}`;
     const last = seen.get(key) || 0;
-    if (Date.now() - last < 60000) return;
+    // 2.5s 防抖即可（已连接判断由 peer.js 的 peers.has / connectingPeers 负责），
+    // 避免对端重启或断线后要干等 60 秒才能重连
+    if (Date.now() - last < 2500) return;
     seen.set(key, Date.now());
     onPeer({
       name: pkt.name,

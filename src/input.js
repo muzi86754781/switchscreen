@@ -122,7 +122,13 @@ function bindCaptureOnce() {
     if (!token) return;
     const cfg = o.getOptions();
     const mapped = mapModifier(token, cfg.selfPlatform, cfg.peerPlatform, cfg.modMap);
-    if (typeof o.onKey === 'function') o.onKey({ token: mapped, raw: token, up });
+    const rawMods = [];
+    if (e.ctrlKey) rawMods.push('control');
+    if (e.metaKey) rawMods.push('meta');
+    if (e.altKey) rawMods.push('alt');
+    if (e.shiftKey) rawMods.push('shift');
+    const mods = [...new Set(rawMods.map((m) => mapModifier(m, cfg.selfPlatform, cfg.peerPlatform, cfg.modMap)))];
+    if (typeof o.onKey === 'function') o.onKey({ token: mapped, raw: token, up, mods });
     if (cfg.keyDebug && typeof o.onDebug === 'function' && !up) {
       o.onDebug(`按键 keycode=${e.keycode} → ${token}${mapped !== token ? ` → ${mapped}` : ''}`);
     }
@@ -379,13 +385,37 @@ function createInjector() {
     try { ensureRobot().scroll(Math.round(dx) || 0, Math.round(dy) || 0); } catch { /* ignore */ }
   }
 
-  function key(token, up) {
+  function key(token, up, evMods) {
     const name = toRobot(token);
     if (!name) return;
-    try { ensureRobot().keyToggle(name, up ? 'up' : 'down'); } catch { /* ignore */ }
     if (MODS.has(token)) {
       if (up) pressed.delete(token); else pressed.add(token);
+    } else if (!up && Array.isArray(evMods)) {
+      // 确保随事件携带的修饰键已在受控端处于按下状态（防切换瞬间漏掉修饰键按下事件）
+      for (const m of evMods) {
+        if (MODS.has(m) && !pressed.has(m)) {
+          pressed.add(m);
+          const mName = toRobot(m);
+          if (mName) {
+            try { ensureRobot().keyToggle(mName, 'down'); } catch { /* ignore */ }
+          }
+        }
+      }
     }
+    try {
+      // macOS 下 robotjs.keyToggle 底层调用 CGEventSetFlags(keyEvent, flags)，
+      // 若不传第 3 个参数 modifiers 数组，flags 会被置为 0，从而抹掉 Command/Shift/Control/Alt 修饰键标志（导致 ⌘C 退化为普通 c）！
+      if (process.platform === 'darwin') {
+        const modTokens = new Set([...pressed, ...(Array.isArray(evMods) ? evMods : [])]);
+        if (up && MODS.has(token)) modTokens.delete(token);
+        const mods = [...modTokens].map(toRobot).filter(Boolean);
+        if (mods.length > 0) {
+          ensureRobot().keyToggle(name, up ? 'up' : 'down', mods);
+          return;
+        }
+      }
+      ensureRobot().keyToggle(name, up ? 'up' : 'down');
+    } catch { /* ignore */ }
   }
 
   function button(btn, down) {

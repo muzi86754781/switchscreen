@@ -34,6 +34,7 @@ function createPeer(userConfig, hooks) {
 
   const peers = new Map();       // name -> ws
   const peersMeta = new Map();   // name -> { name, label, platform, screen }
+  const connectingPeers = new Map(); // name -> timestamp
   let activePeer = myName;
   let capture = null;
   let captureError = '';
@@ -89,15 +90,26 @@ function createPeer(userConfig, hooks) {
 
   function send(msg) {
     const ws = peers.get(activePeer);
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+    if (ws && ws.readyState === 1) {
+      try { ws.send(JSON.stringify(msg)); return true; } catch { /* ignore */ }
+    }
+    return false;
   }
   function broadcast(msg) {
     const s = JSON.stringify(msg);
-    for (const ws of peers.values()) if (ws.readyState === 1) ws.send(s);
+    let sent = 0;
+    for (const ws of peers.values()) {
+      if (ws.readyState === 1) {
+        try { ws.send(s); sent += 1; } catch { /* ignore */ }
+      }
+    }
+    return sent > 0;
   }
   function sendTo(name, msg) {
     const ws = peers.get(name);
-    if (ws && ws.readyState === 1) { ws.send(JSON.stringify(msg)); return true; }
+    if (ws && ws.readyState === 1) {
+      try { ws.send(JSON.stringify(msg)); return true; } catch { /* ignore */ }
+    }
     return false;
   }
 
@@ -202,6 +214,9 @@ function createPeer(userConfig, hooks) {
     let detail = null;
     let label = '';
     let plan = null;
+
+    // 切换设备/交接键鼠前立即刷一次本地剪贴板，确保用户刚按完 ⌘C / Ctrl+C 立刻切屏时剪贴板 100% 同步到位
+    try { clipboard.flush(); } catch { /* ignore */ }
 
     // 「切换电脑 / 显示器」是主功能，优先级高于无缝键鼠：
     // 手动切换后先压住自动穿越一小会儿，免得鼠标还停在屏幕边上、一动就又弹回去。
@@ -453,7 +468,7 @@ function createPeer(userConfig, hooks) {
   }
 
   function onKey(ev) {
-    send({ type: 'input', ev: { kind: 'key', token: ev.token, up: !!ev.up } });
+    send({ type: 'input', ev: { kind: 'key', token: ev.token, up: !!ev.up, mods: ev.mods } });
   }
   function onWheel(dx, dy) {
     send({ type: 'input', ev: { kind: 'wheel', dx, dy } });
@@ -474,12 +489,23 @@ function createPeer(userConfig, hooks) {
     }
     if (fileTransfer.handle(msg, name)) return;
 
-    if (msg.type === 'clipboard') clipboard.onRemoteClipboard(msg.text);
+    if (msg.type === 'clipboard') clipboard.onRemoteClipboard(msg);
+    else if (msg.type === 'clip-sync') {
+      if (typeof msg.enabled === 'boolean' && cfg.clipboardSync !== msg.enabled) {
+        cfg.clipboardSync = msg.enabled;
+        if (typeof h.onClipSync === 'function') h.onClipSync(msg.enabled);
+        if (msg.enabled) {
+          try { clipboard.flush(); } catch { /* ignore */ }
+        }
+      }
+    }
     else if (msg.type === 'meta') {
       const meta = peersMeta.get(name) || { name };
       const before = meta.label;
+      const beforeBootAt = Number(meta.bootAt) || 0;
       const beforeDisplays = JSON.stringify(meta.displays || null);
       meta.platform = msg.platform || meta.platform || 'unknown';
+      if (msg.bootAt) meta.bootAt = Number(msg.bootAt) || 0;
       if (msg.screen && msg.screen.width) {
         meta.screen = msg.screen;
         // 注入端按对端的桌面范围算虚拟指针，多显示器时不会顶死在主屏边界
@@ -488,11 +514,11 @@ function createPeer(userConfig, hooks) {
       if (Array.isArray(msg.displays)) meta.displays = msg.displays;
       if (msg.displayName) meta.label = msg.displayName;
       peersMeta.set(name, meta);
-      if (meta.label !== before || JSON.stringify(meta.displays || null) !== beforeDisplays) notifyPeers();
+      if (meta.label !== before || meta.bootAt !== beforeBootAt || JSON.stringify(meta.displays || null) !== beforeDisplays) notifyPeers();
     }
     else if (msg.type === 'input') {
       const ev = msg.ev || {};
-      if (ev.kind === 'key') injector.key(ev.token, !!ev.up);
+      if (ev.kind === 'key') injector.key(ev.token, !!ev.up, ev.mods);
       else if (ev.kind === 'move') injector.move(ev.dx, ev.dy);
       else if (ev.kind === 'wheel') injector.wheel(ev.dx, ev.dy);
       else if (ev.kind === 'button') injector.button(ev.button, !!ev.down);
@@ -501,6 +527,7 @@ function createPeer(userConfig, hooks) {
     else if (msg.type === 'input-mode') applyRemoteInputMode(msg.mode, name);
     else if (msg.type === 'input-master') applyRemoteInputMaster(msg.master, msg.edgeSwitch);
     else if (msg.type === 'switch-input') {
+      try { clipboard.flush(); } catch { /* ignore */ }
       if (msg.target) applySwitch(msg.target, { inputOnly: true }).catch(() => {});
     }
     else if (msg.type === 'ports') {
@@ -588,6 +615,8 @@ function createPeer(userConfig, hooks) {
       }
     }
     else if (msg.type === 'active') {
+      // 对端切换激活设备时，顺手刷一次本机剪贴板（防止刚在本机复制完就在对端触发了切换）
+      try { clipboard.flush(); } catch { /* ignore */ }
       // 各端必须对「当前画面在哪台」保持一致，否则下一次切换会由错误的机器执行 DDC
       const t = msg.target;
       if (t && t !== activePeer && (t === myName || peers.has(t))) {
@@ -617,7 +646,17 @@ function createPeer(userConfig, hooks) {
   }
 
   function track(ws, name, peerPlatform, label) {
-    peers.set(name, ws);
+    connectingPeers.delete(name);
+    const prevWs = peers.get(name);
+    if (prevWs && prevWs !== ws) {
+      // 如果已有同一对端的旧连接，先替换为新连接再关闭旧连接；
+      // 下方 close 回调会严格校验 peers.get(name) === ws，绝不会因旧连接关闭把新连接从 peers 中误删！
+      peers.set(name, ws);
+      try { prevWs.close(); } catch { /* ignore */ }
+    } else {
+      peers.set(name, ws);
+    }
+
     const meta = peersMeta.get(name) || { name };
     meta.platform = peerPlatform || meta.platform || 'unknown';
     if (label) meta.label = label;
@@ -645,13 +684,37 @@ function createPeer(userConfig, hooks) {
       const a = typeof h.getAuthority === 'function' ? h.getAuthority() : null;
       if (a && a.screens && a.screens.length) ws.send(JSON.stringify({ type: 'authority', ...a }));
     } catch { /* ignore */ }
+    // 对端连上后触发一次剪贴板检查（补发连接前已复制的挂起内容）
+    setTimeout(() => { try { clipboard.flush(); } catch { /* ignore */ } }, 200);
+
+    // WebSocket 双向心跳保活：及时清理休眠或闪断造成的半开死连接
+    let missedPings = 0;
+    ws.on('pong', () => { missedPings = 0; });
+    const hbTimer = setInterval(() => {
+      if (ws.readyState !== 1) {
+        clearInterval(hbTimer);
+        return;
+      }
+      if (missedPings >= 3) {
+        clearInterval(hbTimer);
+        try { ws.terminate(); } catch { /* ignore */ }
+        return;
+      }
+      missedPings += 1;
+      try { ws.ping(); } catch { /* ignore */ }
+    }, 6000);
 
     ws.on('message', (data) => {
+      missedPings = 0;
       let msg = null;
       try { msg = JSON.parse(data); } catch { return; }
       handleMessage(name, msg);
     });
     ws.on('close', () => {
+      clearInterval(hbTimer);
+      // 关键修复：只有当关闭的 ws 就是当前登记在 peers 里的那条连接时才删除，
+      // 防止新连接建立后旧连接延迟触发 close 把新连接从 peers 中误删（导致单向能收不能发）！
+      if (peers.get(name) !== ws) return;
       peers.delete(name);
       if (activePeer === name) { activePeer = myName; phantom = null; notifyActive(); }
       injector.releaseAll();
@@ -677,7 +740,8 @@ function createPeer(userConfig, hooks) {
     // Electron 原生剪贴板（进程内实现，最可靠）；没注入时才退回 clipboardy
     read: h.clipboard && h.clipboard.read,
     write: h.clipboard && h.clipboard.write,
-    onError: (msg) => { if (typeof h.onNotice === 'function') h.onNotice(msg); }
+    onError: (msg) => { if (typeof h.onNotice === 'function') h.onNotice(msg); },
+    onLog: (msg) => { if (typeof h.onClipLog === 'function') h.onClipLog(msg); }
   });
 
   const fileTransfer = createFileTransfer({
@@ -797,17 +861,39 @@ function createPeer(userConfig, hooks) {
     track(ws, name, peerPlatform);
   });
 
+  function dialPeer({ name, label, address, port, platform: remotePlatform }) {
+    if (!name || name === myName) return;
+    const existing = peers.get(name);
+    if (existing && existing.readyState === 1) return;
+    const connAt = connectingPeers.get(name) || 0;
+    if (Date.now() - connAt < 4000) return;
+    connectingPeers.set(name, Date.now());
+    const ws = connectPeer(address, port, name, { selfName: myName, selfPlatform: platform });
+    ws.on('open', () => track(ws, name, remotePlatform, label));
+    ws.on('close', () => { connectingPeers.delete(name); });
+    ws.on('error', () => { connectingPeers.delete(name); });
+  }
+
   if (cfg.discover) {
     startDiscovery({
       port: cfg.port,
       peerName: myName,
       displayName: () => myLabel(),
-      onPeer: ({ name, label, address, port, platform: remotePlatform }) => {
-        if (peers.has(name)) return;
-        // 字典序小的主动连，避免双向重复
+      onPeer: (info) => {
+        const { name } = info;
+        const existing = peers.get(name);
+        if (existing && existing.readyState === 1) return;
+        // 字典序小的立即主动连；字典序大的若等待 1.2s 后仍未建立连接也主动连，
+        // 彻底杜绝单端重连或半开连接后字典序大的一端（如 MacBook-Pro.local）永远不发起重连的问题
         if (myName < name) {
-          const ws = connectPeer(address, port, name, { selfName: myName, selfPlatform: platform });
-          ws.on('open', () => track(ws, name, remotePlatform, label));
+          dialPeer(info);
+        } else {
+          setTimeout(() => {
+            const cur = peers.get(name);
+            if (!cur || cur.readyState !== 1) {
+              dialPeer(info);
+            }
+          }, 1200);
         }
       }
     });
@@ -823,6 +909,16 @@ function createPeer(userConfig, hooks) {
     announceInputMode,
     setInputMaster,
     announceInputMaster,
+    setClipboardSync: (enabled) => {
+      cfg.clipboardSync = !!enabled;
+      broadcast({ type: 'clip-sync', enabled: !!enabled });
+      if (enabled) {
+        try { clipboard.flush(); } catch { /* ignore */ }
+      }
+    },
+    flushClipboard: () => {
+      try { clipboard.flush(); } catch { /* ignore */ }
+    },
     switchInputTo: (t) => {
       if (!cfg.isHost && cfg.ui && cfg.ui.inputMaster) {
         sendTo(cfg.ui.inputMaster, { type: 'switch-input', target: t });

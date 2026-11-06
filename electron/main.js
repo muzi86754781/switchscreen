@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, shell, globalShortcut, screen, clipboard, powerMonitor, Notification } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, shell, globalShortcut, screen, clipboard, powerMonitor, powerSaveBlocker, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -13,10 +13,19 @@ const { createPeer } = require('../src/peer');
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 
+// 阻止后台定时器节流与窗口遮挡降频（关键：防止 macOS App Nap 在隐藏窗口/退出 Dock 后冻结 350ms 剪贴板轮询定时器）
+try {
+  app.commandLine.appendSwitch('disable-background-timer-throttling');
+  app.commandLine.appendSwitch('disable-renderer-backgrounding');
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+} catch { /* ignore */ }
+
 let win = null;
 let tray = null;
 let peer = null;
+let appNapBlockerId = null;
 let registeredHotkey = '';
+let lastHotkeySignature = '';
 const registeredGlobalShortcuts = new Set();
 let switching = false;
 let isQuitting = false;
@@ -229,6 +238,9 @@ function trayMenu() {
       label: `剪贴板同步：${cfg.clipboardSync ? '开' : '关'}`,
       click: () => {
         cfg.clipboardSync = !cfg.clipboardSync;
+        if (peer && typeof peer.setClipboardSync === 'function') {
+          peer.setClipboardSync(cfg.clipboardSync);
+        }
         services.persist();
         broadcastState();
         refreshTray();
@@ -470,11 +482,26 @@ function tryRegister(key, fn) {
   }
 }
 
+function computeHotkeySignature() {
+  const cfg = services.cfg;
+  if (cfg.ui.hotkeyEnabled === false) return 'disabled';
+  const hk = cfg.ui.hotkeys || {};
+  const monParts = (services.allMonitors() || [])
+    .filter((m) => !m.internal)
+    .map((m, i) => `${m.letter || String.fromCharCode(65 + i)}:${m.key || m.id}:${(services.hotkeyForMonitor(m) || '').trim()}`);
+  return `${(hk.global || '').trim()}|${(hk.inputCycle || '').trim()}|${monParts.join(',')}`;
+}
+
 /**
  * 注册全部快捷键：全局切换 + 键鼠切换 + 每块显示器各自一个。
  * 若与系统或内部其它快捷键冲突，自动寻找不冲突的备选键并持久化更新。
  */
-function registerHotkeys() {
+function registerHotkeys(force = false) {
+  const sig = computeHotkeySignature();
+  if (!force && sig === lastHotkeySignature) {
+    return;
+  }
+  lastHotkeySignature = sig;
   try { globalShortcut.unregisterAll(); } catch { /* ignore */ }
   registeredHotkey = '';
   registeredGlobalShortcuts.clear();
@@ -600,6 +627,7 @@ function registerHotkeys() {
   });
 
   if (configChanged) {
+    lastHotkeySignature = computeHotkeySignature();
     services.persist();
     broadcastState();
   }
@@ -1162,7 +1190,7 @@ function registerIpc() {
     if (typeof enabled === 'boolean') services.cfg.ui.hotkeyEnabled = enabled;
     if (kind) services.setHotkey(kind, id, key);
     services.persist();
-    registerHotkeys();
+    registerHotkeys(true);
     services.pushStatus(
       services.cfg.ui.hotkeyEnabled === false
         ? '全局快捷键已关闭'
@@ -1195,7 +1223,11 @@ function registerIpc() {
 
   ipcMain.handle('clip:set', (_e, enabled) => {
     services.cfg.clipboardSync = !!enabled;
+    if (peer && typeof peer.setClipboardSync === 'function') {
+      peer.setClipboardSync(services.cfg.clipboardSync);
+    }
     services.persist();
+    refreshTray();
     services.pushStatus(enabled ? '剪贴板同步已开启' : '剪贴板同步已关闭', enabled ? 'ok' : 'info');
     return services.getState();
   });
@@ -1564,7 +1596,85 @@ function checkNativeModules() {
   }
 }
 
+function getImageFingerprint(img) {
+  try {
+    if (!img || img.isEmpty()) return '';
+    const sz = img.getSize();
+    if (!sz || !sz.width || !sz.height) return '';
+    const bmp = img.getBitmap();
+    if (!bmp || !bmp.length) return '';
+    const len = bmp.length;
+    const mid = len >> 1;
+    let hash = (sz.width * 31 + sz.height) ^ len;
+    const step = Math.max(1, Math.floor(len / 64));
+    for (let i = 0; i < len; i += step) {
+      hash = ((hash << 5) - hash + bmp[i]) | 0;
+    }
+    hash = ((hash << 5) - hash + bmp[mid]) | 0;
+    return `${sz.width}x${sz.height}:${len}:${hash >>> 0}`;
+  } catch {
+    return '';
+  }
+}
+
+function readClipboardPayload() {
+  let text = '';
+  try { text = clipboard.readText() || ''; } catch { text = ''; }
+  if (text) {
+    return { text };
+  }
+  try {
+    const formats = typeof clipboard.availableFormats === 'function' ? clipboard.availableFormats() : [];
+    const hasImg = formats.some((f) => /image|png|tiff|bitmap/i.test(f));
+    if (hasImg) {
+      const img = clipboard.readImage();
+      const imageKey = getImageFingerprint(img);
+      if (imageKey) {
+        return {
+          text: '',
+          imageKey,
+          getImageDataUrl: () => {
+            try { return img.toDataURL(); } catch { return ''; }
+          }
+        };
+      }
+    }
+  } catch { /* ignore */ }
+  return { text: '' };
+}
+
+function writeClipboardPayload(payload) {
+  if (!payload) return '';
+  if (typeof payload === 'string') {
+    clipboard.writeText(payload);
+    return `text:${payload}`;
+  }
+  if (payload.text) {
+    clipboard.writeText(String(payload.text));
+    return `text:${payload.text}`;
+  }
+  if (payload.image) {
+    const img = nativeImage.createFromDataURL(payload.image);
+    if (img && !img.isEmpty()) {
+      clipboard.writeImage(img);
+      const localFp = getImageFingerprint(clipboard.readImage());
+      if (localFp) return `img:${localFp}`;
+    }
+  }
+  return '';
+}
+
 app.whenReady().then(() => {
+  // 开启防休眠挂起锁，彻底阻止 macOS App Nap 在隐藏窗口/退出 Dock 后冻结后台剪贴板轮询定时器
+  try {
+    if (powerSaveBlocker && typeof powerSaveBlocker.start === 'function') {
+      appNapBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+      logger.info('INIT', `Started powerSaveBlocker (id=${appNapBlockerId}, prevent-app-suspension)`);
+    }
+  } catch (e) {
+    logger.warn('INIT', `powerSaveBlocker failed: ${e.message}`);
+  }
+
   if (!isSilentLaunch && checkSilentLaunch()) {
     isSilentLaunch = true;
   }
@@ -1670,10 +1780,17 @@ app.whenReady().then(() => {
       onAskIncoming: (payload, isAuto) => askIncoming(payload, isAuto),
       // 收到文本：直接弹窗展示并发拷贝按钮
       onText: (payload) => { showIncomingText(payload); broadcastStateThrottled(); },
-      // 剪贴板同步用 Electron 原生读写（不依赖 clipboardy，打包后也一定能用）
+      // 剪贴板同步用 Electron 原生读写（支持文本与截图/图片，不依赖 clipboardy，打包后也一定能用）
       clipboard: {
-        read: () => clipboard.readText(),
-        write: (text) => clipboard.writeText(text)
+        read: () => readClipboardPayload(),
+        write: (payload) => writeClipboardPayload(payload)
+      },
+      onClipLog: (msg) => logger.info('CLIP', msg),
+      onClipSync: (enabled) => {
+        services.cfg.clipboardSync = !!enabled;
+        services.persist();
+        broadcastState();
+        refreshTray();
       },
       onNotice: (msg) => { services.pushStatus(msg, 'warn'); broadcastState(); },
       onInputMaster: () => { services.persist(); broadcastState(); refreshTray(); },
